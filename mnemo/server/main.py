@@ -1,0 +1,47 @@
+import asyncio
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from .database import create_pool, close_pool, set_pool
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from .embeddings import warmup
+    await asyncio.get_event_loop().run_in_executor(None, warmup)
+
+    pool = await create_pool()
+    set_pool(pool)
+
+    from .services.consolidation import consolidation_loop
+    task = asyncio.create_task(consolidation_loop(pool))
+
+    yield
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    await close_pool()
+
+
+app = FastAPI(title="Mnemo", version="0.2.0", lifespan=lifespan)
+
+
+@app.get("/v1/health")
+async def health():
+    return {"status": "ok"}
+
+
+def _register_routers():
+    from .routes import agents, memory, atoms, views, capabilities
+    app.include_router(agents.router, prefix="/v1")
+    app.include_router(memory.router, prefix="/v1")
+    app.include_router(atoms.router, prefix="/v1")
+    app.include_router(views.router, prefix="/v1")
+    app.include_router(capabilities.router, prefix="/v1")
+
+
+_register_routers()
