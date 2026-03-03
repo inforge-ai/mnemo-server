@@ -134,20 +134,28 @@ def infer_edges(atoms: list[DecomposedAtom]) -> list[tuple[int, int, str]]:
 
 
 def _split_sentences(text: str) -> list[str]:
-    """Split on sentence boundaries, keeping code blocks intact."""
+    """Split on sentence boundaries, keeping code blocks and dotted identifiers intact."""
     # Protect inline code blocks from being split mid-sentence
     protected = re.sub(r'`[^`]+`', lambda m: m.group().replace('.', '\x00'), text)
+    # Protect dotted identifiers (e.g. pd.read_csv, torch.nn.Module, os.path.join)
+    protected = re.sub(
+        r'(\b[a-z_]\w*)\.(\w)',
+        lambda m: m.group(1) + '\x00' + m.group(2),
+        protected,
+    )
     parts = re.split(r'(?<=[.!?])\s+', protected)
     return [p.replace('\x00', '.') for p in parts]
 
 
 def _classify_type(sentence: str) -> str:
-    for pattern in EPISODIC_PATTERNS:
-        if re.search(pattern, sentence, re.IGNORECASE):
-            return "episodic"
+    # Check procedural FIRST — imperative markers are a stronger signal than
+    # first-person voice (e.g. "I will always use X" is procedural, not episodic)
     for pattern in PROCEDURAL_PATTERNS:
         if re.search(pattern, sentence, re.IGNORECASE):
             return "procedural"
+    for pattern in EPISODIC_PATTERNS:
+        if re.search(pattern, sentence, re.IGNORECASE):
+            return "episodic"
     return "semantic"
 
 

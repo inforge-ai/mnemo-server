@@ -62,7 +62,10 @@ CREATE TABLE atoms (
     decay_half_life_days FLOAT NOT NULL DEFAULT 30.0,
 
     -- Soft delete
-    is_active       BOOLEAN NOT NULL DEFAULT true
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+
+    -- Consolidation tracking (used to skip atoms already processed in recent runs)
+    last_consolidated_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_atoms_agent_id ON atoms (agent_id);

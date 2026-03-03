@@ -277,6 +277,19 @@ async def recall_shared(
     """
     Retrieval scoped to snapshot atoms of a shared view.
     Graph expansion is bounded to atoms within the snapshot.
+
+    IMPORTANT — Snapshot semantics in v0.2:
+    Snapshots freeze the SET of atom IDs at creation time (stored in snapshot_atoms),
+    but do NOT freeze the atoms themselves. If an atom decays below min_confidence
+    or is deactivated by consolidation (merge or decay step), it will not appear
+    in shared view recall results even though its ID remains in snapshot_atoms.
+
+    This means shared views degrade gracefully over time as the underlying knowledge
+    ages. The snapshot guarantees SCOPE SAFETY (which atoms can be seen), not
+    LIVENESS (that they will always be visible).
+
+    Future: Add a `frozen` flag to views. When frozen=True, bypass is_active and
+    effective_confidence filters to provide true point-in-time snapshots.
     """
     embedding = await encode(query)
 

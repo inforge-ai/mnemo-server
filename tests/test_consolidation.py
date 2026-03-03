@@ -7,11 +7,13 @@ Strategy:
 - Run run_consolidation(pool) and check return counts + DB state.
 """
 
+import asyncio
 import pytest
 import pytest_asyncio
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
-from mnemo.server.services.consolidation import run_consolidation
+from mnemo.server.services.consolidation import run_consolidation, _CONSOLIDATION_LOCK_KEY
 from mnemo.server.embeddings import encode
 
 
@@ -237,6 +239,7 @@ async def test_merge_duplicates_combines_atoms(client, agent, pool):
     """
     Two active atoms with the same embedding (cosine 1.0 > 0.90), same agent,
     same type → older atom absorbs the newer and newer is deactivated.
+    Merge is recorded in access_log, NOT as a graph edge.
     """
     agent_id = UUID(agent["id"])
     emb = await encode("Python dictionaries maintain insertion order since 3.7.")
@@ -287,6 +290,23 @@ async def test_merge_duplicates_combines_atoms(client, agent, pool):
         # Newer atom should be deactivated
         new_row = await conn.fetchrow("SELECT is_active FROM atoms WHERE id = $1", id_new)
         assert new_row["is_active"] is False
+
+        # No 'generalises' edge should exist between the two atoms (Fix 3)
+        edge_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM edges WHERE source_id = $1 AND target_id = $2",
+            id_old, id_new,
+        )
+        assert edge_count == 0
+
+        # Merge should be recorded in access_log
+        log_row = await conn.fetchrow(
+            "SELECT metadata FROM access_log WHERE action = 'merge' AND target_id = $1",
+            id_old,
+        )
+        assert log_row is not None
+        import json as _json
+        meta = _json.loads(log_row["metadata"])
+        assert meta["absorbed_atom_id"] == str(id_new)
 
 
 async def test_merge_does_not_merge_different_types(client, agent, pool):
@@ -440,3 +460,111 @@ async def test_consolidation_writes_audit_log(client, agent, pool):
         )
 
     assert after_count == before_count + 1
+
+
+# ── Advisory lock tests ────────────────────────────────────────────────────────
+
+async def test_consolidation_advisory_lock(pool):
+    """Second consolidation run is skipped when the advisory lock is already held."""
+    async with pool.acquire() as lock_conn:
+        # Acquire the session-level advisory lock on a separate connection
+        await lock_conn.execute("SELECT pg_advisory_lock($1)", _CONSOLIDATION_LOCK_KEY)
+        try:
+            # run_consolidation will try pg_try_advisory_lock on a different connection
+            # and find the lock held — should return immediately with skipped=True
+            result = await run_consolidation(pool)
+            assert result.get("skipped") is True
+            assert result["merged"] == 0
+            assert result["decayed"] == 0
+        finally:
+            await lock_conn.execute("SELECT pg_advisory_unlock($1)", _CONSOLIDATION_LOCK_KEY)
+
+
+async def test_consolidation_step_rollback(client, agent, pool):
+    """
+    If a step fails, its transaction is rolled back. Prior steps remain committed.
+    """
+    agent_id = UUID(agent["id"])
+
+    # Store an atom and age it so it gets decayed
+    r = await client.post(
+        f"/v1/agents/{agent_id}/remember",
+        json={"text": "The connection pool is exhausted under high load.", "domain_tags": ["ops"]},
+    )
+    assert r.status_code == 201
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE atoms SET created_at = now() - interval '365 days', last_accessed = NULL WHERE agent_id = $1",
+            agent_id,
+        )
+
+    # Patch merge step to raise after the decay step has already committed
+    with patch(
+        "mnemo.server.services.consolidation._merge_duplicates",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("injected merge failure"),
+    ):
+        with pytest.raises(RuntimeError, match="injected merge failure"):
+            await run_consolidation(pool)
+
+    # Decay step ran and committed before merge raised — atoms should be inactive
+    async with pool.acquire() as conn:
+        active = await conn.fetchval(
+            "SELECT COUNT(*) FROM atoms WHERE agent_id = $1 AND is_active = true",
+            agent_id,
+        )
+    assert active == 0  # decay committed even though merge failed
+
+
+# ── Dead edge pruning tests ────────────────────────────────────────────────────
+
+async def test_dead_edge_pruning(client, agent, pool):
+    """
+    Edges pointing to or from deactivated atoms should be removed by consolidation.
+    """
+    agent_id = UUID(agent["id"])
+    emb_a = await encode("The query planner chooses index scans for selective filters.")
+    emb_b = await encode("Vacuuming reclaims dead tuples in PostgreSQL.")
+    emb_c = await encode("Connection pooling reduces overhead for short-lived queries.")
+
+    async with pool.acquire() as conn:
+        id_a = await _insert_atom_sql(
+            conn, agent_id, "semantic", "Query planner uses index scans.",
+            emb_a, domain_tags=["postgres"], decay_type="none", half_life=90.0,
+        )
+        id_b = await _insert_atom_sql(
+            conn, agent_id, "semantic", "Vacuuming reclaims dead tuples.",
+            emb_b, domain_tags=["postgres"], decay_type="none", half_life=90.0,
+        )
+        id_c = await _insert_atom_sql(
+            conn, agent_id, "semantic", "Connection pooling reduces overhead.",
+            emb_c, domain_tags=["postgres"], decay_type="none", half_life=90.0,
+        )
+        # Create edges: A→B and B→C
+        await conn.execute(
+            "INSERT INTO edges (source_id, target_id, edge_type, weight) VALUES ($1, $2, 'supports', 1.0)",
+            id_a, id_b,
+        )
+        await conn.execute(
+            "INSERT INTO edges (source_id, target_id, edge_type, weight) VALUES ($1, $2, 'supports', 1.0)",
+            id_b, id_c,
+        )
+        # Manually deactivate B
+        await conn.execute("UPDATE atoms SET is_active = false WHERE id = $1", id_b)
+
+    result = await run_consolidation(pool)
+    assert result["pruned"] >= 2  # A→B and B→C both removed
+
+    async with pool.acquire() as conn:
+        # No edges should involve B
+        edge_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM edges WHERE source_id = $1 OR target_id = $1",
+            id_b,
+        )
+        assert edge_count == 0
+        # A and C should still exist and be active
+        a_row = await conn.fetchrow("SELECT is_active FROM atoms WHERE id = $1", id_a)
+        c_row = await conn.fetchrow("SELECT is_active FROM atoms WHERE id = $1", id_c)
+        assert a_row["is_active"] is True
+        assert c_row["is_active"] is True

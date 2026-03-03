@@ -5,6 +5,7 @@ Tables are truncated before each test by the autouse clean_db fixture.
 """
 
 import pytest
+from uuid import UUID
 from httpx import AsyncClient
 
 
@@ -447,6 +448,97 @@ class TestCapabilities:
             "grantee_id": alice["id"],
         })
         assert resp.status_code == 403
+
+
+# ── Snapshot semantics ───────────────────────────────────────────────────────
+
+class TestSnapshotSemantics:
+    async def _setup_shared_view(self, client, pool):
+        """Create agent, store atoms, share a view. Returns (agent, view, cap, bob)."""
+        from mnemo.server.services.consolidation import run_consolidation
+
+        r_alice = await client.post("/v1/agents", json={"name": "alice-snap", "domain_tags": ["snap"]})
+        r_bob   = await client.post("/v1/agents", json={"name": "bob-snap",   "domain_tags": ["snap"]})
+        assert r_alice.status_code == 201
+        assert r_bob.status_code == 201
+        alice = r_alice.json()
+        bob   = r_bob.json()
+
+        await client.post(
+            f"/v1/agents/{alice['id']}/remember",
+            json={"text": "asyncio.gather runs coroutines concurrently.", "domain_tags": ["python"]},
+        )
+        view = (await client.post(
+            f"/v1/agents/{alice['id']}/views",
+            json={"name": "snap-view", "atom_filter": {}},
+        )).json()
+        cap = (await client.post(
+            f"/v1/agents/{alice['id']}/grant",
+            json={"view_id": view["id"], "grantee_id": bob["id"]},
+        )).json()
+        return alice, bob, view, cap
+
+    async def test_snapshot_degrades_after_decay(self, client, pool):
+        """
+        After atoms in a snapshot are deactivated by consolidation, they no
+        longer appear in shared view recall. Documents current v0.2 semantics.
+        """
+        from mnemo.server.services.consolidation import run_consolidation
+
+        alice, bob, view, cap = await self._setup_shared_view(client, pool)
+
+        # Verify Bob can recall through the view before decay
+        before = (await client.post(
+            f"/v1/agents/{bob['id']}/shared_views/{view['id']}/recall",
+            json={"query": "asyncio concurrent coroutines"},
+        )).json()
+        assert before["total_retrieved"] >= 1
+
+        # Age the atoms far beyond any half-life so effective_confidence << 0.05
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE atoms SET created_at = now() - interval '365 days',
+                                 last_accessed = NULL
+                WHERE agent_id = $1
+                """,
+                UUID(alice["id"]),
+            )
+
+        # Run consolidation — decay step deactivates the faded atoms
+        await run_consolidation(pool)
+
+        # Bob can no longer recall those atoms through the shared view
+        after = (await client.post(
+            f"/v1/agents/{bob['id']}/shared_views/{view['id']}/recall",
+            json={"query": "asyncio concurrent coroutines"},
+        )).json()
+        assert after["total_retrieved"] == 0
+
+    async def test_snapshot_atom_ids_survive_deactivation(self, client, pool):
+        """
+        snapshot_atoms rows are NOT removed when atoms are deactivated.
+        The ID set is stable (scope safety); only liveness changes.
+        """
+        from mnemo.server.services.consolidation import run_consolidation
+
+        alice, bob, view, cap = await self._setup_shared_view(client, pool)
+
+        # Age and deactivate via consolidation
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE atoms SET created_at = now() - interval '365 days' WHERE agent_id = $1",
+                UUID(alice["id"]),
+            )
+        await run_consolidation(pool)
+
+        # snapshot_atoms rows should still exist even though atoms are inactive
+        async with pool.acquire() as conn:
+            snap_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM snapshot_atoms WHERE view_id = $1",
+                UUID(view["id"]),
+            )
+        assert snap_count >= 1  # IDs preserved, just atoms are inactive
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

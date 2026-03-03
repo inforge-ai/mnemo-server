@@ -6,6 +6,7 @@ CONSOLIDATION STEPS:
 2. CLUSTER      — find 3+ episodic atoms with similarity > 0.85 (same agent, domain overlap)
 3. GENERALISE   — create semantic atom from each cluster; 'generalises' edges to members
 4. MERGE DUPES  — find pairs with similarity > 0.90, same agent/type; keep older, Bayesian merge
+4b. PRUNE EDGES — delete edges where either endpoint is now inactive
 5. PURGE        — delete atoms/views for departed agents past data_expires_at
 6. LOG          — record run metadata in access_log
 """
@@ -26,36 +27,76 @@ logger = logging.getLogger(__name__)
 # access_log.agent_id has no FK constraint, so any UUID is valid.
 _SYSTEM_AGENT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
+# PostgreSQL advisory lock key — ensures only one consolidation process runs at a time.
+_CONSOLIDATION_LOCK_KEY = 42
+
 
 # ── Public entry points ────────────────────────────────────────────────────────
 
 async def run_consolidation(pool: asyncpg.Pool) -> dict:
-    """Run all consolidation steps and return counts."""
-    async with pool.acquire() as conn:
-        decayed = await _deactivate_faded_atoms(conn)
-        clustered = await _cluster_and_generalise(conn)
-        merged = await _merge_duplicates(conn)
-        purged = await _purge_departed_agents(conn)
+    """
+    Run all consolidation steps and return counts.
 
-        await conn.execute(
-            """
-            INSERT INTO access_log (agent_id, action, metadata)
-            VALUES ($1, 'consolidation', $2)
-            """,
-            _SYSTEM_AGENT_ID,
-            json.dumps({
-                "decayed": decayed,
-                "clustered": clustered,
-                "merged": merged,
-                "purged": purged,
-            }),
+    Uses a PostgreSQL advisory lock to ensure only one consolidation process
+    runs at a time. If the lock is already held, returns immediately with
+    skipped=True. Each step runs in its own explicit transaction so that a
+    failure in one step does not roll back the work done by earlier steps.
+    """
+    async with pool.acquire() as conn:
+        locked = await conn.fetchval(
+            "SELECT pg_try_advisory_lock($1)", _CONSOLIDATION_LOCK_KEY
         )
+        if not locked:
+            logger.info("Consolidation already running, skipping this run")
+            return {"skipped": True, "decayed": 0, "clustered": 0, "merged": 0, "pruned": 0, "purged": 0}
+
+        try:
+            async with conn.transaction():
+                decayed = await _deactivate_faded_atoms(conn)
+
+            async with conn.transaction():
+                clustered = await _cluster_and_generalise(conn)
+
+            async with conn.transaction():
+                merged = await _merge_duplicates(conn)
+
+            async with conn.transaction():
+                pruned = await _prune_dead_edges(conn)
+
+            async with conn.transaction():
+                purged = await _purge_departed_agents(conn)
+
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO access_log (agent_id, action, metadata)
+                    VALUES ($1, 'consolidation', $2)
+                    """,
+                    _SYSTEM_AGENT_ID,
+                    json.dumps({
+                        "decayed": decayed,
+                        "clustered": clustered,
+                        "merged": merged,
+                        "pruned": pruned,
+                        "purged": purged,
+                    }),
+                )
+        finally:
+            await conn.execute(
+                "SELECT pg_advisory_unlock($1)", _CONSOLIDATION_LOCK_KEY
+            )
 
     logger.info(
-        "Consolidation: decayed=%d, clustered=%d, merged=%d, purged=%d",
-        decayed, clustered, merged, purged,
+        "Consolidation: decayed=%d, clustered=%d, merged=%d, pruned=%d, purged=%d",
+        decayed, clustered, merged, pruned, purged,
     )
-    return {"decayed": decayed, "clustered": clustered, "merged": merged, "purged": purged}
+    return {
+        "decayed": decayed,
+        "clustered": clustered,
+        "merged": merged,
+        "pruned": pruned,
+        "purged": purged,
+    }
 
 
 async def consolidation_loop(pool: asyncpg.Pool) -> None:
@@ -112,6 +153,9 @@ async def _cluster_and_generalise(conn: asyncpg.Connection) -> int:
          AND 1 - (a1.embedding <=> a2.embedding) > 0.85
         WHERE a1.atom_type = 'episodic'
           AND a1.is_active = true
+          -- Only process atoms not recently consolidated (optimisation for large sets)
+          AND (a1.last_consolidated_at IS NULL
+               OR a1.last_consolidated_at < now() - interval '1 hour')
           -- Skip atoms that were already generalised by a prior consolidation run
           AND NOT EXISTS (
               SELECT 1 FROM edges e
@@ -127,6 +171,17 @@ async def _cluster_and_generalise(conn: asyncpg.Connection) -> int:
                 AND e.edge_type = 'generalises'
                 AND src.source_type = 'consolidation'
           )
+        """,
+    )
+
+    # Stamp processed atoms regardless of whether clusters were found
+    await conn.execute(
+        """
+        UPDATE atoms SET last_consolidated_at = now()
+        WHERE atom_type = 'episodic'
+          AND is_active = true
+          AND (last_consolidated_at IS NULL
+               OR last_consolidated_at < now() - interval '1 hour')
         """,
     )
 
@@ -232,12 +287,14 @@ async def _merge_duplicates(conn: asyncpg.Connection) -> int:
     """
     Find active atom pairs (same agent, same type, cosine > 0.90).
     Keep the older atom, Bayesian-merge confidence, reassign edges, deactivate newer.
+    The merge event is recorded in access_log rather than as a graph edge.
     """
     pairs = await conn.fetch(
         """
         SELECT
             a1.id AS id1, a1.created_at AS created1,
             a1.confidence_alpha AS alpha1, a1.confidence_beta AS beta1,
+            a1.agent_id AS agent_id,
             a2.id AS id2, a2.created_at AS created2,
             a2.confidence_alpha AS alpha2, a2.confidence_beta AS beta2
         FROM atoms a1
@@ -263,13 +320,17 @@ async def _merge_duplicates(conn: asyncpg.Connection) -> int:
         if id1 in deactivated or id2 in deactivated:
             continue
 
+        agent_id = pair["agent_id"]
+
         # Older atom is the keeper
         if pair["created1"] <= pair["created2"]:
             older_id, newer_id = id1, id2
+            older_alpha = pair["alpha1"]
             new_alpha = pair["alpha1"] + pair["alpha2"] - 1.0
             new_beta = pair["beta1"] + pair["beta2"] - 1.0
         else:
             older_id, newer_id = id2, id1
+            older_alpha = pair["alpha2"]
             new_alpha = pair["alpha2"] + pair["alpha1"] - 1.0
             new_beta = pair["beta2"] + pair["beta1"] - 1.0
 
@@ -318,14 +379,19 @@ async def _merge_duplicates(conn: asyncpg.Connection) -> int:
             older_id, newer_id,
         )
 
-        # Create audit 'generalises' edge: older → newer
+        # Record merge in access_log (no graph edge to deactivated atom)
         await conn.execute(
             """
-            INSERT INTO edges (source_id, target_id, edge_type, weight)
-            VALUES ($1, $2, 'generalises', 1.0)
-            ON CONFLICT DO NOTHING
+            INSERT INTO access_log (agent_id, action, target_id, metadata)
+            VALUES ($1, 'merge', $2, $3)
             """,
-            older_id, newer_id,
+            agent_id,
+            older_id,
+            json.dumps({
+                "absorbed_atom_id": str(newer_id),
+                "alpha_before": older_alpha,
+                "alpha_after": new_alpha,
+            }),
         )
 
         # Deactivate the newer (merged) atom
@@ -339,6 +405,26 @@ async def _merge_duplicates(conn: asyncpg.Connection) -> int:
         logger.debug("Merged duplicate: %s absorbed into %s", newer_id, older_id)
 
     return merged_count
+
+
+# ── Step 4b: Prune dead edges ─────────────────────────────────────────────────
+
+async def _prune_dead_edges(conn: asyncpg.Connection) -> int:
+    """
+    Remove edges where either endpoint (source or target) is inactive.
+    These accumulate as atoms are deactivated by decay and merges.
+    """
+    result = await conn.execute(
+        """
+        DELETE FROM edges
+        WHERE source_id IN (SELECT id FROM atoms WHERE is_active = false)
+           OR target_id IN (SELECT id FROM atoms WHERE is_active = false)
+        """,
+    )
+    count = int(result.split()[-1])
+    if count:
+        logger.info("Pruned %d dead edges", count)
+    return count
 
 
 # ── Step 5: Purge departed agents ─────────────────────────────────────────────

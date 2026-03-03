@@ -179,6 +179,46 @@ class TestStructuredExtraction:
         assert atoms[0].structured == {}
 
 
+# ── Classification order tests ────────────────────────────────────────────────
+
+class TestClassificationOrder:
+    def test_procedural_beats_first_person(self):
+        """'I will always X' — procedural signal wins over first-person voice."""
+        atoms = decompose("I will always use parameterised queries.")
+        assert atoms[0].atom_type == "procedural"
+
+    def test_never_with_first_person_is_procedural(self):
+        """'I never X' — 'never' fires procedural before episodic check.
+        This is a known limitation: 'I never understood why' is ambiguous
+        but classified as procedural. Acceptable for v0.1 rule-based approach.
+        """
+        atoms = decompose("I never understood why this works.")
+        assert atoms[0].atom_type == "procedural"  # known limitation, documented
+
+    def test_dotted_identifier_not_split(self):
+        """torch.nn.Module should not be split into two sentences."""
+        atoms = decompose("Use torch.nn.Module for custom layers.")
+        assert len(atoms) == 1
+        assert "torch.nn.Module" in atoms[0].text
+
+    def test_pandas_identifier_preserved(self):
+        """pd.read_csv inside a sentence should survive the sentence splitter."""
+        atoms = decompose(
+            "I discovered that pd.read_csv silently coerces types. "
+            "Always specify dtype explicitly."
+        )
+        assert any("pd.read_csv" in a.text for a in atoms)
+        types = [a.atom_type for a in atoms]
+        assert "episodic" in types
+        assert "procedural" in types
+
+    def test_multi_level_dotted_identifier(self):
+        """os.path.join (two dots) should not be split."""
+        atoms = decompose("Always use os.path.join instead of string concatenation.")
+        assert len(atoms) == 1
+        assert "os.path.join" in atoms[0].text
+
+
 # ── Full spec example (smoke test) ───────────────────────────────────────────
 
 def test_spec_example_full():
