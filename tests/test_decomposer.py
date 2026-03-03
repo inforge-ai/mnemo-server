@@ -4,7 +4,10 @@ No database or async required.
 """
 
 import pytest
-from mnemo.server.decomposer import decompose, infer_edges, DecomposedAtom
+from mnemo.server.decomposer import (
+    decompose, infer_edges, DecomposedAtom,
+    _compress_arc, _maybe_create_arc,
+)
 
 
 # ── Type classification ───────────────────────────────────────────────────────
@@ -222,7 +225,7 @@ class TestClassificationOrder:
 # ── Full spec example (smoke test) ───────────────────────────────────────────
 
 def test_spec_example_full():
-    """The complete spec example should decompose into 3 typed atoms."""
+    """3-sentence input decomposes into 3 typed atoms + 1 arc, with 5 edges."""
     text = (
         "pandas.read_csv silently coerces mixed-type columns. "
         "I discovered this processing client_data.csv when row 847 had a string "
@@ -236,10 +239,115 @@ def test_spec_example_full():
     assert "episodic" in types
     assert "procedural" in types
 
-    # Episodic should be high confidence (direct experience)
-    episodic = next(a for a in atoms if a.atom_type == "episodic")
+    # One arc atom should be appended
+    arc_atoms = [a for a in atoms if a.source_type == "arc"]
+    assert len(arc_atoms) == 1
+    assert len(atoms) == 4  # 3 decomposed + 1 arc
+
+    # Episodic (non-arc) should be high confidence
+    episodic = next(a for a in atoms if a.atom_type == "episodic" and a.source_type != "arc")
     assert episodic.confidence_alpha == 8.0
 
-    # Edges should be present
+    # Edges: 2 original (evidence_for, motivated_by) + 3 summarises = 5
     edges = infer_edges(atoms)
-    assert len(edges) >= 2
+    assert len(edges) == 5
+    edge_types = [et for _, _, et in edges]
+    assert edge_types.count("summarises") == 3
+
+
+# ── Arc decomposer tests ──────────────────────────────────────────────────────
+
+class TestArcDecomposer:
+    def test_short_input_no_arc(self):
+        atoms = decompose("asyncpg does not auto-cast Python dicts to JSONB.")
+        assert all(a.source_type != "arc" for a in atoms)
+
+    def test_two_sentence_no_arc(self):
+        text = "asyncpg is fast. It uses binary protocol."
+        atoms = decompose(text)
+        assert all(a.source_type != "arc" for a in atoms)
+
+    def test_medium_input_creates_arc(self):
+        text = (
+            "I discovered a memory leak in the connection pool. "
+            "The leak only appeared under high concurrency. "
+            "We fixed it by reducing the pool size."
+        )
+        atoms = decompose(text)
+        arc_atoms = [a for a in atoms if a.source_type == "arc"]
+        assert len(arc_atoms) == 1
+        arc = arc_atoms[0]
+        assert arc.atom_type == "episodic"
+        assert arc.text == text  # full text for medium inputs
+
+    def test_long_input_creates_compressed_arc(self):
+        sentences = [
+            "I started investigating the slow query issue on Monday.",
+            "The database logs showed full table scans on the users table.",
+            "Adding an index on email reduced query time from 800ms to 2ms.",
+            "I also found that the ORM was generating N+1 queries.",
+            "Switching to eager loading fixed the N+1 problem completely.",
+            "The combined changes reduced average response time by 90 percent.",
+            "I deployed the fix to staging and ran load tests successfully.",
+            "Production deployment went smoothly with no rollback needed.",
+        ]
+        text = " ".join(sentences)
+        atoms = decompose(text)
+        arc_atoms = [a for a in atoms if a.source_type == "arc"]
+        assert len(arc_atoms) == 1
+        arc = arc_atoms[0]
+        # Compressed arc must be shorter than the full text
+        assert len(arc.text) < len(text)
+        # Must contain first and last sentences
+        assert sentences[0] in arc.text
+        assert sentences[-1] in arc.text
+
+    def test_arc_confidence_is_moderate(self):
+        text = (
+            "I noticed the cache was evicting entries too aggressively. "
+            "The TTL was set to 60 seconds by default. "
+            "Increasing TTL to 300 seconds improved hit rate. "
+            "I verified the change in production last week."
+        )
+        atoms = decompose(text)
+        arc = next(a for a in atoms if a.source_type == "arc")
+        assert arc.confidence_alpha == 4.0
+        assert arc.confidence_beta == 2.0
+
+    def test_arc_inherits_no_structured(self):
+        text = (
+            "I discovered the issue with `pd.read_csv`. "
+            "The dtype inference is unreliable on large files. "
+            "Always specify dtype explicitly for production pipelines."
+        )
+        atoms = decompose(text)
+        arc = next(a for a in atoms if a.source_type == "arc")
+        assert arc.structured == {}
+
+    def test_summarises_edge_type_in_infer_edges(self):
+        text = (
+            "I found the bug in the request handler. "
+            "The handler was not validating the Content-Type header. "
+            "Always validate headers before processing the request body."
+        )
+        atoms = decompose(text)
+        edges = infer_edges(atoms)
+        edge_types = [et for _, _, et in edges]
+        assert "summarises" in edge_types
+
+    def test_compression_deduplicates(self):
+        # Make the first sentence also the longest so it appears twice in candidates
+        long_first = "I discovered a critical performance regression in the database query path that affected all users."
+        sentences = [
+            long_first,
+            "The issue was caused by a missing index.",
+            "Adding the index resolved the problem.",
+            "Tests passed on staging.",
+            "Production deploy was successful.",
+            "No rollback was needed.",
+            "Monitoring shows normal latency now.",
+        ]
+        text = " ".join(sentences)
+        compressed = _compress_arc(sentences)
+        # First sentence should appear only once despite being both first and longest
+        assert compressed.count(long_first) == 1

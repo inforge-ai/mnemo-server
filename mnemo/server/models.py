@@ -67,7 +67,7 @@ class RetrieveRequest(BaseModel):
     atom_types: Optional[list[str]] = None
     domain_tags: Optional[list[str]] = None
     min_confidence: float = 0.1
-    min_similarity: float = 0.3
+    min_similarity: float = 0.2
     max_results: int = 10
     expand_graph: bool = True
     expansion_depth: int = 2
@@ -85,7 +85,7 @@ class EdgeCreate(BaseModel):
     target_id: UUID
     edge_type: Literal[
         "supports", "contradicts", "depends_on", "generalises",
-        "specialises", "motivated_by", "evidence_for", "supersedes"
+        "specialises", "motivated_by", "evidence_for", "supersedes", "summarises"
     ]
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
 
@@ -148,6 +148,7 @@ class AgentStats(BaseModel):
     total_atoms: int
     active_atoms: int
     atoms_by_type: dict[str, int]
+    arc_atoms: int
     total_edges: int
     avg_effective_confidence: float
     active_views: int

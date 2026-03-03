@@ -83,7 +83,7 @@ class MnemoClient:
         atom_types: Optional[list[str]] = None,
         domain_tags: Optional[list[str]] = None,
         min_confidence: float = 0.1,
-        min_similarity: float = 0.3,
+        min_similarity: float = 0.2,
         max_results: int = 10,
         expand_graph: bool = True,
         expansion_depth: int = 2,

@@ -43,7 +43,7 @@ CREATE TABLE atoms (
     source_type     TEXT NOT NULL DEFAULT 'direct_experience'
                     CHECK (source_type IN (
                         'direct_experience', 'inference', 'shared_view',
-                        'imported_skill', 'consolidation'
+                        'imported_skill', 'consolidation', 'arc'
                     )),
     source_ref      UUID,
     derivation      UUID[] DEFAULT '{}',

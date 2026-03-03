@@ -47,6 +47,12 @@ class DecomposedAtom:
     confidence_alpha: float
     confidence_beta: float
     structured: dict = field(default_factory=dict)
+    source_type: str = "direct_experience"
+
+
+# Arc threshold constants
+ARC_THRESHOLD_MEDIUM = 3   # 3-6 valid sentences → full-text arc
+ARC_THRESHOLD_LONG   = 7   # 7+ valid sentences  → compressed arc
 
 
 # Marker patterns
@@ -83,13 +89,10 @@ VERY_LOW_CONFIDENCE_PATTERNS = [
 def decompose(text: str, domain_tags: list[str] | None = None) -> list[DecomposedAtom]:
     """Break free-text into typed atoms with inferred confidence."""
     sentences = _split_sentences(text)
+    valid_sentences = [s.strip() for s in sentences if len(s.strip()) >= 10]
     atoms = []
 
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if len(sentence) < 10:
-            continue
-
+    for sentence in valid_sentences:
         atom_type = _classify_type(sentence)
         alpha, beta = _infer_confidence(sentence, atom_type)
         structured = _extract_structured(sentence)
@@ -102,7 +105,11 @@ def decompose(text: str, domain_tags: list[str] | None = None) -> list[Decompose
             structured=structured,
         ))
 
-    return _merge_adjacent(atoms)
+    merged = _merge_adjacent(atoms)
+    arc = _maybe_create_arc(valid_sentences, text)
+    if arc:
+        merged.append(arc)
+    return merged
 
 
 def infer_edges(atoms: list[DecomposedAtom]) -> list[tuple[int, int, str]]:
@@ -113,9 +120,14 @@ def infer_edges(atoms: list[DecomposedAtom]) -> list[tuple[int, int, str]]:
       - episodic  --evidence_for-->  semantic
       - procedural --motivated_by--> semantic
       - episodic  --evidence_for-->  procedural (if no semantic present)
+      - arc       --summarises-->    every non-arc atom
     """
     edges = []
-    episodic_idxs = [i for i, a in enumerate(atoms) if a.atom_type == "episodic"]
+    # Arc atoms are excluded from the standard episodic rules
+    episodic_idxs = [
+        i for i, a in enumerate(atoms)
+        if a.atom_type == "episodic" and a.source_type != "arc"
+    ]
     semantic_idxs = [i for i, a in enumerate(atoms) if a.atom_type == "semantic"]
     procedural_idxs = [i for i, a in enumerate(atoms) if a.atom_type == "procedural"]
 
@@ -129,6 +141,12 @@ def infer_edges(atoms: list[DecomposedAtom]) -> list[tuple[int, int, str]]:
     for p_idx in procedural_idxs:
         for s_idx in semantic_idxs:
             edges.append((p_idx, s_idx, "motivated_by"))
+
+    arc_idxs = [i for i, a in enumerate(atoms) if a.source_type == "arc"]
+    non_arc_idxs = [i for i, a in enumerate(atoms) if a.source_type != "arc"]
+    for arc_idx in arc_idxs:
+        for other_idx in non_arc_idxs:
+            edges.append((arc_idx, other_idx, "summarises"))
 
     return edges
 
@@ -197,7 +215,34 @@ def _merge_adjacent(atoms: list[DecomposedAtom]) -> list[DecomposedAtom]:
                 confidence_alpha=max(prev.confidence_alpha, atom.confidence_alpha),
                 confidence_beta=min(prev.confidence_beta, atom.confidence_beta),
                 structured={**prev.structured, **atom.structured},
+                source_type=prev.source_type,
             )
         else:
             merged.append(atom)
     return merged
+
+
+def _compress_arc(sentences: list[str]) -> str:
+    """Return a compressed arc from first, longest, and last sentences (deduplicated)."""
+    candidates = [sentences[0], max(sentences, key=len), sentences[-1]]
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for s in candidates:
+        if s not in seen:
+            seen.add(s)
+            deduped.append(s)
+    return " ".join(deduped)
+
+
+def _maybe_create_arc(sentences: list[str], original_text: str) -> DecomposedAtom | None:
+    """Return an arc atom summarising the input if it meets the length threshold."""
+    if len(sentences) < ARC_THRESHOLD_MEDIUM:
+        return None
+    text = _compress_arc(sentences) if len(sentences) >= ARC_THRESHOLD_LONG else original_text
+    return DecomposedAtom(
+        text=text,
+        atom_type="episodic",
+        confidence_alpha=4.0,
+        confidence_beta=2.0,
+        source_type="arc",
+    )

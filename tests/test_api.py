@@ -632,6 +632,74 @@ class TestRecallQuality:
             assert atom["relevance_score"] >= exp_floor
 
 
+# ── Arc atoms ────────────────────────────────────────────────────────────────
+
+class TestArcAtoms:
+    """Integration tests for the arc decomposer feature."""
+
+    _arc_text = (
+        "I started investigating a slow API endpoint yesterday. "
+        "The profiler showed that database queries were taking 800 milliseconds. "
+        "I added an index on the user_id column and query time dropped to 5 milliseconds. "
+        "From now on I should always profile before guessing at the bottleneck."
+    )
+
+    async def test_remember_medium_creates_arc_atom(self, client, agent):
+        resp = await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": self._arc_text,
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["atoms_created"] >= 2
+        arc_atoms = [a for a in data["atoms"] if a["source_type"] == "arc"]
+        assert len(arc_atoms) >= 1
+
+    async def test_recall_finds_arc_by_theme(self, client, agent):
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": self._arc_text,
+        })
+        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
+            "query": "API endpoint performance debugging and profiling",
+            "min_similarity": 0.1,
+            "expand_graph": False,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        assert any(a["source_type"] == "arc" for a in atoms)
+
+    async def test_recall_expands_from_arc_to_atoms(self, client, agent):
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": self._arc_text,
+        })
+        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
+            "query": "slow API database index profiling investigation",
+            "min_similarity": 0.1,
+            "expand_graph": True,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        # Arc should appear in primary results for this broad query
+        all_atoms = data["atoms"] + data["expanded_atoms"]
+        assert any(a["source_type"] == "arc" for a in all_atoms)
+        # Non-arc atoms should also be reachable (via primary or graph expansion)
+        assert any(a["source_type"] != "arc" for a in all_atoms)
+
+    async def test_recall_expands_from_atom_to_arc(self, client, agent):
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": self._arc_text,
+        })
+        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
+            "query": "always profile before guessing at the bottleneck",
+            "min_similarity": 0.1,
+            "expand_graph": True,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        all_atoms = data["atoms"] + data["expanded_atoms"]
+        # Arc should appear (either in primary or expanded via summarises edge)
+        assert any(a["source_type"] == "arc" for a in all_atoms)
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 async def test_health(client):

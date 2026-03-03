@@ -166,7 +166,7 @@ async def mnemo_recall(
     query: str,
     domain_tags: list[str] | None = None,
     max_results: int = 5,
-    min_similarity: float = 0.3,
+    min_similarity: float = 0.2,
 ) -> str:
     """
     Args:
@@ -174,7 +174,7 @@ async def mnemo_recall(
                e.g. "how to handle CSV type coercion in pandas" not just "pandas".
         domain_tags: Optional filter to specific domains.
         max_results: Maximum number of primary results to return (default 5).
-        min_similarity: Minimum cosine similarity to query (default 0.3). Raise to
+        min_similarity: Minimum cosine similarity to query (default 0.2). Raise to
                         tighten results; lower to broaden them.
     """
     client, agent_id = await _get_client()
@@ -223,6 +223,7 @@ async def mnemo_stats() -> str:
     lines = [
         f"Total memories : {s['total_atoms']} (active: {s['active_atoms']})",
         f"By type        : {s.get('atoms_by_type', {})}",
+        f"Arc atoms      : {s.get('arc_atoms', 0)}",
         f"Avg confidence : {s.get('avg_effective_confidence', 0.0):.0%}",
         f"Edges          : {s.get('total_edges', 0)}",
         f"Views          : {s.get('active_views', 0)}",

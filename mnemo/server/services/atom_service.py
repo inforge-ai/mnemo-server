@@ -240,7 +240,7 @@ async def store_from_text(
             stored_rows.append(row)
             duplicates_merged += 1
         else:
-            row = await _insert_atom(conn, agent_id, atom, embedding, domain_tags)
+            row = await _insert_atom(conn, agent_id, atom, embedding, domain_tags, atom.source_type)
             stored_ids.append(row["id"])
             stored_rows.append(row)
             atoms_created += 1
@@ -539,6 +539,7 @@ async def get_agent_stats(
             COUNT(*) FILTER (WHERE atom_type='semantic'  AND is_active=true) AS semantic,
             COUNT(*) FILTER (WHERE atom_type='procedural' AND is_active=true) AS procedural,
             COUNT(*) FILTER (WHERE atom_type='relational' AND is_active=true) AS relational,
+            COUNT(*) FILTER (WHERE source_type='arc' AND is_active=true)      AS arc_atoms,
             COALESCE(AVG(
                 CASE WHEN is_active THEN
                     effective_confidence(
@@ -589,6 +590,7 @@ async def get_agent_stats(
             "procedural": row["procedural"],
             "relational": row["relational"],
         },
+        "arc_atoms": row["arc_atoms"],
         "total_edges": edge_count,
         "avg_effective_confidence": float(row["avg_effective_confidence"]),
         "active_views": view_count,
