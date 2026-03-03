@@ -89,6 +89,30 @@ async def _get_client() -> tuple[MnemoClient, UUID]:
     return _client, _agent_id
 
 
+async def _resolve_target_agent(
+    client: MnemoClient, agent_id_str: str | None, default_id: UUID
+) -> tuple[UUID | None, str | None]:
+    """Return (target_uuid, None) on success, or (None, error_string) on failure.
+
+    If agent_id_str is None, returns the default agent ID.
+    If agent_id_str is provided, validates it's a UUID and that the agent exists.
+    Non-default agents are never auto-registered — they must be pre-created via REST.
+    """
+    if agent_id_str is None:
+        return default_id, None
+    try:
+        target_id = UUID(agent_id_str)
+    except ValueError:
+        return None, f"Invalid agent_id format: '{agent_id_str}'. Expected a UUID."
+    try:
+        await client.get_agent(target_id)
+        return target_id, None
+    except Exception:
+        return None, (
+            f"Agent {agent_id_str} not found. Register it first via the REST API."
+        )
+
+
 async def _resolve_agent(client: MnemoClient) -> UUID:
     """Return the configured agent's UUID, registering a new one if needed."""
     if MNEMO_AGENT_ID:
@@ -127,24 +151,29 @@ mcp = FastMCP(
 
 @mcp.tool(
     description=(
-        "Store a memory. Describe what happened, what you learned, or a rule to follow. "
-        "Mnemo handles classification (episodic/semantic/procedural), confidence estimation, "
-        "and graph linking automatically."
+        "Store a memory. By default stores for this agent. Pass agent_id to store for a "
+        "different registered agent. Mnemo handles classification (episodic/semantic/procedural), "
+        "confidence estimation, and graph linking automatically."
     ),
 )
 async def mnemo_remember(
     text: str,
     domain_tags: list[str] | None = None,
+    agent_id: str | None = None,
 ) -> str:
     """
     Args:
         text: What to remember. Be specific — include context, outcomes, and lessons
               learned. Multi-sentence input is decomposed into typed atoms.
         domain_tags: Optional topic tags to organise memories (e.g. ["python", "debugging"]).
+        agent_id: Optional UUID of a registered agent. Omit to use the default agent.
     """
-    client, agent_id = await _get_client()
+    client, default_id = await _get_client()
+    target_id, error = await _resolve_target_agent(client, agent_id, default_id)
+    if error:
+        return error
     result = await client.remember(
-        agent_id=agent_id,
+        agent_id=target_id,
         text=text,
         domain_tags=domain_tags or [],
     )
@@ -158,7 +187,8 @@ async def mnemo_remember(
 
 @mcp.tool(
     description=(
-        "Search your memories by semantic similarity. Returns relevant memories ranked "
+        "Search memories by semantic similarity. By default searches this agent's memories. "
+        "Pass agent_id to search a different agent's memories. Returns results ranked "
         "by similarity and confidence, plus related knowledge via graph expansion."
     ),
 )
@@ -167,6 +197,7 @@ async def mnemo_recall(
     domain_tags: list[str] | None = None,
     max_results: int = 5,
     min_similarity: float = 0.2,
+    agent_id: str | None = None,
 ) -> str:
     """
     Args:
@@ -176,10 +207,14 @@ async def mnemo_recall(
         max_results: Maximum number of primary results to return (default 5).
         min_similarity: Minimum cosine similarity to query (default 0.2). Raise to
                         tighten results; lower to broaden them.
+        agent_id: Optional UUID of a registered agent. Omit to search the default agent.
     """
-    client, agent_id = await _get_client()
+    client, default_id = await _get_client()
+    target_id, error = await _resolve_target_agent(client, agent_id, default_id)
+    if error:
+        return error
     result = await client.recall(
-        agent_id=agent_id,
+        agent_id=target_id,
         query=query,
         domain_tags=domain_tags,
         max_results=max_results,
@@ -214,12 +249,18 @@ async def mnemo_recall(
 
 
 @mcp.tool(
-    description="View your memory statistics: total atoms, active count, confidence, and graph density.",
+    description=(
+        "View memory statistics: total atoms, active count, confidence, and graph density. "
+        "Pass agent_id to view stats for a different agent."
+    ),
 )
-async def mnemo_stats() -> str:
-    """Returns a summary of the current agent's memory state."""
-    client, agent_id = await _get_client()
-    s = await client.stats(agent_id=agent_id)
+async def mnemo_stats(agent_id: str | None = None) -> str:
+    """Returns a summary of the agent's memory state."""
+    client, default_id = await _get_client()
+    target_id, error = await _resolve_target_agent(client, agent_id, default_id)
+    if error:
+        return error
+    s = await client.stats(agent_id=target_id)
     lines = [
         f"Total memories : {s['total_atoms']} (active: {s['active_atoms']})",
         f"By type        : {s.get('atoms_by_type', {})}",

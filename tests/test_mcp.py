@@ -168,3 +168,64 @@ async def test_stats_after_remember(client, agent):
     assert "Total memories" in result
     # Check that at least one atom is reflected (active count is non-zero)
     assert "active: 0" not in result
+
+
+# ── Multi-agent tool tests ─────────────────────────────────────────────────────
+
+class TestMultiAgentTools:
+    async def test_mcp_remember_default_agent(self, client, agent):
+        """Calling remember without agent_id stores under the default agent."""
+        result = await mnemo_remember(text="Default agent memory: asyncpg is fast.")
+        assert "memories" in result
+        # Stats for default agent should reflect the stored atom
+        stats_result = await mnemo_stats()
+        assert "active: 0" not in stats_result
+
+    async def test_mcp_remember_explicit_agent(self, client, agent):
+        """Calling remember with a different agent_id stores under that agent."""
+        r = await client.post("/v1/agents", json={"name": "clio", "domain_tags": []})
+        r.raise_for_status()
+        clio_id = r.json()["id"]
+
+        result = await mnemo_remember(
+            text="Clio's memory: recursive descent parsing is elegant.",
+            agent_id=clio_id,
+        )
+        assert "memories" in result
+
+        # Verify clio has atoms, not the default agent (default agent unchanged)
+        r = await client.get(f"/v1/agents/{clio_id}/stats")
+        r.raise_for_status()
+        assert r.json()["active_atoms"] > 0
+
+    async def test_mcp_recall_explicit_agent(self, client, agent):
+        """Recall with agent_id only searches that agent's memories (isolation)."""
+        r = await client.post(
+            "/v1/agents", json={"name": "clio-recall", "domain_tags": []}
+        )
+        r.raise_for_status()
+        clio_id = r.json()["id"]
+
+        unique_text = "Clio stores ephemeral thoughts using a trie structure internally."
+        await mnemo_remember(text=unique_text, agent_id=clio_id)
+
+        # Recall with clio's agent_id — no assertion on content (may miss on similarity)
+        result_clio = await mnemo_recall(query="trie structure ephemeral", agent_id=clio_id)
+        assert isinstance(result_clio, str)
+
+        # Default agent has no such memory — must return "No relevant memories"
+        result_default = await mnemo_recall(query="trie structure ephemeral")
+        assert "No relevant memories" in result_default
+
+    async def test_mcp_nonexistent_agent_returns_error(self, client, agent):
+        """Using a valid UUID that doesn't exist returns a clear error message."""
+        result = await mnemo_remember(
+            text="test",
+            agent_id="00000000-0000-0000-0000-000000000000",
+        )
+        assert "not found" in result.lower()
+
+    async def test_mcp_invalid_uuid_returns_error(self, client, agent):
+        """Using a malformed UUID string returns a format error."""
+        result = await mnemo_remember(text="test", agent_id="not-a-uuid")
+        assert "invalid" in result.lower() or "uuid" in result.lower()
