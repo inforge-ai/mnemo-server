@@ -24,17 +24,22 @@ logger = logging.getLogger(__name__)
 
 async def expand_graph(
     conn: asyncpg.Connection,
-    agent_id: UUID,
+    agent_id: UUID | None,
     seed_ids: list[UUID],
     depth: int,
     scope_filter: dict | None,
     exclude_ids: set[UUID] | None = None,
+    allowed_ids: set[UUID] | None = None,
 ) -> list[asyncpg.Record]:
     """
     Follow edges up to `depth` hops from seed_ids and return expanded atoms.
 
+    agent_id: filter expansion to a single agent's atoms. Pass None when
+              using allowed_ids instead (shared view recall).
     scope_filter: {"atom_types": [...], "domain_tags": [...]} or None
     exclude_ids: atoms already in the primary result set (not re-returned)
+    allowed_ids: when set, expansion is restricted to only these atom IDs
+                 (used for snapshot-scoped shared view recall)
     """
     if not seed_ids or depth <= 0:
         return []
@@ -47,6 +52,8 @@ async def expand_graph(
         scope_atom_types = scope_filter.get("atom_types") or None
         scope_domain_tags = scope_filter.get("domain_tags") or None
 
+    allowed_list = list(allowed_ids) if allowed_ids else None
+
     rows = await conn.fetch(
         """
         WITH RECURSIVE expanded AS (
@@ -57,7 +64,8 @@ async def expand_graph(
                 1.0::float AS relevance
             FROM atoms a
             WHERE a.id = ANY($1)
-              AND a.agent_id = $2
+              AND ($2::uuid IS NULL OR a.agent_id = $2)
+              AND ($7::uuid[] IS NULL OR a.id = ANY($7))
               AND a.is_active = true
 
             UNION
@@ -79,7 +87,8 @@ async def expand_graph(
                             ELSE e.source_id
                         END
             WHERE ex.depth < $3
-              AND a.agent_id = $2
+              AND ($2::uuid IS NULL OR a.agent_id = $2)
+              AND ($7::uuid[] IS NULL OR a.id = ANY($7))
               AND a.is_active = true
               -- Scope boundary: restrict expansion to view filter if provided
               AND ($4::text[] IS NULL OR a.atom_type = ANY($4))
@@ -110,6 +119,7 @@ async def expand_graph(
         scope_atom_types,
         scope_domain_tags,
         list(exclude_ids),
+        allowed_list,
     )
 
     return list(rows)
