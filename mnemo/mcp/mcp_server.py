@@ -12,12 +12,29 @@ Configuration (environment variables):
   MNEMO_AGENT_NAME     Name used when auto-registering (default: mnemo-agent)
   MNEMO_AGENT_PERSONA  Persona string used when auto-registering (optional)
   MNEMO_DOMAIN_TAGS    Comma-separated default domain tags (optional)
+  MNEMO_MCP_TRANSPORT  "stdio" (default) or "sse" for remote/network access
+  MNEMO_MCP_HOST       Host to bind in SSE mode (default: 0.0.0.0)
+  MNEMO_MCP_PORT       Port to bind in SSE mode (default: 8001)
 
-Running:
+Running (stdio — local/same machine):
   MNEMO_BASE_URL=http://localhost:8000 MNEMO_AGENT_NAME=claude \\
       python -m mnemo.mcp.mcp_server
 
-Claude Desktop / claude.ai config:
+Running (SSE — accessible over network/Tailscale):
+  MNEMO_BASE_URL=http://localhost:8000 MNEMO_AGENT_NAME=claude \\
+  MNEMO_MCP_TRANSPORT=sse MNEMO_MCP_PORT=8001 \\
+      python -m mnemo.mcp.mcp_server
+
+Claude Desktop config for SSE (remote/Tailscale):
+  {
+    "mcpServers": {
+      "mnemo-memory": {
+        "url": "http://<tailscale-ip>:8001/sse"
+      }
+    }
+  }
+
+Claude Desktop config for stdio (local — both Claude and Mnemo on same machine):
   {
     "mcpServers": {
       "mnemo-memory": {
@@ -52,6 +69,9 @@ MNEMO_AGENT_PERSONA = os.environ.get("MNEMO_AGENT_PERSONA", "")
 MNEMO_DOMAIN_TAGS = [
     t.strip() for t in os.environ.get("MNEMO_DOMAIN_TAGS", "").split(",") if t.strip()
 ]
+MNEMO_MCP_TRANSPORT = os.environ.get("MNEMO_MCP_TRANSPORT", "stdio")
+MNEMO_MCP_HOST = os.environ.get("MNEMO_MCP_HOST", "0.0.0.0")
+MNEMO_MCP_PORT = int(os.environ.get("MNEMO_MCP_PORT", "8001"))
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -100,6 +120,8 @@ mcp = FastMCP(
         "Use mnemo_recall to search what you know. "
         "Use mnemo_stats to see your memory state."
     ),
+    host=MNEMO_MCP_HOST,
+    port=MNEMO_MCP_PORT,
 )
 
 
@@ -206,7 +228,9 @@ async def mnemo_stats() -> str:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    mcp.run(transport="stdio")
+    if MNEMO_MCP_TRANSPORT == "sse":
+        logger.info("Starting MCP server (SSE) on %s:%d", MNEMO_MCP_HOST, MNEMO_MCP_PORT)
+    mcp.run(transport=MNEMO_MCP_TRANSPORT)
 
 
 if __name__ == "__main__":
