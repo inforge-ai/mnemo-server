@@ -1,3 +1,129 @@
-from fastapi import APIRouter
+import json
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException
+
+from ..database import get_conn
+from ..models import AgentCreate, AgentResponse, AgentStats
+from ..services.atom_service import get_agent_stats
 
 router = APIRouter(tags=["agents"])
+
+
+@router.post("/agents", response_model=AgentResponse, status_code=201)
+async def register_agent(body: AgentCreate):
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO agents (name, persona, domain_tags, metadata)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, name, persona, domain_tags, metadata, created_at, is_active
+            """,
+            body.name,
+            body.persona,
+            body.domain_tags,
+            json.dumps(body.metadata),
+        )
+    return _agent_row(row)
+
+
+@router.get("/agents/{agent_id}", response_model=AgentResponse)
+async def get_agent(agent_id: UUID):
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, name, persona, domain_tags, metadata, created_at, is_active
+            FROM agents WHERE id = $1
+            """,
+            agent_id,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return _agent_row(row)
+
+
+@router.get("/agents/{agent_id}/stats", response_model=AgentStats)
+async def agent_stats(agent_id: UUID):
+    async with get_conn() as conn:
+        await _require_active_agent(conn, agent_id)
+        stats = await get_agent_stats(conn, agent_id)
+    return stats
+
+
+@router.post("/agents/{agent_id}/depart")
+async def depart_agent(agent_id: UUID):
+    """
+    Agent departure:
+    1. Cascade-revoke all capabilities this agent granted.
+    2. Mark agent inactive with departure + expiry timestamps.
+    3. Return summary.
+    """
+    async with get_conn() as conn:
+        agent = await conn.fetchrow(
+            "SELECT id, is_active FROM agents WHERE id = $1",
+            agent_id,
+        )
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if not agent["is_active"]:
+            raise HTTPException(status_code=409, detail="Agent already departed")
+
+        # Cascade-revoke capabilities
+        revoked_count = await conn.fetchval(
+            "SELECT revoke_agent_capabilities($1)",
+            agent_id,
+        )
+
+        # Mark departed
+        row = await conn.fetchrow(
+            """
+            UPDATE agents
+            SET is_active       = false,
+                departed_at     = now(),
+                data_expires_at = now() + interval '30 days'
+            WHERE id = $1
+            RETURNING departed_at, data_expires_at
+            """,
+            agent_id,
+        )
+
+        # Audit log
+        await conn.execute(
+            """
+            INSERT INTO access_log (agent_id, action, metadata)
+            VALUES ($1, 'departure', $2)
+            """,
+            agent_id,
+            json.dumps({"capabilities_revoked": revoked_count}),
+        )
+
+    return {
+        "capabilities_revoked": revoked_count,
+        "departed_at": row["departed_at"],
+        "data_expires_at": row["data_expires_at"],
+    }
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _agent_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "persona": row["persona"],
+        "domain_tags": list(row["domain_tags"]) if row["domain_tags"] else [],
+        "metadata": json.loads(row["metadata"]) if isinstance(row["metadata"], str) else (row["metadata"] or {}),
+        "created_at": row["created_at"],
+        "is_active": row["is_active"],
+    }
+
+
+async def _require_active_agent(conn, agent_id: UUID):
+    row = await conn.fetchrow(
+        "SELECT is_active FROM agents WHERE id = $1",
+        agent_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not row["is_active"]:
+        raise HTTPException(status_code=410, detail="Agent has departed")
