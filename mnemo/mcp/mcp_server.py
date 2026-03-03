@@ -166,6 +166,7 @@ async def mnemo_recall(
     query: str,
     domain_tags: list[str] | None = None,
     max_results: int = 5,
+    min_similarity: float = 0.3,
 ) -> str:
     """
     Args:
@@ -173,6 +174,8 @@ async def mnemo_recall(
                e.g. "how to handle CSV type coercion in pandas" not just "pandas".
         domain_tags: Optional filter to specific domains.
         max_results: Maximum number of primary results to return (default 5).
+        min_similarity: Minimum cosine similarity to query (default 0.3). Raise to
+                        tighten results; lower to broaden them.
     """
     client, agent_id = await _get_client()
     result = await client.recall(
@@ -181,6 +184,7 @@ async def mnemo_recall(
         domain_tags=domain_tags,
         max_results=max_results,
         min_confidence=0.1,
+        min_similarity=min_similarity,
         expand_graph=True,
     )
     atoms = result.get("atoms", [])
@@ -193,14 +197,18 @@ async def mnemo_recall(
     for atom in atoms:
         conf = atom.get("confidence_effective", 0.0)
         conf_label = "high" if conf > 0.7 else "moderate" if conf > 0.4 else "low"
+        score = atom.get("relevance_score")
+        score_str = f", {score:.2f}" if score is not None else ""
         lines.append(
-            f"[{atom['atom_type']}] ({conf_label} confidence) {atom['text_content']}"
+            f"[{atom['atom_type']}] ({conf_label} conf{score_str}) {atom['text_content']}"
         )
 
     if expanded:
         lines.append("— Related —")
         for atom in expanded[:3]:
-            lines.append(f"[{atom['atom_type']}] {atom['text_content']}")
+            score = atom.get("relevance_score")
+            score_str = f" ({score:.2f})" if score is not None else ""
+            lines.append(f"[{atom['atom_type']}]{score_str} {atom['text_content']}")
 
     return "\n".join(lines)
 

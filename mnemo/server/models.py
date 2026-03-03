@@ -52,6 +52,7 @@ class AtomResponse(BaseModel):
     structured: dict
     confidence_expected: float
     confidence_effective: float
+    relevance_score: Optional[float] = None
     source_type: str
     domain_tags: list[str]
     created_at: datetime
@@ -66,6 +67,7 @@ class RetrieveRequest(BaseModel):
     atom_types: Optional[list[str]] = None
     domain_tags: Optional[list[str]] = None
     min_confidence: float = 0.1
+    min_similarity: float = 0.3
     max_results: int = 10
     expand_graph: bool = True
     expansion_depth: int = 2

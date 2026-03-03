@@ -541,6 +541,97 @@ class TestSnapshotSemantics:
         assert snap_count >= 1  # IDs preserved, just atoms are inactive
 
 
+# ── Recall quality ────────────────────────────────────────────────────────────
+
+class TestRecallQuality:
+    """Tests for similarity floor, composite ranking, and expansion filtering."""
+
+    async def test_recall_respects_min_similarity(self, client, agent):
+        """Atoms below min_similarity are excluded; unrelated topics don't surface."""
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": "pandas read_csv silently coerces mixed column types in DataFrames.",
+        })
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": "I baked sourdough bread with extra rye flour and longer fermentation.",
+        })
+
+        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
+            "query": "pandas CSV loading data types",
+            "min_similarity": 0.25,
+            "expand_graph": False,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        texts = [a["text_content"] for a in data["atoms"]]
+        # pandas atom should appear; sourdough should not
+        assert any("pandas" in t or "csv" in t.lower() or "coerce" in t.lower() for t in texts)
+        assert not any("sourdough" in t or "bread" in t for t in texts)
+
+    async def test_recall_returns_empty_when_nothing_relevant(self, client, agent):
+        """With a high similarity floor and an unrelated query, results are empty."""
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": "I baked sourdough bread with a poolish starter yesterday.",
+        })
+
+        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
+            "query": "quantum chromodynamics particle physics collider",
+            "min_similarity": 0.3,
+            "expand_graph": False,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_retrieved"] == 0
+
+    async def test_recall_ranks_by_composite_score(self, client, agent):
+        """High-confidence atoms rank above low-confidence atoms with similar text."""
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": "I confirmed that pandas read_csv definitely coerces column types silently.",
+        })
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": "I think maybe pandas read_csv might have some type coercion issues.",
+        })
+
+        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
+            "query": "pandas read_csv column type coercion",
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        atoms = data["atoms"]
+        assert len(atoms) >= 1
+        # All primary results must have a relevance_score
+        for a in atoms:
+            assert a["relevance_score"] is not None
+        # Results are ordered by relevance_score descending
+        scores = [a["relevance_score"] for a in atoms]
+        assert scores == sorted(scores, reverse=True)
+
+    async def test_expanded_atoms_filtered_by_similarity(self, client, agent):
+        """All atoms returned in expanded_atoms have relevance_score >= min_similarity * 0.6."""
+        # Store connected atoms (multi-sentence → edges created between them)
+        await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": (
+                "pandas read_csv coerces column dtypes without warning. "
+                "I discovered this while processing a CSV file. "
+                "Always specify dtype explicitly when using read_csv."
+            ),
+        })
+
+        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
+            "query": "CSV data type parsing",
+            "min_similarity": 0.3,
+            "expand_graph": True,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        exp_floor = 0.3 * 0.6
+        for atom in data["expanded_atoms"]:
+            assert atom["relevance_score"] is not None
+            assert atom["relevance_score"] >= exp_floor
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 async def test_health(client):

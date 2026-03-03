@@ -25,6 +25,7 @@ import logging
 from uuid import UUID
 
 import asyncpg
+import numpy as np
 
 from ..config import settings
 from ..embeddings import encode
@@ -171,7 +172,15 @@ async def _get_atom_row(
     )
 
 
-def _row_to_atom_response(row: asyncpg.Record) -> dict:
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two embedding vectors."""
+    va = np.array(a, dtype=np.float32)
+    vb = np.array(b, dtype=np.float32)
+    norm = float(np.linalg.norm(va) * np.linalg.norm(vb))
+    return float(np.dot(va, vb)) / norm if norm > 0 else 0.0
+
+
+def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = None) -> dict:
     alpha = row["confidence_alpha"]
     beta = row["confidence_beta"]
     return {
@@ -182,6 +191,7 @@ def _row_to_atom_response(row: asyncpg.Record) -> dict:
         "structured": json.loads(row["structured"]) if isinstance(row["structured"], str) else (row["structured"] or {}),
         "confidence_expected": alpha / (alpha + beta),
         "confidence_effective": row["confidence_effective"],
+        "relevance_score": relevance_score,
         "source_type": row["source_type"],
         "domain_tags": list(row["domain_tags"]) if row["domain_tags"] else [],
         "created_at": row["created_at"],
@@ -324,6 +334,7 @@ async def retrieve(
     atom_types: list[str] | None,
     domain_tags: list[str] | None,
     min_confidence: float,
+    min_similarity: float,
     max_results: int,
     expand_graph: bool,
     expansion_depth: int,
@@ -331,17 +342,24 @@ async def retrieve(
 ) -> dict:
     """
     Semantic retrieval with decay filtering, access updates, optional graph expansion.
+
+    Ranking: composite score = similarity * (0.7 + 0.3 * effective_confidence).
+    Similarity floor: atoms below min_similarity are excluded from primary results.
+    Expansion floor: expanded atoms below min_similarity * 0.6 are excluded.
     """
     embedding = await encode(query)
     over_fetch = max_results * 2
 
+    # Fetch top candidates using the ivfflat index (ORDER BY distance ASC).
+    # Similarity floor, confidence filter, and composite ranking are applied
+    # in Python to avoid naming conflicts with pg_trgm's similarity() function.
     rows = await conn.fetch(
         """
         SELECT
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
             source_type, domain_tags, created_at, last_accessed, access_count, is_active,
-            1 - (embedding <=> $1::vector) AS similarity,
+            1 - (embedding <=> $1::vector) AS cosine_sim,
             effective_confidence(
                 confidence_alpha, confidence_beta,
                 decay_type, decay_half_life_days,
@@ -352,7 +370,7 @@ async def retrieve(
           AND is_active = true
           AND ($3::text[] IS NULL OR atom_type = ANY($3))
           AND ($4::text[] IS NULL OR domain_tags && $4)
-        ORDER BY similarity DESC
+        ORDER BY cosine_sim DESC
         LIMIT $5
         """,
         embedding,
@@ -362,12 +380,18 @@ async def retrieve(
         over_fetch,
     )
 
-    # Filter by effective confidence
+    # Apply similarity floor, confidence filter, compute composite score, sort.
+    rows = [r for r in rows if r["cosine_sim"] >= min_similarity]
     rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
 
     # Filter superseded atoms unless requested
     if not include_superseded:
         rows = await _filter_superseded(conn, rows)
+
+    rows.sort(
+        key=lambda r: r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]),
+        reverse=True,
+    )
 
     primary = rows[:max_results]
     primary_ids = [r["id"] for r in primary]
@@ -383,7 +407,7 @@ async def retrieve(
             primary_ids,
         )
 
-    expanded_rows: list[asyncpg.Record] = []
+    expanded_responses: list[dict] = []
     if expand_graph and primary_ids:
         from .graph_service import expand_graph as graph_expand
         expanded_rows = await graph_expand(
@@ -394,7 +418,19 @@ async def retrieve(
             scope_filter=None,
             exclude_ids=set(primary_ids),
         )
-        expanded_ids = [r["id"] for r in expanded_rows]
+
+        # Filter expanded atoms by query relevance (permissive floor = 60% of primary floor)
+        # and sort by the same composite score.
+        exp_floor = min_similarity * 0.6
+        scored: list[tuple[asyncpg.Record, float]] = []
+        for r in expanded_rows:
+            sim = _cosine_sim(r["embedding"], embedding)
+            if sim >= exp_floor:
+                score = sim * (0.7 + 0.3 * r["confidence_effective"])
+                scored.append((r, score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        expanded_ids = [r["id"] for r, _ in scored]
         if expanded_ids:
             await conn.execute(
                 """
@@ -405,8 +441,12 @@ async def retrieve(
                 expanded_ids,
             )
 
-    primary_responses = [_row_to_atom_response(r) for r in primary]
-    expanded_responses = [_row_to_atom_response(r) for r in expanded_rows]
+        expanded_responses = [_row_to_atom_response(r, score) for r, score in scored]
+
+    primary_responses = [
+        _row_to_atom_response(r, r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]))
+        for r in primary
+    ]
 
     return {
         "atoms": primary_responses,

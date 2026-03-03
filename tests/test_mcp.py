@@ -42,13 +42,14 @@ class _AsgiMnemoClient:
         return r.json()
 
     async def recall(self, agent_id, query, domain_tags=None, max_results=10,
-                     min_confidence=0.1, expand_graph=True, **_):
+                     min_confidence=0.1, min_similarity=0.3, expand_graph=True, **_):
         r = await self._c.post(
             f"/v1/agents/{agent_id}/recall",
             json={
                 "query": query,
                 "max_results": max_results,
                 "min_confidence": min_confidence,
+                "min_similarity": min_similarity,
                 "expand_graph": expand_graph,
             },
         )

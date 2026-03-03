@@ -35,6 +35,7 @@ async def recall(agent_id: UUID, body: RetrieveRequest):
             atom_types=body.atom_types,
             domain_tags=body.domain_tags,
             min_confidence=body.min_confidence,
+            min_similarity=body.min_similarity,
             max_results=body.max_results,
             expand_graph=body.expand_graph,
             expansion_depth=body.expansion_depth,
