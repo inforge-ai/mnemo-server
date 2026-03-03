@@ -83,8 +83,8 @@ async def revoke_capability(cap_id: UUID):
         if cap["revoked"]:
             raise HTTPException(status_code=409, detail="Capability already revoked")
 
-        # Cascade revoke via recursive CTE
-        revoked_count = await conn.fetchval(
+        # Cascade revoke via recursive CTE; fetch returns one row per revoked cap
+        revoked_rows = await conn.fetch(
             """
             WITH RECURSIVE cap_tree AS (
                 SELECT id FROM capabilities WHERE id = $1 AND revoked = false
@@ -99,6 +99,7 @@ async def revoke_capability(cap_id: UUID):
             """,
             cap_id,
         )
+        revoked_count = len(revoked_rows)
 
         await conn.execute(
             """

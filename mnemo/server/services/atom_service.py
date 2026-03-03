@@ -164,7 +164,7 @@ async def _get_atom_row(
                 created_at, last_accessed, access_count
             ) AS confidence_effective
         FROM atoms
-        WHERE id = $1 AND agent_id = $2
+        WHERE id = $1 AND agent_id = $2 AND is_active = true
         """,
         atom_id,
         agent_id,

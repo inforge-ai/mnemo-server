@@ -212,3 +212,25 @@ BEGIN
     RETURN revoked_count;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ============================================================
+-- GRANTS
+-- Run as postgres (superuser). The mnemo app user needs full
+-- DML access. access_log is INSERT-only for the app user.
+-- ============================================================
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+    ON agents, atoms, edges, views, snapshot_atoms, capabilities
+    TO mnemo;
+
+GRANT INSERT, SELECT
+    ON access_log
+    TO mnemo;
+
+GRANT EXECUTE
+    ON FUNCTION effective_confidence(float, float, text, float, timestamptz, timestamptz, integer)
+    TO mnemo;
+
+GRANT EXECUTE
+    ON FUNCTION revoke_agent_capabilities(uuid)
+    TO mnemo;
