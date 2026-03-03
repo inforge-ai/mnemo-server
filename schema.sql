@@ -83,7 +83,7 @@ CREATE TABLE edges (
     edge_type       TEXT NOT NULL CHECK (edge_type IN (
                         'supports', 'contradicts', 'depends_on',
                         'generalises', 'specialises', 'motivated_by',
-                        'evidence_for', 'supersedes'
+                        'evidence_for', 'supersedes', 'summarises'
                     )),
     weight          FLOAT NOT NULL DEFAULT 1.0
                     CHECK (weight >= 0.0 AND weight <= 1.0),
