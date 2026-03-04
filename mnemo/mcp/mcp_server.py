@@ -196,7 +196,7 @@ async def mnemo_recall(
     query: str,
     domain_tags: list[str] | None = None,
     max_results: int = 5,
-    min_similarity: float = 0.3,
+    min_similarity: float = 0.15,
     similarity_drop_threshold: float | None = 0.3,
     verbosity: str = "summary",
     max_total_tokens: int | None = 500,
@@ -208,7 +208,7 @@ async def mnemo_recall(
                e.g. "how to handle CSV type coercion in pandas" not just "pandas".
         domain_tags: Optional filter to specific domains.
         max_results: Maximum number of primary results to return (default 5).
-        min_similarity: Minimum cosine similarity to query (default 0.3).
+        min_similarity: Minimum cosine similarity to query (default 0.15).
         similarity_drop_threshold: Stop at relevance cliffs (default 0.3). Set None to disable.
         verbosity: "summary" (first sentence, default), "full" (complete), or "truncated".
         max_total_tokens: Approximate token budget for all returned content (default 500).
