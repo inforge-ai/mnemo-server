@@ -136,6 +136,12 @@ class MnemoClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def find_agent_by_name(self, name: str) -> list[dict]:
+        """Return active agents with this exact name (empty list if none found)."""
+        resp = await self.http.get("/v1/agents", params={"name": name})
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_agent(self, agent_id: UUID) -> dict:
         resp = await self.http.get(f"/v1/agents/{agent_id}")
         resp.raise_for_status()

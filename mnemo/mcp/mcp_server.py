@@ -114,15 +114,30 @@ async def _resolve_target_agent(
 
 
 async def _resolve_agent(client: MnemoClient) -> UUID:
-    """Return the configured agent's UUID, registering a new one if needed."""
+    """Return the configured agent's UUID, finding or creating by name.
+
+    Resolution order:
+    1. If MNEMO_AGENT_ID is set, verify it exists and use it (explicit override).
+    2. Look up active agents named MNEMO_AGENT_NAME — reuse the first match.
+    3. If no match, register a new agent with that name.
+
+    This makes the MCP server idempotent across restarts: the stable identity
+    is MNEMO_AGENT_NAME, not a hardcoded UUID.
+    """
     if MNEMO_AGENT_ID:
         agent_id = UUID(MNEMO_AGENT_ID)
         try:
             await client.get_agent(agent_id)
-            logger.info("Using existing agent %s", agent_id)
+            logger.info("Using explicitly configured agent %s", agent_id)
             return agent_id
         except Exception:
-            logger.warning("Agent %s not found, registering a new one", agent_id)
+            logger.warning("Configured MNEMO_AGENT_ID %s not found, falling back to name lookup", agent_id)
+
+    existing = await client.find_agent_by_name(MNEMO_AGENT_NAME)
+    if existing:
+        agent_id = UUID(existing[0]["id"])
+        logger.info("Reconnected to existing agent '%s' → %s", MNEMO_AGENT_NAME, agent_id)
+        return agent_id
 
     agent = await client.register_agent(
         name=MNEMO_AGENT_NAME,

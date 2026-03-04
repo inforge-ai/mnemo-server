@@ -28,6 +28,11 @@ class _AsgiMnemoClient:
         r.raise_for_status()
         return r.json()
 
+    async def find_agent_by_name(self, name):
+        r = await self._c.get("/v1/agents", params={"name": name})
+        r.raise_for_status()
+        return r.json()
+
     async def get_agent(self, agent_id):
         r = await self._c.get(f"/v1/agents/{agent_id}")
         r.raise_for_status()

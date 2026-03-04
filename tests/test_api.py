@@ -60,6 +60,27 @@ class TestAgents:
         })
         assert resp.status_code == 410
 
+    async def test_find_agent_by_name(self, client):
+        await client.post("/v1/agents", json={"name": "find-me", "domain_tags": []})
+        resp = await client.get("/v1/agents", params={"name": "find-me"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "find-me"
+
+    async def test_find_agent_by_name_not_found(self, client):
+        resp = await client.get("/v1/agents", params={"name": "does-not-exist"})
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    async def test_find_agent_by_name_excludes_departed(self, client):
+        r = await client.post("/v1/agents", json={"name": "departed-agent", "domain_tags": []})
+        agent_id = r.json()["id"]
+        await client.post(f"/v1/agents/{agent_id}/depart")
+        resp = await client.get("/v1/agents", params={"name": "departed-agent"})
+        assert resp.status_code == 200
+        assert resp.json() == []
+
 
 # ── Remember endpoint ─────────────────────────────────────────────────────────
 

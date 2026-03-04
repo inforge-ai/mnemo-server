@@ -1,7 +1,7 @@
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from ..database import get_conn
 from ..models import AgentCreate, AgentResponse, AgentStats
@@ -25,6 +25,21 @@ async def register_agent(body: AgentCreate):
             json.dumps(body.metadata),
         )
     return _agent_row(row)
+
+
+@router.get("/agents", response_model=list[AgentResponse])
+async def find_agents(name: str = Query(..., description="Exact agent name to look up")):
+    """Find active agents by exact name. Returns empty list if none found."""
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, name, persona, domain_tags, metadata, created_at, is_active
+            FROM agents WHERE name = $1 AND is_active = true
+            ORDER BY created_at ASC
+            """,
+            name,
+        )
+    return [_agent_row(r) for r in rows]
 
 
 @router.get("/agents/{agent_id}", response_model=AgentResponse)
