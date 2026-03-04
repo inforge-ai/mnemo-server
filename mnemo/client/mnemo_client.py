@@ -88,6 +88,10 @@ class MnemoClient:
         expand_graph: bool = True,
         expansion_depth: int = 2,
         include_superseded: bool = False,
+        similarity_drop_threshold: Optional[float] = 0.3,
+        verbosity: str = "full",
+        max_content_chars: int = 200,
+        max_total_tokens: Optional[int] = None,
     ) -> dict:
         """Retrieve relevant memories by semantic search."""
         resp = await self.http.post(
@@ -102,6 +106,10 @@ class MnemoClient:
                 "expand_graph": expand_graph,
                 "expansion_depth": expansion_depth,
                 "include_superseded": include_superseded,
+                "similarity_drop_threshold": similarity_drop_threshold,
+                "verbosity": verbosity,
+                "max_content_chars": max_content_chars,
+                "max_total_tokens": max_total_tokens,
             },
         )
         resp.raise_for_status()

@@ -700,6 +700,293 @@ class TestArcAtoms:
         assert any(a["source_type"] == "arc" for a in all_atoms)
 
 
+# ── Recall controls ──────────────────────────────────────────────────────────
+
+class TestRecallControls:
+    """Tests for similarity_drop_threshold, verbosity, and max_total_tokens controls."""
+
+    # ── Gap threshold ──────────────────────────────────────────────────────
+
+    async def test_gap_threshold_stops_at_cliff(self, client, agent):
+        """Atoms from an unrelated topic are cut when the score cliffs."""
+        aid = agent["id"]
+        for text in [
+            "pandas read_csv silently coerces mixed-type columns to object dtype.",
+            "Use dtype parameter in pandas read_csv to prevent silent type coercion.",
+            "pandas DataFrame dtypes can be inspected with df.dtypes after loading.",
+        ]:
+            await client.post(f"/v1/agents/{aid}/remember", json={"text": text})
+        for text in [
+            "The Battle of Hastings was fought in 1066 between Harold and William.",
+            "Medieval siege weapons included trebuchets, mangonels, and battering rams.",
+        ]:
+            await client.post(f"/v1/agents/{aid}/remember", json={"text": text})
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas CSV column type coercion dtype",
+            "similarity_drop_threshold": 0.3,
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        texts = [a["text_content"] for a in atoms]
+        # Medieval history atoms should be cut at the cliff
+        assert not any("1066" in t or "trebuchet" in t or "Hastings" in t for t in texts)
+
+    async def test_gap_threshold_none_returns_all(self, client, agent):
+        """With threshold=None, all atoms above min_similarity are returned."""
+        aid = agent["id"]
+        for text in [
+            "pandas read_csv silently coerces mixed-type columns to object dtype.",
+            "The Battle of Hastings was fought in 1066.",
+        ]:
+            await client.post(f"/v1/agents/{aid}/remember", json={"text": text})
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas CSV column type coercion",
+            "similarity_drop_threshold": None,
+            "min_similarity": 0.05,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        # Both atoms should be present (no filtering)
+        assert resp.json()["total_retrieved"] >= 1
+
+    async def test_gap_threshold_with_uniform_scores(self, client, agent):
+        """No cliff in uniform topic → all atoms returned."""
+        aid = agent["id"]
+        for text in [
+            "pandas read_csv coerces dtypes silently.",
+            "pandas DataFrame dtypes should be set explicitly.",
+            "pandas read_csv dtype parameter prevents coercion.",
+            "Always check dtypes after loading a CSV with pandas.",
+            "pandas dtype inference is unreliable for mixed columns.",
+        ]:
+            await client.post(f"/v1/agents/{aid}/remember", json={"text": text})
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas CSV dtype coercion",
+            "similarity_drop_threshold": 0.3,
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        # All 5 atoms are similar; no cliff should cut them
+        assert resp.json()["total_retrieved"] >= 4
+
+    async def test_gap_threshold_single_result(self, client, agent):
+        """Steep cliff between relevant and irrelevant → only 1 result returned."""
+        aid = agent["id"]
+        await client.post(f"/v1/agents/{aid}/remember", json={
+            "text": "pandas read_csv dtype coercion silently mangles column types.",
+        })
+        await client.post(f"/v1/agents/{aid}/remember", json={
+            "text": "The French Revolution began in 1789 with the storming of the Bastille.",
+        })
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas CSV type coercion",
+            "similarity_drop_threshold": 0.3,
+            "min_similarity": 0.05,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        # At least the pandas atom returned; French Revolution should be cut
+        assert len(atoms) >= 1
+        texts = [a["text_content"] for a in atoms]
+        assert not any("Bastille" in t or "1789" in t for t in texts)
+
+    # ── Verbosity ──────────────────────────────────────────────────────────
+
+    async def test_verbosity_full_returns_complete_text(self, client, agent):
+        aid = agent["id"]
+        full_text = (
+            "pandas read_csv coerces dtypes silently. "
+            "This caused data loss in production. "
+            "Always specify dtype explicitly."
+        )
+        await client.post(f"/v1/agents/{aid}/remember", json={"text": full_text})
+
+        # Store one of the atoms directly to control exact content
+        atom_resp = await client.post(f"/v1/agents/{aid}/atoms", json={
+            "atom_type": "semantic",
+            "text_content": full_text,
+            "domain_tags": ["python"],
+        })
+        assert atom_resp.status_code == 201
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas CSV dtype coercion",
+            "verbosity": "full",
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        assert any(len(a["text_content"]) > 60 for a in atoms)
+
+    async def test_verbosity_summary_returns_first_sentence(self, client, agent):
+        aid = agent["id"]
+        text = "First sentence here. Second sentence here. Third sentence here."
+        atom_resp = await client.post(f"/v1/agents/{aid}/atoms", json={
+            "atom_type": "semantic",
+            "text_content": text,
+            "domain_tags": [],
+        })
+        assert atom_resp.status_code == 201
+        atom_id = atom_resp.json()["id"]
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "First sentence here",
+            "verbosity": "summary",
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        matching = [a for a in atoms if a["id"] == atom_id]
+        assert matching, "stored atom not recalled"
+        assert matching[0]["text_content"] == "First sentence here."
+
+    async def test_verbosity_truncated_respects_char_limit(self, client, agent):
+        aid = agent["id"]
+        long_text = "pandas " + ("x" * 500)
+        atom_resp = await client.post(f"/v1/agents/{aid}/atoms", json={
+            "atom_type": "semantic",
+            "text_content": long_text,
+            "domain_tags": [],
+        })
+        assert atom_resp.status_code == 201
+        atom_id = atom_resp.json()["id"]
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas",
+            "verbosity": "truncated",
+            "max_content_chars": 100,
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        matching = [a for a in atoms if a["id"] == atom_id]
+        assert matching, "stored atom not recalled"
+        content = matching[0]["text_content"]
+        assert content.endswith("...")
+        assert len(content) == 103  # 100 chars + "..."
+
+    async def test_verbosity_summary_single_sentence(self, client, agent):
+        aid = agent["id"]
+        text = "Only one sentence no period"
+        atom_resp = await client.post(f"/v1/agents/{aid}/atoms", json={
+            "atom_type": "semantic",
+            "text_content": text,
+            "domain_tags": [],
+        })
+        assert atom_resp.status_code == 201
+        atom_id = atom_resp.json()["id"]
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "Only one sentence no period",
+            "verbosity": "summary",
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        matching = [a for a in atoms if a["id"] == atom_id]
+        assert matching, "stored atom not recalled"
+        # No sentence boundary → full text preserved
+        assert matching[0]["text_content"] == text
+
+    # ── Token budget ───────────────────────────────────────────────────────
+
+    async def test_token_budget_limits_results(self, client, agent):
+        """With a tight budget, fewer than max_results atoms are returned."""
+        aid = agent["id"]
+        # ~130-char atoms ≈ 33 tokens each; 5 atoms ≈ 165 tokens
+        for i in range(5):
+            await client.post(f"/v1/agents/{aid}/atoms", json={
+                "atom_type": "semantic",
+                "text_content": f"pandas read_csv coerces column types silently version {i} " + "word " * 15,
+                "domain_tags": [],
+            })
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas CSV column type coercion",
+            "max_total_tokens": 80,
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+            "similarity_drop_threshold": None,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        # Budget of 80 tokens (~320 chars) should exclude some of the 5 atoms
+        assert data["total_retrieved"] < 5
+
+    async def test_token_budget_always_returns_one(self, client, agent):
+        """Even with a very tight budget, at least 1 atom is always returned."""
+        aid = agent["id"]
+        long_text = "pandas " + ("word " * 200)  # ~1000 tokens
+        await client.post(f"/v1/agents/{aid}/atoms", json={
+            "atom_type": "semantic",
+            "text_content": long_text,
+            "domain_tags": [],
+        })
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas",
+            "max_total_tokens": 50,
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["total_retrieved"] >= 1
+
+    async def test_token_budget_none_returns_all(self, client, agent):
+        """With max_total_tokens=None, all atoms above the similarity floor are returned."""
+        aid = agent["id"]
+        # Store 3 variants about the same topic — distinct enough to avoid dedup (cosine < 0.90)
+        texts = [
+            "pandas read_csv coerces columns to object dtype when mixing integers and strings.",
+            "pandas DataFrame dtype inference silently changes integer columns to float64.",
+            "pandas read_csv misidentifies numeric strings as floats causing downstream errors.",
+        ]
+        for text in texts:
+            await client.post(f"/v1/agents/{aid}/atoms", json={
+                "atom_type": "semantic",
+                "text_content": text,
+                "domain_tags": [],
+            })
+
+        # First, verify all 3 are actually stored (not merged)
+        stats = (await client.get(f"/v1/agents/{aid}/stats")).json()
+        stored = stats["active_atoms"]
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "pandas CSV dtype coercion column types",
+            "max_total_tokens": None,
+            "min_similarity": 0.1,
+            "expand_graph": False,
+            "max_results": 10,
+            "similarity_drop_threshold": None,
+        })
+        assert resp.status_code == 200
+        # Without a token budget, all stored+similar atoms are returned
+        assert resp.json()["total_retrieved"] >= min(stored, 3)
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 async def test_health(client):

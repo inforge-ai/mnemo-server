@@ -187,16 +187,19 @@ async def mnemo_remember(
 
 @mcp.tool(
     description=(
-        "Search memories by semantic similarity. By default searches this agent's memories. "
-        "Pass agent_id to search a different agent's memories. Returns results ranked "
-        "by similarity and confidence, plus related knowledge via graph expansion."
+        "Search memories. Returns first-sentence summaries by default. "
+        "Set verbosity='full' for complete content. "
+        "Pass agent_id to search a different agent's memories."
     ),
 )
 async def mnemo_recall(
     query: str,
     domain_tags: list[str] | None = None,
     max_results: int = 5,
-    min_similarity: float = 0.2,
+    min_similarity: float = 0.3,
+    similarity_drop_threshold: float | None = 0.3,
+    verbosity: str = "summary",
+    max_total_tokens: int | None = 500,
     agent_id: str | None = None,
 ) -> str:
     """
@@ -205,8 +208,10 @@ async def mnemo_recall(
                e.g. "how to handle CSV type coercion in pandas" not just "pandas".
         domain_tags: Optional filter to specific domains.
         max_results: Maximum number of primary results to return (default 5).
-        min_similarity: Minimum cosine similarity to query (default 0.2). Raise to
-                        tighten results; lower to broaden them.
+        min_similarity: Minimum cosine similarity to query (default 0.3).
+        similarity_drop_threshold: Stop at relevance cliffs (default 0.3). Set None to disable.
+        verbosity: "summary" (first sentence, default), "full" (complete), or "truncated".
+        max_total_tokens: Approximate token budget for all returned content (default 500).
         agent_id: Optional UUID of a registered agent. Omit to search the default agent.
     """
     client, default_id = await _get_client()
@@ -220,6 +225,9 @@ async def mnemo_recall(
         max_results=max_results,
         min_confidence=0.1,
         min_similarity=min_similarity,
+        similarity_drop_threshold=similarity_drop_threshold,
+        verbosity=verbosity,
+        max_total_tokens=max_total_tokens,
         expand_graph=True,
     )
     atoms = result.get("atoms", [])

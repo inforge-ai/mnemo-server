@@ -40,6 +40,10 @@ async def recall(agent_id: UUID, body: RetrieveRequest):
             expand_graph=body.expand_graph,
             expansion_depth=body.expansion_depth,
             include_superseded=body.include_superseded,
+            similarity_drop_threshold=body.similarity_drop_threshold,
+            verbosity=body.verbosity,
+            max_content_chars=body.max_content_chars,
+            max_total_tokens=body.max_total_tokens,
         )
     return result
 

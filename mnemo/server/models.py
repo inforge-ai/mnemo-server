@@ -72,6 +72,28 @@ class RetrieveRequest(BaseModel):
     expand_graph: bool = True
     expansion_depth: int = 2
     include_superseded: bool = False
+    similarity_drop_threshold: Optional[float] = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Stop returning results when score drops by this fraction from previous",
+    )
+    verbosity: str = Field(
+        default="full",
+        pattern="^(full|summary|truncated)$",
+    )
+    max_content_chars: int = Field(
+        default=200,
+        ge=50,
+        le=5000,
+        description="Character limit per atom when verbosity=truncated",
+    )
+    max_total_tokens: Optional[int] = Field(
+        default=None,
+        ge=50,
+        le=10000,
+        description="Approximate token budget for all returned content",
+    )
 
 class RetrieveResponse(BaseModel):
     atoms: list[AtomResponse]

@@ -172,6 +172,53 @@ async def _get_atom_row(
     )
 
 
+def _apply_gap_threshold(atoms: list[dict], threshold: float | None) -> list[dict]:
+    """Stop returning results when score drops by more than `threshold` fraction."""
+    if not threshold or len(atoms) <= 1:
+        return atoms
+    result = [atoms[0]]
+    for i in range(1, len(atoms)):
+        prev = atoms[i - 1]["relevance_score"] or 0.0
+        curr = atoms[i]["relevance_score"] or 0.0
+        if prev > 0 and (prev - curr) / prev > threshold:
+            break
+        result.append(atoms[i])
+    return result
+
+
+def _apply_token_budget(
+    atoms: list[dict], max_tokens: int | None
+) -> tuple[list[dict], int | None]:
+    """Filter atoms to fit within a token budget (chars/4). Always returns at least 1.
+    Returns (filtered_atoms, remaining_budget). remaining_budget is None if no budget."""
+    if max_tokens is None:
+        return atoms, None
+    budget = float(max_tokens)
+    result = []
+    for atom in atoms:
+        cost = len(atom["text_content"]) / 4
+        if budget - cost < 0 and result:
+            break
+        budget -= cost
+        result.append(atom)
+    return result, max(0, int(budget))
+
+
+def _apply_verbosity(atoms: list[dict], verbosity: str, max_chars: int) -> list[dict]:
+    """Compress text_content according to verbosity mode."""
+    if verbosity == "full":
+        return atoms
+    for atom in atoms:
+        text = atom["text_content"]
+        if verbosity == "summary":
+            end = text.find(". ")
+            if end > 0:
+                atom["text_content"] = text[: end + 1]
+        elif verbosity == "truncated" and len(text) > max_chars:
+            atom["text_content"] = text[:max_chars].rstrip() + "..."
+    return atoms
+
+
 def _cosine_sim(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two embedding vectors."""
     va = np.array(a, dtype=np.float32)
@@ -339,6 +386,10 @@ async def retrieve(
     expand_graph: bool,
     expansion_depth: int,
     include_superseded: bool,
+    similarity_drop_threshold: float | None = 0.3,
+    verbosity: str = "full",
+    max_content_chars: int = 200,
+    max_total_tokens: int | None = None,
 ) -> dict:
     """
     Semantic retrieval with decay filtering, access updates, optional graph expansion.
@@ -396,7 +447,17 @@ async def retrieve(
     primary = rows[:max_results]
     primary_ids = [r["id"] for r in primary]
 
-    # Update access timestamps
+    # Build primary responses and apply gap threshold before graph expansion.
+    # Gap threshold is applied first so that atoms cut from primary are eligible
+    # to surface in expanded_atoms (they must not be in exclude_ids).
+    primary_responses = [
+        _row_to_atom_response(r, r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]))
+        for r in primary
+    ]
+    primary_responses = _apply_gap_threshold(primary_responses, similarity_drop_threshold)
+    kept_ids = {a["id"] for a in primary_responses}
+
+    # Update access timestamps for all pre-threshold primary atoms (not just survivors)
     if primary_ids:
         await conn.execute(
             """
@@ -408,15 +469,18 @@ async def retrieve(
         )
 
     expanded_responses: list[dict] = []
-    if expand_graph and primary_ids:
+    # Use only post-threshold atoms as expansion seeds. Atoms cut by the gap threshold
+    # are not seeds, so they can surface in expanded_atoms if connected to a surviving atom.
+    kept_id_list = list(kept_ids) or primary_ids  # fall back to all if threshold cut everything
+    if expand_graph and kept_id_list:
         from .graph_service import expand_graph as graph_expand
         expanded_rows = await graph_expand(
             conn=conn,
             agent_id=agent_id,
-            seed_ids=primary_ids,
+            seed_ids=kept_id_list,
             depth=expansion_depth,
             scope_filter=None,
-            exclude_ids=set(primary_ids),
+            exclude_ids=kept_ids,  # only exclude surviving primary atoms from expanded results
         )
 
         # Filter expanded atoms by query relevance (permissive floor = 60% of primary floor)
@@ -443,10 +507,13 @@ async def retrieve(
 
         expanded_responses = [_row_to_atom_response(r, score) for r, score in scored]
 
-    primary_responses = [
-        _row_to_atom_response(r, r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]))
-        for r in primary
-    ]
+    # Apply token budget (Change 3) — primary first, remainder to expanded
+    primary_responses, remaining_budget = _apply_token_budget(primary_responses, max_total_tokens)
+    expanded_responses, _ = _apply_token_budget(expanded_responses, remaining_budget)
+
+    # Apply verbosity (Change 2) — compress per-atom text
+    primary_responses = _apply_verbosity(primary_responses, verbosity, max_content_chars)
+    expanded_responses = _apply_verbosity(expanded_responses, verbosity, max_content_chars)
 
     return {
         "atoms": primary_responses,
