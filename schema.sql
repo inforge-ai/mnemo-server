@@ -5,7 +5,7 @@
 -- Agent registry
 CREATE TABLE agents (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name            TEXT NOT NULL,
+    name            TEXT NOT NULL UNIQUE,
     persona         TEXT,
     domain_tags     TEXT[] NOT NULL DEFAULT '{}',
     metadata        JSONB DEFAULT '{}',
@@ -145,6 +145,21 @@ CREATE TABLE access_log (
 
 CREATE INDEX idx_access_log_agent ON access_log (agent_id, created_at);
 
+-- API keys (hashed — plaintext never stored)
+CREATE TABLE api_keys (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id     UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    key_hash     TEXT NOT NULL,
+    key_prefix   TEXT NOT NULL,        -- first 16 chars for display
+    name         TEXT DEFAULT 'default',
+    created_at   TIMESTAMPTZ DEFAULT now(),
+    last_used_at TIMESTAMPTZ,
+    is_active    BOOLEAN DEFAULT true
+);
+
+CREATE INDEX idx_api_keys_hash  ON api_keys(key_hash);
+CREATE INDEX idx_api_keys_agent ON api_keys(agent_id);
+
 -- ============================================================
 -- HELPER FUNCTIONS
 -- ============================================================
@@ -225,6 +240,8 @@ $$ LANGUAGE plpgsql;
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON agents, atoms, edges, views, snapshot_atoms, capabilities
     TO mnemo;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO mnemo;
 
 GRANT INSERT, SELECT
     ON access_log

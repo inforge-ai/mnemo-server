@@ -28,6 +28,7 @@ DELETE FROM snapshot_atoms;
 DELETE FROM edges;
 DELETE FROM views;
 DELETE FROM atoms;
+DELETE FROM api_keys;
 DELETE FROM agents;
 """
 

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Agent departure
     departure_retention_days: int = 30
 
+    # Auth
+    auth_enabled: bool = False
+
     class Config:
         env_prefix = "MNEMO_"
 

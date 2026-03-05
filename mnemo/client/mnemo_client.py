@@ -40,14 +40,20 @@ from uuid import UUID
 
 
 class MnemoClient:
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8000", api_key: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
         self._http: httpx.AsyncClient | None = None
 
     @property
     def http(self) -> httpx.AsyncClient:
         if self._http is None or self._http.is_closed:
-            self._http = httpx.AsyncClient(base_url=self.base_url, timeout=30.0)
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            self._http = httpx.AsyncClient(
+                base_url=self.base_url, timeout=30.0, headers=headers
+            )
         return self._http
 
     async def close(self):
@@ -112,6 +118,35 @@ class MnemoClient:
                 "max_total_tokens": max_total_tokens,
             },
         )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ── Auth ───────────────────────────────────────────────────────────────────
+
+    async def register_with_key(
+        self,
+        name: str,
+        persona: Optional[str] = None,
+        domain_tags: Optional[list[str]] = None,
+        key_name: str = "default",
+    ) -> tuple[str, str]:
+        """Register agent via auth endpoint. Returns (agent_id, api_key)."""
+        resp = await self.http.post(
+            "/v1/auth/register",
+            json={
+                "name": name,
+                "persona": persona or "",
+                "domain_tags": domain_tags or [],
+                "key_name": key_name,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["agent_id"], data["api_key"]
+
+    async def me(self) -> dict:
+        """GET /v1/auth/me — returns current agent info (requires api_key)."""
+        resp = await self.http.get("/v1/auth/me")
         resp.raise_for_status()
         return resp.json()
 

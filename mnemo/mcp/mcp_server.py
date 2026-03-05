@@ -8,31 +8,23 @@ Tools:
 
 Configuration (environment variables):
   MNEMO_BASE_URL       Mnemo REST API base URL (default: http://localhost:8000)
-  MNEMO_AGENT_ID       UUID of existing agent to use (optional; auto-registers if absent)
+  MNEMO_API_KEY        API key (preferred — use 'mnemo register' to generate)
   MNEMO_AGENT_NAME     Name used when auto-registering (default: mnemo-agent)
   MNEMO_AGENT_PERSONA  Persona string used when auto-registering (optional)
   MNEMO_DOMAIN_TAGS    Comma-separated default domain tags (optional)
+  MNEMO_AGENT_ID       Deprecated — use MNEMO_API_KEY instead
   MNEMO_MCP_TRANSPORT  "stdio" (default) or "sse" for remote/network access
   MNEMO_MCP_HOST       Host to bind in SSE mode (default: 0.0.0.0)
   MNEMO_MCP_PORT       Port to bind in SSE mode (default: 8001)
 
 Running (stdio — local/same machine):
-  MNEMO_BASE_URL=http://localhost:8000 MNEMO_AGENT_NAME=claude \\
+  MNEMO_BASE_URL=http://localhost:8000 MNEMO_API_KEY=mnemo_... \\
       python -m mnemo.mcp.mcp_server
 
 Running (SSE — accessible over network/Tailscale):
-  MNEMO_BASE_URL=http://localhost:8000 MNEMO_AGENT_NAME=claude \\
+  MNEMO_BASE_URL=http://localhost:8000 MNEMO_API_KEY=mnemo_... \\
   MNEMO_MCP_TRANSPORT=sse MNEMO_MCP_PORT=8001 \\
       python -m mnemo.mcp.mcp_server
-
-Claude Desktop config for SSE (remote/Tailscale):
-  {
-    "mcpServers": {
-      "mnemo-memory": {
-        "url": "http://<tailscale-ip>:8001/sse"
-      }
-    }
-  }
 
 Claude Desktop config for stdio (local — both Claude and Mnemo on same machine):
   {
@@ -42,7 +34,7 @@ Claude Desktop config for stdio (local — both Claude and Mnemo on same machine
         "args": ["-m", "mnemo.mcp.mcp_server"],
         "env": {
           "MNEMO_BASE_URL": "http://localhost:8000",
-          "MNEMO_AGENT_NAME": "claude"
+          "MNEMO_API_KEY": "mnemo_..."
         }
       }
     }
@@ -63,7 +55,8 @@ logger = logging.getLogger(__name__)
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MNEMO_BASE_URL = os.environ.get("MNEMO_BASE_URL", "http://localhost:8000")
-MNEMO_AGENT_ID = os.environ.get("MNEMO_AGENT_ID", "")
+MNEMO_API_KEY = os.environ.get("MNEMO_API_KEY", "")
+MNEMO_AGENT_ID = os.environ.get("MNEMO_AGENT_ID", "")  # deprecated fallback
 MNEMO_AGENT_NAME = os.environ.get("MNEMO_AGENT_NAME", "mnemo-agent")
 MNEMO_AGENT_PERSONA = os.environ.get("MNEMO_AGENT_PERSONA", "")
 MNEMO_DOMAIN_TAGS = [
@@ -84,8 +77,15 @@ async def _get_client() -> tuple[MnemoClient, UUID]:
     """Return the shared (client, agent_id) pair, initialising on first call."""
     global _client, _agent_id
     if _client is None:
-        _client = MnemoClient(MNEMO_BASE_URL)
-        _agent_id = await _resolve_agent(_client)
+        if MNEMO_API_KEY:
+            _client = MnemoClient(MNEMO_BASE_URL, api_key=MNEMO_API_KEY)
+            agent_info = await _client.me()
+            _agent_id = UUID(agent_info["agent_id"] if "agent_id" in agent_info else agent_info["id"])
+            logger.info("Authenticated as %s (%s)", agent_info.get("name"), _agent_id)
+        else:
+            _client = MnemoClient(MNEMO_BASE_URL)
+            _agent_id = await _resolve_agent(_client)
+            logger.info("Running without auth (set MNEMO_API_KEY for production)")
     return _client, _agent_id
 
 

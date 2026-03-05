@@ -1,8 +1,10 @@
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..auth import get_current_agent
 from ..database import get_conn
 from ..models import AgentCreate, AgentResponse, AgentStats
 from ..services.atom_service import get_agent_stats
@@ -12,18 +14,21 @@ router = APIRouter(tags=["agents"])
 
 @router.post("/agents", response_model=AgentResponse, status_code=201)
 async def register_agent(body: AgentCreate):
-    async with get_conn() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO agents (name, persona, domain_tags, metadata)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, name, persona, domain_tags, metadata, created_at, is_active
-            """,
-            body.name,
-            body.persona,
-            body.domain_tags,
-            json.dumps(body.metadata),
-        )
+    try:
+        async with get_conn() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO agents (name, persona, domain_tags, metadata)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id, name, persona, domain_tags, metadata, created_at, is_active
+                """,
+                body.name,
+                body.persona,
+                body.domain_tags,
+                json.dumps(body.metadata),
+            )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail=f"Agent name '{body.name}' already exists")
     return _agent_row(row)
 
 
@@ -58,7 +63,8 @@ async def get_agent(agent_id: UUID):
 
 
 @router.get("/agents/{agent_id}/stats", response_model=AgentStats)
-async def agent_stats(agent_id: UUID):
+async def agent_stats(agent_id: UUID, agent=Depends(get_current_agent)):
+    _check_agent_access(agent, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         stats = await get_agent_stats(conn, agent_id)
@@ -66,21 +72,22 @@ async def agent_stats(agent_id: UUID):
 
 
 @router.post("/agents/{agent_id}/depart")
-async def depart_agent(agent_id: UUID):
+async def depart_agent(agent_id: UUID, agent=Depends(get_current_agent)):
     """
     Agent departure:
     1. Cascade-revoke all capabilities this agent granted.
     2. Mark agent inactive with departure + expiry timestamps.
     3. Return summary.
     """
+    _check_agent_access(agent, agent_id)
     async with get_conn() as conn:
-        agent = await conn.fetchrow(
+        row = await conn.fetchrow(
             "SELECT id, is_active FROM agents WHERE id = $1",
             agent_id,
         )
-        if not agent:
+        if not row:
             raise HTTPException(status_code=404, detail="Agent not found")
-        if not agent["is_active"]:
+        if not row["is_active"]:
             raise HTTPException(status_code=409, detail="Agent already departed")
 
         # Cascade-revoke capabilities
@@ -120,6 +127,12 @@ async def depart_agent(agent_id: UUID):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _check_agent_access(agent: dict, agent_id: UUID):
+    """Raise 403 if auth is active and the authenticated agent doesn't match path agent_id."""
+    if agent["id"] and str(agent["id"]) != str(agent_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
 
 def _agent_row(row) -> dict:
     return {
