@@ -1073,6 +1073,181 @@ class TestAuth:
         assert resp.status_code == 401
 
 
+# ── Admin endpoints ───────────────────────────────────────────────────────────
+
+TOKEN = "test-admin-token"
+
+
+class TestAdmin:
+    """Tests for /v1/admin/* endpoints behind X-Admin-Token auth."""
+
+    def _headers(self):
+        return {"X-Admin-Token": TOKEN}
+
+    async def test_no_token_returns_403(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            resp = await client.get("/v1/admin/agents")
+            assert resp.status_code == 403
+        finally:
+            settings.admin_token = original
+
+    async def test_wrong_token_returns_403(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            resp = await client.get("/v1/admin/agents", headers={"X-Admin-Token": "wrong"})
+            assert resp.status_code == 403
+        finally:
+            settings.admin_token = original
+
+    async def test_admin_disabled_when_token_empty(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = ""
+        try:
+            resp = await client.get("/v1/admin/agents", headers={"X-Admin-Token": TOKEN})
+            assert resp.status_code == 403
+        finally:
+            settings.admin_token = original
+
+    async def test_list_agents_empty(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            resp = await client.get("/v1/admin/agents", headers=self._headers())
+            assert resp.status_code == 200
+            assert resp.json() == []
+        finally:
+            settings.admin_token = original
+
+    async def test_list_agents_shows_counts(self, client, agent):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            # Store a memory so atom counts are non-zero
+            await client.post(f"/v1/agents/{agent['id']}/remember", json={
+                "text": "connection pooling boosts throughput significantly."
+            })
+            resp = await client.get("/v1/admin/agents", headers=self._headers())
+            assert resp.status_code == 200
+            agents = resp.json()
+            assert len(agents) == 1
+            a = agents[0]
+            assert a["id"] == agent["id"]
+            assert a["active_atoms"] >= 1
+            assert a["total_atoms"] >= 1
+        finally:
+            settings.admin_token = original
+
+    async def test_operations_empty(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            resp = await client.get("/v1/admin/operations", headers=self._headers())
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total"] == 0
+            assert data["by_operation"] == []
+        finally:
+            settings.admin_token = original
+
+    async def test_operations_records_remember_and_recall(self, client, agent):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            await client.post(f"/v1/agents/{agent['id']}/remember", json={
+                "text": "connection pooling boosts throughput significantly."
+            })
+            await client.post(f"/v1/agents/{agent['id']}/recall", json={
+                "query": "connection pooling"
+            })
+            resp = await client.get("/v1/admin/operations", headers=self._headers())
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total"] == 2
+            ops = {r["operation"]: r for r in data["by_operation"]}
+            assert "remember" in ops
+            assert "recall" in ops
+            assert ops["remember"]["avg_duration_ms"] is not None
+        finally:
+            settings.admin_token = original
+
+    async def test_operations_filter_by_target(self, client, two_agents):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            alice, bob = two_agents
+            await client.post(f"/v1/agents/{alice['id']}/remember", json={
+                "text": "Alice knows about connection pooling."
+            })
+            await client.post(f"/v1/agents/{bob['id']}/remember", json={
+                "text": "Bob knows about database indexing strategies."
+            })
+            resp = await client.get(
+                f"/v1/admin/operations?target_id={alice['id']}",
+                headers=self._headers(),
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total"] == 1
+            assert data["by_operation"][0]["operation"] == "remember"
+        finally:
+            settings.admin_token = original
+
+    async def test_operations_invalid_target_id(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            resp = await client.get(
+                "/v1/admin/operations?target_id=not-a-uuid",
+                headers=self._headers(),
+            )
+            assert resp.status_code == 422
+        finally:
+            settings.admin_token = original
+
+    async def test_keys_empty(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            resp = await client.get("/v1/admin/keys", headers=self._headers())
+            assert resp.status_code == 200
+            assert resp.json() == []
+        finally:
+            settings.admin_token = original
+
+    async def test_keys_shows_registered_key(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            r = await client.post("/v1/auth/register", json={
+                "name": "key-test-agent", "domain_tags": []
+            })
+            assert r.status_code == 201
+            resp = await client.get("/v1/admin/keys", headers=self._headers())
+            assert resp.status_code == 200
+            keys = resp.json()
+            assert len(keys) == 1
+            k = keys[0]
+            assert k["agent_name"] == "key-test-agent"
+            assert k["is_active"] is True
+            assert k["key_prefix"].startswith("mnemo_")
+        finally:
+            settings.admin_token = original
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 async def test_health(client):

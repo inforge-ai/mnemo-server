@@ -1,3 +1,4 @@
+import time
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,6 +7,7 @@ from ..auth import get_current_agent
 from ..database import get_conn
 from ..models import RememberRequest, RememberResponse, RetrieveRequest, RetrieveResponse
 from ..services import atom_service
+from ..services.ops_service import log_operation
 
 router = APIRouter(tags=["memory"])
 
@@ -16,11 +18,17 @@ async def remember(agent_id: UUID, body: RememberRequest, agent=Depends(get_curr
     _check_agent_access(agent, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
+        t0 = time.monotonic()
         result = await atom_service.store_from_text(
             conn=conn,
             agent_id=agent_id,
             text=body.text,
             domain_tags=body.domain_tags,
+        )
+        await log_operation(
+            conn, "remember", agent["id"], target_id=agent_id,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            metadata={"atoms_created": result["atoms_created"]},
         )
     return result
 
@@ -31,6 +39,7 @@ async def recall(agent_id: UUID, body: RetrieveRequest, agent=Depends(get_curren
     _check_agent_access(agent, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
+        t0 = time.monotonic()
         result = await atom_service.retrieve(
             conn=conn,
             agent_id=agent_id,
@@ -47,6 +56,11 @@ async def recall(agent_id: UUID, body: RetrieveRequest, agent=Depends(get_curren
             verbosity=body.verbosity,
             max_content_chars=body.max_content_chars,
             max_total_tokens=body.max_total_tokens,
+        )
+        await log_operation(
+            conn, "recall", agent["id"], target_id=agent_id,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            metadata={"results_returned": result["total_retrieved"]},
         )
     return result
 

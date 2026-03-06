@@ -160,6 +160,20 @@ CREATE TABLE api_keys (
 CREATE INDEX idx_api_keys_hash  ON api_keys(key_hash);
 CREATE INDEX idx_api_keys_agent ON api_keys(agent_id);
 
+-- Operations log (per-call record for remember/recall/recall_shared/export_skill)
+CREATE TABLE operations (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    agent_id    UUID,           -- authenticated caller (NULL if auth disabled)
+    operation   TEXT NOT NULL,  -- 'remember', 'recall', 'recall_shared', 'export_skill'
+    target_id   UUID,           -- agent whose memory was acted on
+    duration_ms INTEGER,
+    metadata    JSONB DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_operations_agent ON operations (agent_id, created_at);
+CREATE INDEX idx_operations_type  ON operations (operation, created_at);
+
 -- ============================================================
 -- HELPER FUNCTIONS
 -- ============================================================
@@ -246,6 +260,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO mnemo;
 GRANT INSERT, SELECT
     ON access_log
     TO mnemo;
+
+GRANT SELECT, INSERT ON operations TO mnemo;
 
 GRANT EXECUTE
     ON FUNCTION effective_confidence(float, float, text, float, timestamptz, timestamptz, integer)

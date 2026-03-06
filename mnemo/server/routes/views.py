@@ -1,3 +1,4 @@
+import time
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,6 +7,7 @@ from ..auth import get_current_agent
 from ..database import get_conn
 from ..models import RetrieveRequest, RetrieveResponse, SkillExport, ViewCreate, ViewResponse
 from ..services import view_service
+from ..services.ops_service import log_operation
 
 router = APIRouter(tags=["views"])
 
@@ -42,7 +44,14 @@ async def export_skill(agent_id: UUID, view_id: UUID, agent=Depends(get_current_
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         await _require_view_owner(conn, agent_id, view_id)
+        t0 = time.monotonic()
         result = await view_service.export_skill(conn, agent_id, view_id)
+        if result is not None:
+            await log_operation(
+                conn, "export_skill", agent["id"], target_id=agent_id,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                metadata={"view_id": str(view_id)},
+            )
     if result is None:
         raise HTTPException(status_code=404, detail="View not found")
     return result
@@ -63,6 +72,7 @@ async def recall_shared(
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         cap = await _require_capability(conn, agent_id, view_id)
+        t0 = time.monotonic()
         result = await view_service.recall_shared(
             conn=conn,
             grantee_id=agent_id,
@@ -72,6 +82,11 @@ async def recall_shared(
             min_confidence=body.min_confidence,
             max_results=body.max_results,
             expansion_depth=body.expansion_depth,
+        )
+        await log_operation(
+            conn, "recall_shared", agent["id"], target_id=agent_id,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            metadata={"view_id": str(view_id), "results_returned": result["total_retrieved"]},
         )
     return result
 

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Auth
     auth_enabled: bool = False
 
+    # Admin
+    admin_token: str = ""  # set MNEMO_ADMIN_TOKEN; empty = admin disabled
+
     class Config:
         env_prefix = "MNEMO_"
 

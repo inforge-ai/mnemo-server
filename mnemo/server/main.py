@@ -36,13 +36,14 @@ async def health():
 
 
 def _register_routers():
-    from .routes import agents, atoms, auth, capabilities, memory, views
+    from .routes import admin, agents, atoms, auth, capabilities, memory, views
     app.include_router(auth.router, prefix="/v1")
     app.include_router(agents.router, prefix="/v1")
     app.include_router(memory.router, prefix="/v1")
     app.include_router(atoms.router, prefix="/v1")
     app.include_router(views.router, prefix="/v1")
     app.include_router(capabilities.router, prefix="/v1")
+    app.include_router(admin.router, prefix="/v1")
 
 
 _register_routers()
