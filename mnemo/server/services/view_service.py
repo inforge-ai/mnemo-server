@@ -361,10 +361,23 @@ async def recall_shared(
     primary_responses = [_row_to_atom_response(r) for r in primary]
     expanded_responses = [_row_to_atom_response(r) for r in expanded_rows]
 
+    total = len(primary_responses) + len(expanded_responses)
+
+    # Audit log
+    await conn.execute(
+        """
+        INSERT INTO access_log (agent_id, action, target_id, metadata)
+        VALUES ($1, 'recall_shared', $2, $3)
+        """,
+        grantee_id,
+        view_id,
+        json.dumps({"capability_id": str(capability_id), "results_returned": total}),
+    )
+
     return {
         "atoms": primary_responses,
         "expanded_atoms": expanded_responses,
-        "total_retrieved": len(primary_responses) + len(expanded_responses),
+        "total_retrieved": total,
     }
 
 

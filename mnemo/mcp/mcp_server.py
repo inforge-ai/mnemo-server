@@ -83,7 +83,8 @@ async def _get_client() -> tuple[MnemoClient, UUID]:
             _agent_id = UUID(agent_info["agent_id"] if "agent_id" in agent_info else agent_info["id"])
             logger.info("Authenticated as %s (%s)", agent_info.get("name"), _agent_id)
         else:
-            _client = MnemoClient(MNEMO_BASE_URL)
+            # Auth disabled on server — pass a placeholder key to satisfy client
+            _client = MnemoClient(MNEMO_BASE_URL, api_key="local-dev")
             _agent_id = await _resolve_agent(_client)
             logger.info("Running without auth (set MNEMO_API_KEY for production)")
     return _client, _agent_id

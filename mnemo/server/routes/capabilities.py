@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +31,10 @@ async def grant_capability(agent_id: UUID, body: GrantCreate, agent=Depends(get_
         if view_owner != agent_id:
             raise HTTPException(status_code=403, detail="Not view owner")
 
+        # Validate expires_at is in the future
+        if body.expires_at and body.expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=422, detail="expires_at must be in the future")
+
         # Verify grantee exists and is active
         grantee = await conn.fetchrow(
             "SELECT is_active FROM agents WHERE id = $1",
@@ -39,6 +44,21 @@ async def grant_capability(agent_id: UUID, body: GrantCreate, agent=Depends(get_
             raise HTTPException(status_code=404, detail="Grantee agent not found")
         if not grantee["is_active"]:
             raise HTTPException(status_code=410, detail="Grantee agent has departed")
+
+        # Idempotency: return existing non-revoked capability for same view+grantee
+        existing = await conn.fetchrow(
+            """
+            SELECT id, view_id, grantor_id, grantee_id, permissions,
+                   revoked, expires_at, created_at
+            FROM capabilities
+            WHERE view_id = $1 AND grantee_id = $2 AND revoked = false
+            LIMIT 1
+            """,
+            body.view_id,
+            body.grantee_id,
+        )
+        if existing:
+            return _cap_row(existing)
 
         row = await conn.fetchrow(
             """

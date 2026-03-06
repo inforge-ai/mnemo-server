@@ -38,7 +38,7 @@ class SimulationHarness:
             self.client = self._provided_client
         else:
             from mnemo_client import MnemoClient
-            self.client = MnemoClient(self.base_url)
+            self.client = MnemoClient(self.base_url, api_key="local-dev")
 
         for persona in persona_defs:
             agent_data = await self.client.register_agent(
