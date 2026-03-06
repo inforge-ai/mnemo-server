@@ -9,6 +9,13 @@ Strategy:
   triggered (pool is set manually), so no consolidation loop runs during tests.
 """
 
+import os
+
+# Force test database BEFORE mnemo imports so Settings() picks it up at instantiation time.
+# This prevents tests from ever touching the production database.
+_TEST_DB = "postgresql://mnemo:mnemo@localhost:5432/mnemo_test"
+os.environ.setdefault("MNEMO_DATABASE_URL", _TEST_DB)
+
 import asyncpg
 import pytest
 import pytest_asyncio
@@ -16,6 +23,12 @@ from httpx import AsyncClient, ASGITransport
 from pgvector.asyncpg import register_vector
 
 from mnemo.server.config import settings
+
+# Hard guard: refuse to run if somehow pointed at a non-test database.
+assert "test" in settings.database_url, (
+    f"Refusing to run tests against non-test database: {settings.database_url}\n"
+    "Set MNEMO_DATABASE_URL to a test database (must contain 'test' in the name)."
+)
 from mnemo.server.database import set_pool
 from mnemo.server.main import app
 

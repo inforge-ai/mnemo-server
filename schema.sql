@@ -261,7 +261,7 @@ GRANT INSERT, SELECT
     ON access_log
     TO mnemo;
 
-GRANT SELECT, INSERT ON operations TO mnemo;
+GRANT SELECT, INSERT, DELETE ON operations TO mnemo;
 
 GRANT EXECUTE
     ON FUNCTION effective_confidence(float, float, text, float, timestamptz, timestamptz, integer)
