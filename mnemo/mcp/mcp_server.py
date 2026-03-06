@@ -99,30 +99,6 @@ async def _get_client() -> tuple[MnemoClient, UUID]:
     return _client, _agent_id
 
 
-async def _resolve_target_agent(
-    client: MnemoClient, agent_id_str: str | None, default_id: UUID
-) -> tuple[UUID | None, str | None]:
-    """Return (target_uuid, None) on success, or (None, error_string) on failure.
-
-    If agent_id_str is None, returns the default agent ID.
-    If agent_id_str is provided, validates it's a UUID and that the agent exists.
-    Non-default agents are never auto-registered — they must be pre-created via REST.
-    """
-    if agent_id_str is None:
-        return default_id, None
-    try:
-        target_id = UUID(agent_id_str)
-    except ValueError:
-        return None, f"Invalid agent_id format: '{agent_id_str}'. Expected a UUID."
-    try:
-        await client.get_agent(target_id)
-        return target_id, None
-    except Exception:
-        return None, (
-            f"Agent {agent_id_str} not found. Register it first via the REST API."
-        )
-
-
 async def _resolve_agent(client: MnemoClient) -> UUID:
     """Return the configured agent's UUID, finding or creating by name.
 
@@ -194,34 +170,28 @@ mcp = FastMCP(
 
 @mcp.tool(
     description=(
-        "Store a memory. By default stores for this agent. Pass agent_id to store for a "
-        "different registered agent. Mnemo handles classification (episodic/semantic/procedural), "
+        "Store a memory. Mnemo handles classification (episodic/semantic/procedural), "
         "confidence estimation, and graph linking automatically."
     ),
 )
 async def mnemo_remember(
     text: str,
     domain_tags: list[str] | None = None,
-    agent_id: str | None = None,
 ) -> str:
     """
     Args:
         text: What to remember. Be specific — include context, outcomes, and lessons
               learned. Multi-sentence input is decomposed into typed atoms.
         domain_tags: Optional topic tags to organise memories (e.g. ["python", "debugging"]).
-        agent_id: Optional UUID of a registered agent. Omit to use the default agent.
     """
     try:
-        client, default_id = await _get_client()
+        client, agent_id = await _get_client()
     except Exception as exc:
         logger.exception("mnemo_remember: client init failed")
         return f"Mnemo error (client init): {exc}"
-    target_id, error = await _resolve_target_agent(client, agent_id, default_id)
-    if error:
-        return error
     try:
         result = await client.remember(
-            agent_id=target_id,
+            agent_id=agent_id,
             text=text,
             domain_tags=domain_tags or [],
         )
@@ -239,8 +209,7 @@ async def mnemo_remember(
 @mcp.tool(
     description=(
         "Search memories. Returns first-sentence summaries by default. "
-        "Set verbosity='full' for complete content. "
-        "Pass agent_id to search a different agent's memories."
+        "Set verbosity='full' for complete content."
     ),
 )
 async def mnemo_recall(
@@ -251,7 +220,6 @@ async def mnemo_recall(
     similarity_drop_threshold: float | None = 0.3,
     verbosity: str = "summary",
     max_total_tokens: int | None = 500,
-    agent_id: str | None = None,
 ) -> str:
     """
     Args:
@@ -263,19 +231,15 @@ async def mnemo_recall(
         similarity_drop_threshold: Stop at relevance cliffs (default 0.3). Set None to disable.
         verbosity: "summary" (first sentence, default), "full" (complete), or "truncated".
         max_total_tokens: Approximate token budget for all returned content (default 500).
-        agent_id: Optional UUID of a registered agent. Omit to search the default agent.
     """
     try:
-        client, default_id = await _get_client()
+        client, agent_id = await _get_client()
     except Exception as exc:
         logger.exception("mnemo_recall: client init failed")
         return f"Mnemo error (client init): {exc}"
-    target_id, error = await _resolve_target_agent(client, agent_id, default_id)
-    if error:
-        return error
     try:
         result = await client.recall(
-            agent_id=target_id,
+            agent_id=agent_id,
             query=query,
             domain_tags=domain_tags,
             max_results=max_results,
@@ -316,23 +280,17 @@ async def mnemo_recall(
 
 
 @mcp.tool(
-    description=(
-        "View memory statistics: total atoms, active count, confidence, and graph density. "
-        "Pass agent_id to view stats for a different agent."
-    ),
+    description="View memory statistics: total atoms, active count, confidence, and graph density.",
 )
-async def mnemo_stats(agent_id: str | None = None) -> str:
+async def mnemo_stats() -> str:
     """Returns a summary of the agent's memory state."""
     try:
-        client, default_id = await _get_client()
+        client, agent_id = await _get_client()
     except Exception as exc:
         logger.exception("mnemo_stats: client init failed")
         return f"Mnemo error (client init): {exc}"
-    target_id, error = await _resolve_target_agent(client, agent_id, default_id)
-    if error:
-        return error
     try:
-        s = await client.stats(agent_id=target_id)
+        s = await client.stats(agent_id=agent_id)
     except Exception as exc:
         logger.exception("mnemo_stats: stats call failed")
         return f"Mnemo error: {exc}"
