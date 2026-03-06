@@ -1247,6 +1247,44 @@ class TestAdmin:
         finally:
             settings.admin_token = original
 
+    async def test_glance_shape(self, client):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            resp = await client.get("/v1/admin/glance", headers=self._headers())
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "items" in data
+            titles = {item["title"] for item in data["items"]}
+            assert titles == {"Agents", "Atoms", "Ops today", "Recalls today", "Remembers today"}
+            for item in data["items"]:
+                assert "value" in item
+                assert isinstance(item["value"], str)
+        finally:
+            settings.admin_token = original
+
+    async def test_glance_counts_todays_ops(self, client, agent):
+        from mnemo.server.config import settings
+        original = settings.admin_token
+        settings.admin_token = TOKEN
+        try:
+            await client.post(f"/v1/agents/{agent['id']}/remember", json={
+                "text": "connection pooling boosts throughput."
+            })
+            await client.post(f"/v1/agents/{agent['id']}/recall", json={
+                "query": "connection pooling"
+            })
+            resp = await client.get("/v1/admin/glance", headers=self._headers())
+            assert resp.status_code == 200
+            items = {i["title"]: i["value"] for i in resp.json()["items"]}
+            assert items["Ops today"] == "2"
+            assert items["Remembers today"] == "1"
+            assert items["Recalls today"] == "1"
+            assert items["Agents"] == "1 active"
+        finally:
+            settings.admin_token = original
+
 
 # ── Health ────────────────────────────────────────────────────────────────────
 

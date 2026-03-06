@@ -9,6 +9,7 @@ Endpoints:
   GET /v1/admin/keys        — all API keys with status
 """
 
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -126,6 +127,48 @@ async def operation_counts(target_id: str | None = Query(None)):
             }
             for r in rows
         ],
+    }
+
+
+# ── Glance ─────────────────────────────────────────────────────────────────────
+
+@router.get("/glance", dependencies=[Depends(_require_admin)])
+async def glance():
+    """Glance custom-api format: agent/atom counts and today's operation totals."""
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    async with get_conn() as conn:
+        agents_row = await conn.fetchrow(
+            """
+            SELECT COUNT(*) FILTER (WHERE is_active)  AS active_agents,
+                   COUNT(*)                            AS total_agents
+            FROM agents
+            """
+        )
+        atoms_row = await conn.fetchrow(
+            "SELECT COUNT(*) FILTER (WHERE is_active) AS active_atoms FROM atoms"
+        )
+        ops_rows = await conn.fetch(
+            """
+            SELECT operation, COUNT(*) AS n
+            FROM operations
+            WHERE created_at >= $1
+            GROUP BY operation
+            """,
+            today,
+        )
+
+    ops_today = {r["operation"]: r["n"] for r in ops_rows}
+    total_ops_today = sum(ops_today.values())
+
+    return {
+        "items": [
+            {"title": "Agents",           "value": f"{agents_row['active_agents']} active"},
+            {"title": "Atoms",            "value": f"{atoms_row['active_atoms']} total"},
+            {"title": "Ops today",        "value": str(total_ops_today)},
+            {"title": "Recalls today",    "value": str(ops_today.get("recall", 0))},
+            {"title": "Remembers today",  "value": str(ops_today.get("remember", 0))},
+        ]
     }
 
 
