@@ -13,15 +13,21 @@ Configuration (environment variables):
   MNEMO_AGENT_PERSONA  Persona string used when auto-registering (optional)
   MNEMO_DOMAIN_TAGS    Comma-separated default domain tags (optional)
   MNEMO_AGENT_ID       Deprecated — use MNEMO_API_KEY instead
-  MNEMO_MCP_TRANSPORT  "stdio" (default) or "sse" for remote/network access
-  MNEMO_MCP_HOST       Host to bind in SSE mode (default: 0.0.0.0)
-  MNEMO_MCP_PORT       Port to bind in SSE mode (default: 8001)
+  MNEMO_MCP_TRANSPORT  "stdio" (default), "streamable-http" (recommended for network),
+                       or "sse" (legacy network transport)
+  MNEMO_MCP_HOST       Host to bind for network transports (default: 0.0.0.0)
+  MNEMO_MCP_PORT       Port to bind for network transports (default: 8001)
 
 Running (stdio — local/same machine):
   MNEMO_BASE_URL=http://localhost:8000 MNEMO_API_KEY=mnemo_... \\
       python -m mnemo.mcp.mcp_server
 
-Running (SSE — accessible over network/Tailscale):
+Running (streamable-http — recommended for network/Tailscale access):
+  MNEMO_BASE_URL=http://localhost:8000 MNEMO_API_KEY=mnemo_... \\
+  MNEMO_MCP_TRANSPORT=streamable-http MNEMO_MCP_PORT=8001 \\
+      python -m mnemo.mcp.mcp_server
+
+Running (SSE — legacy network transport, use streamable-http for new deployments):
   MNEMO_BASE_URL=http://localhost:8000 MNEMO_API_KEY=mnemo_... \\
   MNEMO_MCP_TRANSPORT=sse MNEMO_MCP_PORT=8001 \\
       python -m mnemo.mcp.mcp_server
@@ -78,15 +84,18 @@ async def _get_client() -> tuple[MnemoClient, UUID]:
     global _client, _agent_id
     if _client is None:
         if MNEMO_API_KEY:
-            _client = MnemoClient(MNEMO_BASE_URL, api_key=MNEMO_API_KEY)
-            agent_info = await _client.me()
-            _agent_id = UUID(agent_info["agent_id"] if "agent_id" in agent_info else agent_info["id"])
-            logger.info("Authenticated as %s (%s)", agent_info.get("name"), _agent_id)
+            client = MnemoClient(MNEMO_BASE_URL, api_key=MNEMO_API_KEY)
+            agent_info = await client.me()
+            agent_id = UUID(agent_info.get("agent_id") or agent_info["id"])
+            logger.info("Authenticated as %s (%s)", agent_info.get("name"), agent_id)
+            # Only assign globals after successful auth — prevents partial state on error
+            _client, _agent_id = client, agent_id
         else:
             # Auth disabled on server — pass a placeholder key to satisfy client
-            _client = MnemoClient(MNEMO_BASE_URL, api_key="local-dev")
-            _agent_id = await _resolve_agent(_client)
+            client = MnemoClient(MNEMO_BASE_URL, api_key="local-dev")
+            agent_id = await _resolve_agent(client)
             logger.info("Running without auth (set MNEMO_API_KEY for production)")
+            _client, _agent_id = client, agent_id
     return _client, _agent_id
 
 
@@ -150,10 +159,28 @@ async def _resolve_agent(client: MnemoClient) -> UUID:
     return agent_id
 
 
+# ── Startup ───────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def _lifespan(server):
+    """Eagerly resolve agent identity at startup.
+
+    A failure here (e.g. Mnemo server not yet reachable) is logged but does not
+    prevent the MCP server from starting — tools will surface the error on first use
+    instead of producing a 404 for the entire session.
+    """
+    try:
+        await _get_client()
+    except Exception as exc:
+        logger.error("Mnemo startup init failed (tools will retry): %s", exc)
+    yield
+
+
 # ── FastMCP server ────────────────────────────────────────────────────────────
 
 mcp = FastMCP(
     "mnemo-memory",
+    lifespan=_lifespan,
     instructions=(
         "Mnemo is your persistent memory. "
         "Use mnemo_remember to store what you learn. "
@@ -184,15 +211,23 @@ async def mnemo_remember(
         domain_tags: Optional topic tags to organise memories (e.g. ["python", "debugging"]).
         agent_id: Optional UUID of a registered agent. Omit to use the default agent.
     """
-    client, default_id = await _get_client()
+    try:
+        client, default_id = await _get_client()
+    except Exception as exc:
+        logger.exception("mnemo_remember: client init failed")
+        return f"Mnemo error (client init): {exc}"
     target_id, error = await _resolve_target_agent(client, agent_id, default_id)
     if error:
         return error
-    result = await client.remember(
-        agent_id=target_id,
-        text=text,
-        domain_tags=domain_tags or [],
-    )
+    try:
+        result = await client.remember(
+            agent_id=target_id,
+            text=text,
+            domain_tags=domain_tags or [],
+        )
+    except Exception as exc:
+        logger.exception("mnemo_remember: remember call failed")
+        return f"Mnemo error: {exc}"
     parts = [f"Stored {result['atoms_created']} memories"]
     if result["edges_created"]:
         parts.append(f"{result['edges_created']} connections")
@@ -230,22 +265,30 @@ async def mnemo_recall(
         max_total_tokens: Approximate token budget for all returned content (default 500).
         agent_id: Optional UUID of a registered agent. Omit to search the default agent.
     """
-    client, default_id = await _get_client()
+    try:
+        client, default_id = await _get_client()
+    except Exception as exc:
+        logger.exception("mnemo_recall: client init failed")
+        return f"Mnemo error (client init): {exc}"
     target_id, error = await _resolve_target_agent(client, agent_id, default_id)
     if error:
         return error
-    result = await client.recall(
-        agent_id=target_id,
-        query=query,
-        domain_tags=domain_tags,
-        max_results=max_results,
-        min_confidence=0.1,
-        min_similarity=min_similarity,
-        similarity_drop_threshold=similarity_drop_threshold,
-        verbosity=verbosity,
-        max_total_tokens=max_total_tokens,
-        expand_graph=True,
-    )
+    try:
+        result = await client.recall(
+            agent_id=target_id,
+            query=query,
+            domain_tags=domain_tags,
+            max_results=max_results,
+            min_confidence=0.1,
+            min_similarity=min_similarity,
+            similarity_drop_threshold=similarity_drop_threshold,
+            verbosity=verbosity,
+            max_total_tokens=max_total_tokens,
+            expand_graph=True,
+        )
+    except Exception as exc:
+        logger.exception("mnemo_recall: recall call failed")
+        return f"Mnemo error: {exc}"
     atoms = result.get("atoms", [])
     expanded = result.get("expanded_atoms", [])
 
@@ -280,11 +323,19 @@ async def mnemo_recall(
 )
 async def mnemo_stats(agent_id: str | None = None) -> str:
     """Returns a summary of the agent's memory state."""
-    client, default_id = await _get_client()
+    try:
+        client, default_id = await _get_client()
+    except Exception as exc:
+        logger.exception("mnemo_stats: client init failed")
+        return f"Mnemo error (client init): {exc}"
     target_id, error = await _resolve_target_agent(client, agent_id, default_id)
     if error:
         return error
-    s = await client.stats(agent_id=target_id)
+    try:
+        s = await client.stats(agent_id=target_id)
+    except Exception as exc:
+        logger.exception("mnemo_stats: stats call failed")
+        return f"Mnemo error: {exc}"
     lines = [
         f"Total memories : {s['total_atoms']} (active: {s['active_atoms']})",
         f"By type        : {s.get('atoms_by_type', {})}",
@@ -302,8 +353,8 @@ async def mnemo_stats(agent_id: str | None = None) -> str:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    if MNEMO_MCP_TRANSPORT == "sse":
-        logger.info("Starting MCP server (SSE) on %s:%d", MNEMO_MCP_HOST, MNEMO_MCP_PORT)
+    if MNEMO_MCP_TRANSPORT in ("sse", "streamable-http"):
+        logger.info("Starting MCP server (%s) on %s:%d", MNEMO_MCP_TRANSPORT, MNEMO_MCP_HOST, MNEMO_MCP_PORT)
     mcp.run(transport=MNEMO_MCP_TRANSPORT)
 
 
