@@ -104,8 +104,8 @@ async def create_additional_key(conn, agent_id: UUID, key_name: str = "default")
 
     await conn.execute(
         """
-        INSERT INTO api_keys (agent_id, key_hash, key_prefix, name)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO api_keys (agent_id, key_hash, key_prefix, name, is_active)
+        VALUES ($1, $2, $3, $4, true)
         """,
         agent_id,
         key_hash,

@@ -1008,6 +1008,71 @@ class TestRecallControls:
         assert resp.json()["total_retrieved"] >= min(stored, 3)
 
 
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+
+class TestAuth:
+    async def test_register_creates_key_in_db(self, client, pool):
+        """Key returned by /auth/register must be persisted to api_keys."""
+        import hashlib
+        resp = await client.post("/v1/auth/register", json={
+            "name": "auth-test-agent",
+            "persona": "tester",
+            "domain_tags": [],
+            "key_name": "default",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["api_key"].startswith("mnemo_")
+
+        key_hash = hashlib.sha256(data["api_key"].encode()).hexdigest()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, is_active FROM api_keys WHERE key_hash = $1",
+                key_hash,
+            )
+        assert row is not None, "api_key INSERT was not committed to the database"
+        assert row["is_active"] is True
+
+    async def test_register_then_me_roundtrip(self, client):
+        """Key from /auth/register must authenticate successfully against /auth/me."""
+        r1 = await client.post("/v1/auth/register", json={
+            "name": "roundtrip-agent",
+            "persona": "",
+            "domain_tags": [],
+        })
+        assert r1.status_code == 201
+        key = r1.json()["api_key"]
+        agent_id = r1.json()["agent_id"]
+
+        r2 = await client.get("/v1/auth/me", headers={"Authorization": f"Bearer {key}"})
+        assert r2.status_code == 200, f"me() returned {r2.status_code}: {r2.text}"
+        assert r2.json()["id"] == agent_id
+
+    async def test_register_idempotent_adds_new_key(self, client, pool):
+        """Registering an existing agent name generates a second key; both work."""
+        r1 = await client.post("/v1/auth/register", json={"name": "idem-agent", "domain_tags": []})
+        r2 = await client.post("/v1/auth/register", json={"name": "idem-agent", "domain_tags": []})
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+        assert r1.json()["api_key"] != r2.json()["api_key"]
+        assert r1.json()["agent_id"] == r2.json()["agent_id"]
+
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM api_keys WHERE agent_id = $1::uuid AND is_active = true",
+                r1.json()["agent_id"],
+            )
+        assert count == 2
+
+    async def test_invalid_key_returns_401(self, client):
+        resp = await client.get("/v1/auth/me", headers={"Authorization": "Bearer mnemo_notavalidkey"})
+        assert resp.status_code == 401
+
+    async def test_missing_bearer_returns_401(self, client):
+        resp = await client.get("/v1/auth/me")
+        assert resp.status_code == 401
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 async def test_health(client):
