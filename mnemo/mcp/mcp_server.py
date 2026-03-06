@@ -48,7 +48,7 @@ from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
 
-from mnemo.client.mnemo_client import MnemoClient
+from mnemo_client import MnemoClient
 
 logger = logging.getLogger(__name__)
 

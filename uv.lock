@@ -582,6 +582,17 @@ wheels = [
 ]
 
 [[package]]
+name = "mnemo-client"
+version = "0.1.0"
+source = { directory = "../../../shared/mnemo-client" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.26.0" }]
+
+[[package]]
 name = "mnemodb"
 version = "0.2.0"
 source = { editable = "." }
@@ -591,6 +602,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "mcp" },
+    { name = "mnemo-client" },
     { name = "numpy" },
     { name = "pgvector" },
     { name = "pydantic" },
@@ -621,6 +633,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.26.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.26.0" },
     { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mnemo-client", directory = "../../../shared/mnemo-client" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "pgvector", specifier = ">=0.2.4" },
     { name = "pydantic", specifier = ">=2.5.0" },

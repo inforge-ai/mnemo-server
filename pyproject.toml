@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.26.0",
     "mcp>=1.0.0",
     "click>=8.3.1",
+    "mnemo-client",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,9 @@ mnemo = "mnemo.cli:cli"
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+mnemo-client = { path = "../../../shared/mnemo-client" }
 
 [build-system]
 requires = ["hatchling"]

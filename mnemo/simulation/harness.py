@@ -37,7 +37,7 @@ class SimulationHarness:
         if self._provided_client is not None:
             self.client = self._provided_client
         else:
-            from mnemo.client.mnemo_client import MnemoClient
+            from mnemo_client import MnemoClient
             self.client = MnemoClient(self.base_url)
 
         for persona in persona_defs:
