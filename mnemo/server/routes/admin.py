@@ -23,8 +23,12 @@ router = APIRouter(tags=["admin"], prefix="/admin")
 _token_header = APIKeyHeader(name="X-Admin-Token", auto_error=False)
 
 
-def _require_admin(token: str | None = Depends(_token_header)):
-    if not settings.admin_token or token != settings.admin_token:
+def _require_admin(
+    header_token: str | None = Depends(_token_header),
+    token: str | None = Query(None),
+):
+    candidate = header_token or token
+    if not settings.admin_token or candidate != settings.admin_token:
         raise HTTPException(status_code=403, detail="Invalid or missing admin token")
 
 
