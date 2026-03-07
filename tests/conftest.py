@@ -44,6 +44,7 @@ DELETE FROM atoms;
 DELETE FROM api_keys;
 DELETE FROM agents;
 DELETE FROM operations;
+DELETE FROM operators;
 """
 
 

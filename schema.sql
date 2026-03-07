@@ -1,11 +1,21 @@
 -- ============================================================
--- MNEMO v0.2 SCHEMA
+-- MNEMO v0.3 SCHEMA (operator-scoped auth)
 -- ============================================================
 
--- Agent registry
+-- Operator registry (billing/credential entity)
+CREATE TABLE operators (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL UNIQUE,
+    email       TEXT,
+    created_at  TIMESTAMPTZ DEFAULT now(),
+    is_active   BOOLEAN DEFAULT true
+);
+
+-- Agent registry (scoped under operators)
 CREATE TABLE agents (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name            TEXT NOT NULL UNIQUE,
+    operator_id     UUID NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
     persona         TEXT,
     domain_tags     TEXT[] NOT NULL DEFAULT '{}',
     metadata        JSONB DEFAULT '{}',
@@ -14,9 +24,12 @@ CREATE TABLE agents (
     is_active       BOOLEAN NOT NULL DEFAULT true,
     -- Departure handling
     departed_at     TIMESTAMPTZ,             -- NULL = active, set on departure
-    data_expires_at TIMESTAMPTZ              -- departed_at + 30 days
+    data_expires_at TIMESTAMPTZ,             -- departed_at + 30 days
+
+    CONSTRAINT agents_operator_name_unique UNIQUE (operator_id, name)
 );
 
+CREATE INDEX idx_agents_operator ON agents(operator_id);
 CREATE INDEX idx_agents_domain_tags ON agents USING GIN (domain_tags);
 CREATE INDEX idx_agents_active ON agents (is_active) WHERE is_active = true;
 
@@ -145,10 +158,10 @@ CREATE TABLE access_log (
 
 CREATE INDEX idx_access_log_agent ON access_log (agent_id, created_at);
 
--- API keys (hashed — plaintext never stored)
+-- API keys (hashed — plaintext never stored; scoped to operators, not agents)
 CREATE TABLE api_keys (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    operator_id  UUID NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
     key_hash     TEXT NOT NULL,
     key_prefix   TEXT NOT NULL,        -- first 16 chars for display
     name         TEXT DEFAULT 'default',
@@ -157,8 +170,8 @@ CREATE TABLE api_keys (
     is_active    BOOLEAN DEFAULT true
 );
 
-CREATE INDEX idx_api_keys_hash  ON api_keys(key_hash);
-CREATE INDEX idx_api_keys_agent ON api_keys(agent_id);
+CREATE INDEX idx_api_keys_hash     ON api_keys(key_hash);
+CREATE INDEX idx_api_keys_operator ON api_keys(operator_id);
 
 -- Operations log (per-call record for remember/recall/recall_shared/export_skill)
 CREATE TABLE operations (
@@ -252,7 +265,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================================
 
 GRANT SELECT, INSERT, UPDATE, DELETE
-    ON agents, atoms, edges, views, snapshot_atoms, capabilities
+    ON operators, agents, atoms, edges, views, snapshot_atoms, capabilities
     TO mnemo;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO mnemo;

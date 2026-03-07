@@ -8,11 +8,10 @@ Tools:
 
 Configuration (environment variables):
   MNEMO_BASE_URL       Mnemo REST API base URL (default: http://localhost:8000)
-  MNEMO_API_KEY        API key (preferred — use 'mnemo register' to generate)
+  MNEMO_API_KEY        Operator API key (from 'mnemo register-operator')
   MNEMO_AGENT_NAME     Name used when auto-registering (default: mnemo-agent)
   MNEMO_AGENT_PERSONA  Persona string used when auto-registering (optional)
   MNEMO_DOMAIN_TAGS    Comma-separated default domain tags (optional)
-  MNEMO_AGENT_ID       Deprecated — use MNEMO_API_KEY instead
   MNEMO_MCP_TRANSPORT  "stdio" (default), "streamable-http" (recommended for network),
                        or "sse" (legacy network transport)
   MNEMO_MCP_HOST       Host to bind for network transports (default: 0.0.0.0)
@@ -25,11 +24,6 @@ Running (stdio — local/same machine):
 Running (streamable-http — recommended for network/Tailscale access):
   MNEMO_BASE_URL=http://localhost:8000 MNEMO_API_KEY=mnemo_... \\
   MNEMO_MCP_TRANSPORT=streamable-http MNEMO_MCP_PORT=8001 \\
-      python -m mnemo.mcp.mcp_server
-
-Running (SSE — legacy network transport, use streamable-http for new deployments):
-  MNEMO_BASE_URL=http://localhost:8000 MNEMO_API_KEY=mnemo_... \\
-  MNEMO_MCP_TRANSPORT=sse MNEMO_MCP_PORT=8001 \\
       python -m mnemo.mcp.mcp_server
 
 Claude Desktop config for stdio (local — both Claude and Mnemo on same machine):
@@ -62,7 +56,6 @@ logger = logging.getLogger(__name__)
 
 MNEMO_BASE_URL = os.environ.get("MNEMO_BASE_URL", "http://localhost:8000")
 MNEMO_API_KEY = os.environ.get("MNEMO_API_KEY", "")
-MNEMO_AGENT_ID = os.environ.get("MNEMO_AGENT_ID", "")  # deprecated fallback
 MNEMO_AGENT_NAME = os.environ.get("MNEMO_AGENT_NAME", "mnemo-agent")
 MNEMO_AGENT_PERSONA = os.environ.get("MNEMO_AGENT_PERSONA", "")
 MNEMO_DOMAIN_TAGS = [
@@ -85,10 +78,15 @@ async def _get_client() -> tuple[MnemoClient, UUID]:
     if _client is None:
         if MNEMO_API_KEY:
             client = MnemoClient(MNEMO_BASE_URL, api_key=MNEMO_API_KEY)
-            agent_info = await client.me()
-            agent_id = UUID(agent_info.get("agent_id") or agent_info["id"])
-            logger.info("Authenticated as %s (%s)", agent_info.get("name"), agent_id)
-            # Only assign globals after successful auth — prevents partial state on error
+            # Verify operator key works
+            operator_info = await client.me()
+            logger.info(
+                "Authenticated as operator '%s' (%s)",
+                operator_info.get("name"),
+                operator_info.get("id"),
+            )
+            # Find or create agent under this operator
+            agent_id = await _resolve_agent(client)
             _client, _agent_id = client, agent_id
         else:
             # Auth disabled on server — pass a placeholder key to satisfy client
@@ -103,22 +101,12 @@ async def _resolve_agent(client: MnemoClient) -> UUID:
     """Return the configured agent's UUID, finding or creating by name.
 
     Resolution order:
-    1. If MNEMO_AGENT_ID is set, verify it exists and use it (explicit override).
-    2. Look up active agents named MNEMO_AGENT_NAME — reuse the first match.
-    3. If no match, register a new agent with that name.
+    1. Look up active agents named MNEMO_AGENT_NAME — reuse the first match.
+    2. If no match, register a new agent with that name.
 
     This makes the MCP server idempotent across restarts: the stable identity
-    is MNEMO_AGENT_NAME, not a hardcoded UUID.
+    is (operator, agent_name), which is unique.
     """
-    if MNEMO_AGENT_ID:
-        agent_id = UUID(MNEMO_AGENT_ID)
-        try:
-            await client.get_agent(agent_id)
-            logger.info("Using explicitly configured agent %s", agent_id)
-            return agent_id
-        except Exception:
-            logger.warning("Configured MNEMO_AGENT_ID %s not found, falling back to name lookup", agent_id)
-
     existing = await client.find_agent_by_name(MNEMO_AGENT_NAME)
     if existing:
         agent_id = UUID(existing[0]["id"])

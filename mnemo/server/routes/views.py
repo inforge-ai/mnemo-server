@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import get_current_agent
+from ..auth import get_current_operator, verify_agent_ownership
 from ..database import get_conn
 from ..models import RetrieveRequest, RetrieveResponse, SkillExport, ViewCreate, ViewResponse
 from ..services import view_service
@@ -13,9 +13,9 @@ router = APIRouter(tags=["views"])
 
 
 @router.post("/agents/{agent_id}/views", response_model=ViewResponse, status_code=201)
-async def create_view(agent_id: UUID, body: ViewCreate, agent=Depends(get_current_agent)):
+async def create_view(agent_id: UUID, body: ViewCreate, operator=Depends(get_current_operator)):
     """Create a snapshot view — freezes matching atom IDs at this moment."""
-    _check_agent_access(agent, agent_id)
+    await verify_agent_ownership(operator, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         result = await view_service.create_snapshot(
@@ -29,8 +29,8 @@ async def create_view(agent_id: UUID, body: ViewCreate, agent=Depends(get_curren
 
 
 @router.get("/agents/{agent_id}/views", response_model=list[ViewResponse])
-async def list_views(agent_id: UUID, agent=Depends(get_current_agent)):
-    _check_agent_access(agent, agent_id)
+async def list_views(agent_id: UUID, operator=Depends(get_current_operator)):
+    await verify_agent_ownership(operator, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         results = await view_service.list_views(conn, agent_id)
@@ -38,9 +38,9 @@ async def list_views(agent_id: UUID, agent=Depends(get_current_agent)):
 
 
 @router.get("/agents/{agent_id}/views/{view_id}/export_skill", response_model=SkillExport)
-async def export_skill(agent_id: UUID, view_id: UUID, agent=Depends(get_current_agent)):
+async def export_skill(agent_id: UUID, view_id: UUID, operator=Depends(get_current_operator)):
     """Export a snapshot view as an α=1 skill package with rendered markdown."""
-    _check_agent_access(agent, agent_id)
+    await verify_agent_ownership(operator, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         await _require_view_owner(conn, agent_id, view_id)
@@ -48,7 +48,7 @@ async def export_skill(agent_id: UUID, view_id: UUID, agent=Depends(get_current_
         result = await view_service.export_skill(conn, agent_id, view_id)
         if result is not None:
             await log_operation(
-                conn, "export_skill", agent["id"], target_id=agent_id,
+                conn, "export_skill", operator["id"], target_id=agent_id,
                 duration_ms=int((time.monotonic() - t0) * 1000),
                 metadata={"view_id": str(view_id)},
             )
@@ -62,13 +62,13 @@ async def export_skill(agent_id: UUID, view_id: UUID, agent=Depends(get_current_
     response_model=RetrieveResponse,
 )
 async def recall_shared(
-    agent_id: UUID, view_id: UUID, body: RetrieveRequest, agent=Depends(get_current_agent)
+    agent_id: UUID, view_id: UUID, body: RetrieveRequest, operator=Depends(get_current_operator)
 ):
     """
     Recall through a shared view. Requires a valid, non-revoked capability.
     Graph expansion is scope-bounded to the snapshot's atoms only.
     """
-    _check_agent_access(agent, agent_id)
+    await verify_agent_ownership(operator, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         cap = await _require_capability(conn, agent_id, view_id)
@@ -84,7 +84,7 @@ async def recall_shared(
             expansion_depth=body.expansion_depth,
         )
         await log_operation(
-            conn, "recall_shared", agent["id"], target_id=agent_id,
+            conn, "recall_shared", operator["id"], target_id=agent_id,
             duration_ms=int((time.monotonic() - t0) * 1000),
             metadata={"view_id": str(view_id), "results_returned": result["total_retrieved"]},
         )
@@ -92,9 +92,9 @@ async def recall_shared(
 
 
 @router.get("/agents/{agent_id}/shared_views", response_model=list[ViewResponse])
-async def list_shared_views(agent_id: UUID, agent=Depends(get_current_agent)):
+async def list_shared_views(agent_id: UUID, operator=Depends(get_current_operator)):
     """List all views shared with this agent via active capabilities."""
-    _check_agent_access(agent, agent_id)
+    await verify_agent_ownership(operator, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         rows = await conn.fetch(
@@ -117,11 +117,6 @@ async def list_shared_views(agent_id: UUID, agent=Depends(get_current_agent)):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _check_agent_access(agent: dict, agent_id: UUID):
-    if agent["id"] and str(agent["id"]) != str(agent_id):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
 
 async def _require_active_agent(conn, agent_id: UUID):
     row = await conn.fetchrow(

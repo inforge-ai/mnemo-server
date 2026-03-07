@@ -14,64 +14,51 @@ def hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-async def create_agent_with_key(
+async def create_operator_with_key(
     conn,
     name: str,
-    persona: str,
-    domain_tags: list[str],
+    email: str | None = None,
     key_name: str = "default",
 ) -> tuple[dict, str]:
     """
-    Idempotent: if agent with this name exists, generates a new key for it.
-    If agent does not exist, creates it and generates a key.
-    Returns (agent_dict, plaintext_key).
+    Create a new operator and generate an API key.
+    Returns (operator_dict, plaintext_key).
+    Raises asyncpg.UniqueViolationError if name already exists.
     """
-    # Look up existing agent by name
     row = await conn.fetchrow(
-        "SELECT id, name, persona, domain_tags, metadata, created_at, is_active "
-        "FROM agents WHERE name = $1",
+        """
+        INSERT INTO operators (name, email)
+        VALUES ($1, $2)
+        RETURNING id, name, email, created_at, is_active
+        """,
         name,
+        email,
     )
 
-    if row is None:
-        # Create new agent
-        row = await conn.fetchrow(
-            """
-            INSERT INTO agents (name, persona, domain_tags, metadata)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, name, persona, domain_tags, metadata, created_at, is_active
-            """,
-            name,
-            persona,
-            domain_tags,
-            json.dumps({}),
-        )
-
-    agent = {
+    operator = {
         "id": str(row["id"]),
         "name": row["name"],
-        "persona": row["persona"],
-        "domain_tags": list(row["domain_tags"]) if row["domain_tags"] else [],
+        "email": row["email"],
         "created_at": row["created_at"],
         "is_active": row["is_active"],
     }
 
-    plaintext_key = await create_additional_key(conn, UUID(agent["id"]), key_name)
-    return agent, plaintext_key
+    plaintext_key = await create_operator_key(conn, UUID(operator["id"]), key_name)
+    return operator, plaintext_key
 
 
 async def validate_api_key(conn, key: str) -> dict | None:
     """
     Look up key by SHA-256 hash. Update last_used_at if found.
-    Returns agent row dict if key is valid and active, else None.
+    Returns operator dict if key is valid and active, else None.
     """
     key_hash = hash_key(key)
     row = await conn.fetchrow(
         """
         SELECT k.id AS key_id, k.key_prefix, k.last_used_at,
-               a.id AS agent_id, a.name, a.persona, a.domain_tags, a.is_active
+               o.id AS operator_id, o.name, o.email, o.is_active
         FROM api_keys k
-        JOIN agents a ON a.id = k.agent_id
+        JOIN operators o ON o.id = k.operator_id
         WHERE k.key_hash = $1 AND k.is_active = true
         """,
         key_hash,
@@ -79,37 +66,59 @@ async def validate_api_key(conn, key: str) -> dict | None:
     if row is None:
         return None
 
-    # Update last_used_at (fire and forget — do not block on this)
+    if not row["is_active"]:
+        return None
+
+    # Update last_used_at
     await conn.execute(
         "UPDATE api_keys SET last_used_at = now() WHERE id = $1",
         row["key_id"],
     )
 
     return {
-        "id": str(row["agent_id"]),
+        "id": str(row["operator_id"]),
         "name": row["name"],
-        "persona": row["persona"],
-        "domain_tags": list(row["domain_tags"]) if row["domain_tags"] else [],
+        "email": row["email"],
         "is_active": row["is_active"],
         "key_prefix": row["key_prefix"],
         "last_used_at": row["last_used_at"],
     }
 
 
-async def create_additional_key(conn, agent_id: UUID, key_name: str = "default") -> str:
-    """Generate and store an additional key for an existing agent. Returns plaintext key."""
+async def create_operator_key(conn, operator_id: UUID, key_name: str = "default") -> str:
+    """Generate and store an additional key for an existing operator. Returns plaintext key."""
     key = generate_api_key()
     key_hash = hash_key(key)
     key_prefix = key[:16]
 
     await conn.execute(
         """
-        INSERT INTO api_keys (agent_id, key_hash, key_prefix, name, is_active)
+        INSERT INTO api_keys (operator_id, key_hash, key_prefix, name, is_active)
         VALUES ($1, $2, $3, $4, true)
         """,
-        agent_id,
+        operator_id,
         key_hash,
         key_prefix,
         key_name,
     )
     return key
+
+
+async def get_or_create_local_operator(conn) -> UUID:
+    """Get or create the 'local' operator for auth-disabled mode.
+    Returns the operator UUID."""
+    row = await conn.fetchrow(
+        "SELECT id FROM operators WHERE name = 'local'"
+    )
+    if row:
+        return row["id"]
+
+    row = await conn.fetchrow(
+        """
+        INSERT INTO operators (name, email)
+        VALUES ('local', NULL)
+        ON CONFLICT (name) DO UPDATE SET name = 'local'
+        RETURNING id
+        """,
+    )
+    return row["id"]

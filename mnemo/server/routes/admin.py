@@ -53,7 +53,7 @@ async def list_agents():
                 COUNT(DISTINCT k.id)  FILTER (WHERE k.is_active)   AS active_keys
             FROM agents a
             LEFT JOIN atoms at ON at.agent_id = a.id
-            LEFT JOIN api_keys k ON k.agent_id = a.id
+            LEFT JOIN api_keys k ON k.operator_id = a.operator_id
             GROUP BY a.id
             ORDER BY a.created_at DESC
             """
@@ -190,10 +190,10 @@ async def key_status():
                    k.is_active,
                    k.created_at,
                    k.last_used_at,
-                   a.id          AS agent_id,
-                   a.name        AS agent_name
+                   o.id          AS operator_id,
+                   o.name        AS operator_name
             FROM api_keys k
-            JOIN agents a ON a.id = k.agent_id
+            JOIN operators o ON o.id = k.operator_id
             ORDER BY k.created_at DESC
             """
         )
@@ -205,8 +205,8 @@ async def key_status():
             "is_active": r["is_active"],
             "created_at": r["created_at"],
             "last_used_at": r["last_used_at"],
-            "agent_id": str(r["agent_id"]),
-            "agent_name": r["agent_name"],
+            "operator_id": str(r["operator_id"]),
+            "operator_name": r["operator_name"],
         }
         for r in rows
     ]

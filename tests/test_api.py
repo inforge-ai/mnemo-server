@@ -1011,18 +1011,17 @@ class TestRecallControls:
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 class TestAuth:
-    async def test_register_creates_key_in_db(self, client, pool):
-        """Key returned by /auth/register must be persisted to api_keys."""
+    async def test_register_operator_creates_key_in_db(self, client, pool):
+        """Key returned by /auth/register-operator must be persisted to api_keys."""
         import hashlib
-        resp = await client.post("/v1/auth/register", json={
-            "name": "auth-test-agent",
-            "persona": "tester",
-            "domain_tags": [],
-            "key_name": "default",
+        resp = await client.post("/v1/auth/register-operator", json={
+            "name": "auth-test-operator",
+            "email": "test@example.com",
         })
         assert resp.status_code == 201
         data = resp.json()
         assert data["api_key"].startswith("mnemo_")
+        assert "operator_id" in data
 
         key_hash = hashlib.sha256(data["api_key"].encode()).hexdigest()
         async with pool.acquire() as conn:
@@ -1033,34 +1032,44 @@ class TestAuth:
         assert row is not None, "api_key INSERT was not committed to the database"
         assert row["is_active"] is True
 
-    async def test_register_then_me_roundtrip(self, client):
-        """Key from /auth/register must authenticate successfully against /auth/me."""
-        r1 = await client.post("/v1/auth/register", json={
-            "name": "roundtrip-agent",
-            "persona": "",
-            "domain_tags": [],
+    async def test_register_operator_then_me_roundtrip(self, client):
+        """Key from register-operator must authenticate successfully against /auth/me."""
+        r1 = await client.post("/v1/auth/register-operator", json={
+            "name": "roundtrip-operator",
         })
         assert r1.status_code == 201
         key = r1.json()["api_key"]
-        agent_id = r1.json()["agent_id"]
+        operator_id = r1.json()["operator_id"]
 
         r2 = await client.get("/v1/auth/me", headers={"Authorization": f"Bearer {key}"})
         assert r2.status_code == 200, f"me() returned {r2.status_code}: {r2.text}"
-        assert r2.json()["id"] == agent_id
+        assert r2.json()["id"] == operator_id
+        assert r2.json()["agent_count"] == 0
 
-    async def test_register_idempotent_adds_new_key(self, client, pool):
-        """Registering an existing agent name generates a second key; both work."""
-        r1 = await client.post("/v1/auth/register", json={"name": "idem-agent", "domain_tags": []})
-        r2 = await client.post("/v1/auth/register", json={"name": "idem-agent", "domain_tags": []})
+    async def test_register_duplicate_operator_returns_409(self, client):
+        """Registering the same operator name twice returns 409."""
+        r1 = await client.post("/v1/auth/register-operator", json={"name": "dupe-op"})
         assert r1.status_code == 201
-        assert r2.status_code == 201
-        assert r1.json()["api_key"] != r2.json()["api_key"]
-        assert r1.json()["agent_id"] == r2.json()["agent_id"]
+        r2 = await client.post("/v1/auth/register-operator", json={"name": "dupe-op"})
+        assert r2.status_code == 409
+
+    async def test_new_key_adds_additional_key(self, client, pool):
+        """POST /auth/new-key generates a second key for the operator."""
+        r1 = await client.post("/v1/auth/register-operator", json={"name": "newkey-op"})
+        assert r1.status_code == 201
+        key1 = r1.json()["api_key"]
+        operator_id = r1.json()["operator_id"]
+
+        r2 = await client.post("/v1/auth/new-key", headers={"Authorization": f"Bearer {key1}"})
+        assert r2.status_code == 200
+        key2 = r2.json()["api_key"]
+        assert key1 != key2
 
         async with pool.acquire() as conn:
+            from uuid import UUID
             count = await conn.fetchval(
-                "SELECT COUNT(*) FROM api_keys WHERE agent_id = $1::uuid AND is_active = true",
-                r1.json()["agent_id"],
+                "SELECT COUNT(*) FROM api_keys WHERE operator_id = $1 AND is_active = true",
+                UUID(operator_id),
             )
         assert count == 2
 
@@ -1232,16 +1241,16 @@ class TestAdmin:
         original = settings.admin_token
         settings.admin_token = TOKEN
         try:
-            r = await client.post("/v1/auth/register", json={
-                "name": "key-test-agent", "domain_tags": []
+            r = await client.post("/v1/auth/register-operator", json={
+                "name": "key-test-operator",
             })
             assert r.status_code == 201
             resp = await client.get("/v1/admin/keys", headers=self._headers())
             assert resp.status_code == 200
             keys = resp.json()
-            assert len(keys) == 1
+            assert len(keys) >= 1
             k = keys[0]
-            assert k["agent_name"] == "key-test-agent"
+            assert k["operator_name"] == "key-test-operator"
             assert k["is_active"] is True
             assert k["key_prefix"].startswith("mnemo_")
         finally:

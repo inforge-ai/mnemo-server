@@ -4,24 +4,32 @@ from uuid import UUID
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..auth import get_current_agent
+from ..auth import get_current_operator, verify_agent_ownership
 from ..database import get_conn
 from ..models import AgentCreate, AgentResponse, AgentStats
 from ..services.atom_service import get_agent_stats
+from ..services.auth_service import get_or_create_local_operator
 
 router = APIRouter(tags=["agents"])
 
 
 @router.post("/agents", response_model=AgentResponse, status_code=201)
-async def register_agent(body: AgentCreate):
+async def register_agent(body: AgentCreate, operator=Depends(get_current_operator)):
     try:
         async with get_conn() as conn:
+            if operator["id"] is not None:
+                operator_id = UUID(operator["id"])
+            else:
+                # Auth disabled — use the local operator
+                operator_id = await get_or_create_local_operator(conn)
+
             row = await conn.fetchrow(
                 """
-                INSERT INTO agents (name, persona, domain_tags, metadata)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id, name, persona, domain_tags, metadata, created_at, is_active
+                INSERT INTO agents (operator_id, name, persona, domain_tags, metadata)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
                 """,
+                operator_id,
                 body.name,
                 body.persona,
                 body.domain_tags,
@@ -33,17 +41,53 @@ async def register_agent(body: AgentCreate):
 
 
 @router.get("/agents", response_model=list[AgentResponse])
-async def find_agents(name: str = Query(..., description="Exact agent name to look up")):
-    """Find active agents by exact name. Returns empty list if none found."""
+async def list_agents(
+    name: str | None = Query(None, description="Filter by exact agent name"),
+    operator=Depends(get_current_operator),
+):
+    """List agents. When auth is enabled, returns only the operator's agents.
+    Optional name filter for exact match lookup."""
     async with get_conn() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, name, persona, domain_tags, metadata, created_at, is_active
-            FROM agents WHERE name = $1 AND is_active = true
-            ORDER BY created_at ASC
-            """,
-            name,
-        )
+        if operator["id"] is not None:
+            operator_id = UUID(operator["id"])
+            if name is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
+                    FROM agents WHERE operator_id = $1 AND name = $2 AND is_active = true
+                    ORDER BY created_at ASC
+                    """,
+                    operator_id,
+                    name,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
+                    FROM agents WHERE operator_id = $1 AND is_active = true
+                    ORDER BY created_at ASC
+                    """,
+                    operator_id,
+                )
+        else:
+            # Auth disabled — list all or filter by name
+            if name is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
+                    FROM agents WHERE name = $1 AND is_active = true
+                    ORDER BY created_at ASC
+                    """,
+                    name,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
+                    FROM agents WHERE is_active = true
+                    ORDER BY created_at ASC
+                    """,
+                )
     return [_agent_row(r) for r in rows]
 
 
@@ -52,7 +96,7 @@ async def get_agent(agent_id: UUID):
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
-            SELECT id, name, persona, domain_tags, metadata, created_at, is_active
+            SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
             FROM agents WHERE id = $1
             """,
             agent_id,
@@ -63,8 +107,8 @@ async def get_agent(agent_id: UUID):
 
 
 @router.get("/agents/{agent_id}/stats", response_model=AgentStats)
-async def agent_stats(agent_id: UUID, agent=Depends(get_current_agent)):
-    _check_agent_access(agent, agent_id)
+async def agent_stats(agent_id: UUID, operator=Depends(get_current_operator)):
+    await verify_agent_ownership(operator, agent_id)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_id)
         stats = await get_agent_stats(conn, agent_id)
@@ -72,14 +116,14 @@ async def agent_stats(agent_id: UUID, agent=Depends(get_current_agent)):
 
 
 @router.post("/agents/{agent_id}/depart")
-async def depart_agent(agent_id: UUID, agent=Depends(get_current_agent)):
+async def depart_agent(agent_id: UUID, operator=Depends(get_current_operator)):
     """
     Agent departure:
     1. Cascade-revoke all capabilities this agent granted.
     2. Mark agent inactive with departure + expiry timestamps.
     3. Return summary.
     """
-    _check_agent_access(agent, agent_id)
+    await verify_agent_ownership(operator, agent_id)
     async with get_conn() as conn:
         row = await conn.fetchrow(
             "SELECT id, is_active FROM agents WHERE id = $1",
@@ -127,12 +171,6 @@ async def depart_agent(agent_id: UUID, agent=Depends(get_current_agent)):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _check_agent_access(agent: dict, agent_id: UUID):
-    """Raise 403 if auth is active and the authenticated agent doesn't match path agent_id."""
-    if agent["id"] and str(agent["id"]) != str(agent_id):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
 
 def _agent_row(row) -> dict:
     return {
