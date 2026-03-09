@@ -14,7 +14,6 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "httpx>=0.26.0",
     "numpy>=1.26.0",
-    "mcp>=1.0.0",
     "click>=8.3.1",
     "mnemo-client",
 ]
@@ -27,14 +26,13 @@ dev = [
 ]
 
 [project.scripts]
-mnemo-mcp = "mnemo.mcp.mcp_server:main"
 mnemo = "mnemo.cli:cli"
 
 [tool.uv]
 package = true
 
 [tool.uv.sources]
-mnemo-client = { path = "../../../shared/mnemo-client" }
+mnemo-client = { path = "../mnemo-client" }
 
 [build-system]
 requires = ["hatchling"]

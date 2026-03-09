@@ -1,1 +1,0 @@
-"""Mnemo MCP server package."""
