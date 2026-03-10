@@ -1,5 +1,5 @@
 import hashlib
-import json
+import re
 import secrets
 from uuid import UUID
 
@@ -18,6 +18,8 @@ async def create_operator_with_key(
     conn,
     name: str,
     email: str | None = None,
+    username: str | None = None,
+    org: str = "mnemo",
     key_name: str = "default",
 ) -> tuple[dict, str]:
     """
@@ -25,20 +27,27 @@ async def create_operator_with_key(
     Returns (operator_dict, plaintext_key).
     Raises asyncpg.UniqueViolationError if name already exists.
     """
+    if username is None:
+        username = re.sub(r'[^a-z0-9-]', '-', name.lower()).strip('-')
+
     row = await conn.fetchrow(
         """
-        INSERT INTO operators (name, email)
-        VALUES ($1, $2)
-        RETURNING id, name, email, created_at, is_active
+        INSERT INTO operators (name, email, username, org)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name, email, username, org, created_at, is_active
         """,
         name,
         email,
+        username,
+        org,
     )
 
     operator = {
         "id": str(row["id"]),
         "name": row["name"],
         "email": row["email"],
+        "username": row["username"],
+        "org": row["org"],
         "created_at": row["created_at"],
         "is_active": row["is_active"],
     }
@@ -115,8 +124,8 @@ async def get_or_create_local_operator(conn) -> UUID:
 
     row = await conn.fetchrow(
         """
-        INSERT INTO operators (name, email)
-        VALUES ('local', NULL)
+        INSERT INTO operators (name, email, username, org)
+        VALUES ('local', NULL, 'local', 'mnemo')
         ON CONFLICT (name) DO UPDATE SET name = 'local'
         RETURNING id
         """,

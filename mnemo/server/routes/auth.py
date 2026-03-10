@@ -17,6 +17,8 @@ _bearer = HTTPBearer(auto_error=False)
 class RegisterOperatorRequest(BaseModel):
     name: str
     email: str | None = None
+    username: str | None = None
+    org: str = "mnemo"
 
 
 class RegisterOperatorResponse(BaseModel):
@@ -44,6 +46,8 @@ async def register_operator(body: RegisterOperatorRequest):
                 conn=conn,
                 name=body.name,
                 email=body.email,
+                username=body.username,
+                org=body.org,
             )
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail=f"Operator name '{body.name}' already exists")
