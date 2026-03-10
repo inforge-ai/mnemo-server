@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth import get_current_operator, verify_agent_ownership
 from ..database import get_conn, get_pool
-from ..services.address_service import resolve_agent_identifier
+from ..services.address_service import create_address, resolve_address as resolve_address_fn, resolve_agent_identifier
 from ..models import AgentCreate, AgentResponse, AgentStats
 from ..services.atom_service import get_agent_stats
 from ..services.auth_service import get_or_create_local_operator
@@ -36,9 +36,17 @@ async def register_agent(body: AgentCreate, operator=Depends(get_current_operato
                 body.domain_tags,
                 json.dumps(body.metadata),
             )
+
+            # Populate agent address
+            op_row = await conn.fetchrow(
+                "SELECT username, org FROM operators WHERE id = $1", operator_id
+            )
+            address = None
+            if op_row:
+                address = await create_address(conn, row["id"], body.name, op_row["username"], op_row["org"])
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail=f"Agent name '{body.name}' already exists")
-    return _agent_row(row)
+    return _agent_row(row, address=address)
 
 
 @router.get("/agents", response_model=list[AgentResponse])
@@ -54,9 +62,12 @@ async def list_agents(
             if name is not None:
                 rows = await conn.fetch(
                     """
-                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
-                    FROM agents WHERE operator_id = $1 AND name = $2 AND is_active = true
-                    ORDER BY created_at ASC
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                           aa.address
+                    FROM agents a
+                    LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
+                    WHERE a.operator_id = $1 AND a.name = $2 AND a.is_active = true
+                    ORDER BY a.created_at ASC
                     """,
                     operator_id,
                     name,
@@ -64,9 +75,12 @@ async def list_agents(
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
-                    FROM agents WHERE operator_id = $1 AND is_active = true
-                    ORDER BY created_at ASC
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                           aa.address
+                    FROM agents a
+                    LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
+                    WHERE a.operator_id = $1 AND a.is_active = true
+                    ORDER BY a.created_at ASC
                     """,
                     operator_id,
                 )
@@ -75,21 +89,52 @@ async def list_agents(
             if name is not None:
                 rows = await conn.fetch(
                     """
-                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
-                    FROM agents WHERE name = $1 AND is_active = true
-                    ORDER BY created_at ASC
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                           aa.address
+                    FROM agents a
+                    LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
+                    WHERE a.name = $1 AND a.is_active = true
+                    ORDER BY a.created_at ASC
                     """,
                     name,
                 )
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
-                    FROM agents WHERE is_active = true
-                    ORDER BY created_at ASC
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                           aa.address
+                    FROM agents a
+                    LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
+                    WHERE a.is_active = true
+                    ORDER BY a.created_at ASC
                     """,
                 )
     return [_agent_row(r) for r in rows]
+
+
+@router.get("/agents/resolve/{address:path}")
+async def resolve_agent_address(address: str, operator=Depends(get_current_operator)):
+    """Resolve an agent address to agent info. Any authenticated operator can resolve."""
+    pool = await get_pool()
+    agent_id = await resolve_address_fn(pool, address)
+    if not agent_id:
+        raise HTTPException(status_code=404, detail=f"Agent not found: {address}")
+    async with get_conn() as conn:
+        row = await conn.fetchrow("""
+            SELECT a.id, a.name, aa.address, o.name AS operator_name
+            FROM agents a
+            LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
+            JOIN operators o ON o.id = a.operator_id
+            WHERE a.id = $1
+        """, agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {
+        "agent_id": str(row["id"]),
+        "name": row["name"],
+        "address": row["address"],
+        "operator": row["operator_name"],
+    }
 
 
 @router.get("/agents/{agent_id}", response_model=AgentResponse)
@@ -99,8 +144,11 @@ async def get_agent(agent_id: str):
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
-            SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
-            FROM agents WHERE id = $1
+            SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                   aa.address
+            FROM agents a
+            LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
+            WHERE a.id = $1
             """,
             agent_uuid,
         )
@@ -117,6 +165,10 @@ async def agent_stats(agent_id: str, operator=Depends(get_current_operator)):
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         stats = await get_agent_stats(conn, agent_uuid)
+        addr_row = await conn.fetchrow(
+            "SELECT address FROM agent_addresses WHERE agent_id = $1", agent_uuid
+        )
+        stats["address"] = addr_row["address"] if addr_row else None
     return stats
 
 
@@ -179,7 +231,7 @@ async def depart_agent(agent_id: str, operator=Depends(get_current_operator)):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _agent_row(row) -> dict:
+def _agent_row(row, address: str | None = None) -> dict:
     return {
         "id": row["id"],
         "name": row["name"],
@@ -188,6 +240,7 @@ def _agent_row(row) -> dict:
         "metadata": json.loads(row["metadata"]) if isinstance(row["metadata"], str) else (row["metadata"] or {}),
         "created_at": row["created_at"],
         "is_active": row["is_active"],
+        "address": address if address is not None else row.get("address"),
     }
 
 
