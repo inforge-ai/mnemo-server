@@ -5,7 +5,8 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth import get_current_operator, verify_agent_ownership
-from ..database import get_conn
+from ..database import get_conn, get_pool
+from ..services.address_service import resolve_agent_identifier
 from ..models import AgentCreate, AgentResponse, AgentStats
 from ..services.atom_service import get_agent_stats
 from ..services.auth_service import get_or_create_local_operator
@@ -92,14 +93,16 @@ async def list_agents(
 
 
 @router.get("/agents/{agent_id}", response_model=AgentResponse)
-async def get_agent(agent_id: UUID):
+async def get_agent(agent_id: str):
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
             SELECT id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
             FROM agents WHERE id = $1
             """,
-            agent_id,
+            agent_uuid,
         )
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -107,27 +110,31 @@ async def get_agent(agent_id: UUID):
 
 
 @router.get("/agents/{agent_id}/stats", response_model=AgentStats)
-async def agent_stats(agent_id: UUID, operator=Depends(get_current_operator)):
-    await verify_agent_ownership(operator, agent_id)
+async def agent_stats(agent_id: str, operator=Depends(get_current_operator)):
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_id)
-        stats = await get_agent_stats(conn, agent_id)
+        await _require_active_agent(conn, agent_uuid)
+        stats = await get_agent_stats(conn, agent_uuid)
     return stats
 
 
 @router.post("/agents/{agent_id}/depart")
-async def depart_agent(agent_id: UUID, operator=Depends(get_current_operator)):
+async def depart_agent(agent_id: str, operator=Depends(get_current_operator)):
     """
     Agent departure:
     1. Cascade-revoke all capabilities this agent granted.
     2. Mark agent inactive with departure + expiry timestamps.
     3. Return summary.
     """
-    await verify_agent_ownership(operator, agent_id)
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
         row = await conn.fetchrow(
             "SELECT id, is_active FROM agents WHERE id = $1",
-            agent_id,
+            agent_uuid,
         )
         if not row:
             raise HTTPException(status_code=404, detail="Agent not found")
@@ -137,7 +144,7 @@ async def depart_agent(agent_id: UUID, operator=Depends(get_current_operator)):
         # Cascade-revoke capabilities
         revoked_count = await conn.fetchval(
             "SELECT revoke_agent_capabilities($1)",
-            agent_id,
+            agent_uuid,
         )
 
         # Mark departed
@@ -150,7 +157,7 @@ async def depart_agent(agent_id: UUID, operator=Depends(get_current_operator)):
             WHERE id = $1
             RETURNING departed_at, data_expires_at
             """,
-            agent_id,
+            agent_uuid,
         )
 
         # Audit log
@@ -159,7 +166,7 @@ async def depart_agent(agent_id: UUID, operator=Depends(get_current_operator)):
             INSERT INTO access_log (agent_id, action, metadata)
             VALUES ($1, 'departure', $2)
             """,
-            agent_id,
+            agent_uuid,
             json.dumps({"capabilities_revoked": revoked_count}),
         )
 

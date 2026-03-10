@@ -37,12 +37,14 @@ async def get_current_operator(
     return operator
 
 
-async def verify_agent_ownership(operator: dict, agent_id: UUID) -> None:
+async def verify_agent_ownership(operator: dict, agent_id: UUID | str) -> None:
     """
     Verify that the authenticated operator owns this agent.
     No-op when auth is disabled (operator["id"] is None).
     Raises 403 if operator doesn't own the agent.
     """
+    if isinstance(agent_id, str):
+        agent_id = UUID(agent_id)
     if operator["id"] is None:
         return  # auth disabled — skip ownership check
 

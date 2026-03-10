@@ -5,21 +5,24 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import get_current_operator, verify_agent_ownership
-from ..database import get_conn
+from ..database import get_conn, get_pool
+from ..services.address_service import resolve_agent_identifier
 from ..models import CapabilityResponse, GrantCreate
 
 router = APIRouter(tags=["capabilities"])
 
 
 @router.post("/agents/{agent_id}/grant", response_model=CapabilityResponse, status_code=201)
-async def grant_capability(agent_id: UUID, body: GrantCreate, operator=Depends(get_current_operator)):
+async def grant_capability(agent_id: str, body: GrantCreate, operator=Depends(get_current_operator)):
     """
     Grant another agent access to one of your views.
     grantor must own the view.
     """
-    await verify_agent_ownership(operator, agent_id)
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_id)
+        await _require_active_agent(conn, agent_uuid)
 
         # Verify the grantor owns the view
         view_owner = await conn.fetchval(
@@ -28,7 +31,7 @@ async def grant_capability(agent_id: UUID, body: GrantCreate, operator=Depends(g
         )
         if view_owner is None:
             raise HTTPException(status_code=404, detail="View not found")
-        if view_owner != agent_id:
+        if view_owner != agent_uuid:
             raise HTTPException(status_code=403, detail="Not view owner")
 
         # Validate expires_at is in the future
@@ -69,7 +72,7 @@ async def grant_capability(agent_id: UUID, body: GrantCreate, operator=Depends(g
                       revoked, expires_at, created_at
             """,
             body.view_id,
-            agent_id,
+            agent_uuid,
             body.grantee_id,
             body.permissions,
             body.expires_at,
@@ -81,7 +84,7 @@ async def grant_capability(agent_id: UUID, body: GrantCreate, operator=Depends(g
             INSERT INTO access_log (agent_id, action, target_id, metadata)
             VALUES ($1, 'grant', $2, $3)
             """,
-            agent_id,
+            agent_uuid,
             row["id"],
             json.dumps({"grantee_id": str(body.grantee_id), "view_id": str(body.view_id)}),
         )

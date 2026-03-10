@@ -4,7 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import get_current_operator, verify_agent_ownership
-from ..database import get_conn
+from ..database import get_conn, get_pool
+from ..services.address_service import resolve_agent_identifier
 from ..models import RetrieveRequest, RetrieveResponse, SkillExport, ViewCreate, ViewResponse
 from ..services import view_service
 from ..services.ops_service import log_operation
@@ -13,14 +14,16 @@ router = APIRouter(tags=["views"])
 
 
 @router.post("/agents/{agent_id}/views", response_model=ViewResponse, status_code=201)
-async def create_view(agent_id: UUID, body: ViewCreate, operator=Depends(get_current_operator)):
+async def create_view(agent_id: str, body: ViewCreate, operator=Depends(get_current_operator)):
     """Create a snapshot view — freezes matching atom IDs at this moment."""
-    await verify_agent_ownership(operator, agent_id)
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_id)
+        await _require_active_agent(conn, agent_uuid)
         result = await view_service.create_snapshot(
             conn=conn,
-            owner_agent_id=agent_id,
+            owner_agent_id=agent_uuid,
             name=body.name,
             description=body.description,
             atom_filter=body.atom_filter,
@@ -29,26 +32,30 @@ async def create_view(agent_id: UUID, body: ViewCreate, operator=Depends(get_cur
 
 
 @router.get("/agents/{agent_id}/views", response_model=list[ViewResponse])
-async def list_views(agent_id: UUID, operator=Depends(get_current_operator)):
-    await verify_agent_ownership(operator, agent_id)
+async def list_views(agent_id: str, operator=Depends(get_current_operator)):
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_id)
-        results = await view_service.list_views(conn, agent_id)
+        await _require_active_agent(conn, agent_uuid)
+        results = await view_service.list_views(conn, agent_uuid)
     return results
 
 
 @router.get("/agents/{agent_id}/views/{view_id}/export_skill", response_model=SkillExport)
-async def export_skill(agent_id: UUID, view_id: UUID, operator=Depends(get_current_operator)):
+async def export_skill(agent_id: str, view_id: UUID, operator=Depends(get_current_operator)):
     """Export a snapshot view as an α=1 skill package with rendered markdown."""
-    await verify_agent_ownership(operator, agent_id)
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_id)
-        await _require_view_owner(conn, agent_id, view_id)
+        await _require_active_agent(conn, agent_uuid)
+        await _require_view_owner(conn, agent_uuid, view_id)
         t0 = time.monotonic()
-        result = await view_service.export_skill(conn, agent_id, view_id)
+        result = await view_service.export_skill(conn, agent_uuid, view_id)
         if result is not None:
             await log_operation(
-                conn, "export_skill", operator["id"], target_id=agent_id,
+                conn, "export_skill", operator["id"], target_id=agent_uuid,
                 duration_ms=int((time.monotonic() - t0) * 1000),
                 metadata={"view_id": str(view_id)},
             )
@@ -62,20 +69,22 @@ async def export_skill(agent_id: UUID, view_id: UUID, operator=Depends(get_curre
     response_model=RetrieveResponse,
 )
 async def recall_shared(
-    agent_id: UUID, view_id: UUID, body: RetrieveRequest, operator=Depends(get_current_operator)
+    agent_id: str, view_id: UUID, body: RetrieveRequest, operator=Depends(get_current_operator)
 ):
     """
     Recall through a shared view. Requires a valid, non-revoked capability.
     Graph expansion is scope-bounded to the snapshot's atoms only.
     """
-    await verify_agent_ownership(operator, agent_id)
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_id)
-        cap = await _require_capability(conn, agent_id, view_id)
+        await _require_active_agent(conn, agent_uuid)
+        cap = await _require_capability(conn, agent_uuid, view_id)
         t0 = time.monotonic()
         result = await view_service.recall_shared(
             conn=conn,
-            grantee_id=agent_id,
+            grantee_id=agent_uuid,
             view_id=view_id,
             capability_id=cap["id"],
             query=body.query,
@@ -84,7 +93,7 @@ async def recall_shared(
             expansion_depth=body.expansion_depth,
         )
         await log_operation(
-            conn, "recall_shared", operator["id"], target_id=agent_id,
+            conn, "recall_shared", operator["id"], target_id=agent_uuid,
             duration_ms=int((time.monotonic() - t0) * 1000),
             metadata={"view_id": str(view_id), "results_returned": result["total_retrieved"]},
         )
@@ -92,11 +101,13 @@ async def recall_shared(
 
 
 @router.get("/agents/{agent_id}/shared_views", response_model=list[ViewResponse])
-async def list_shared_views(agent_id: UUID, operator=Depends(get_current_operator)):
+async def list_shared_views(agent_id: str, operator=Depends(get_current_operator)):
     """List all views shared with this agent via active capabilities."""
-    await verify_agent_ownership(operator, agent_id)
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_id)
+        await _require_active_agent(conn, agent_uuid)
         rows = await conn.fetch(
             """
             SELECT v.id, v.owner_agent_id, v.name, v.description, v.alpha,
@@ -111,7 +122,7 @@ async def list_shared_views(agent_id: UUID, operator=Depends(get_current_operato
             GROUP BY v.id
             ORDER BY v.created_at DESC
             """,
-            agent_id,
+            agent_uuid,
         )
     return [view_service._view_row(r) for r in rows]
 
