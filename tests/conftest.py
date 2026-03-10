@@ -42,6 +42,7 @@ DELETE FROM edges;
 DELETE FROM views;
 DELETE FROM atoms;
 DELETE FROM api_keys;
+DELETE FROM agent_addresses;
 DELETE FROM agents;
 DELETE FROM operations;
 DELETE FROM operators;
@@ -102,3 +103,31 @@ async def two_agents(client):
     assert r1.status_code == 201
     assert r2.status_code == 201
     return r1.json(), r2.json()
+
+
+@pytest_asyncio.fixture
+async def operator_with_username(pool, clean_db):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO operators (name, username, org)
+            VALUES ('Test Operator', 'testuser', 'testorg')
+            RETURNING id, name, username, org
+        """)
+    return dict(row)
+
+
+@pytest_asyncio.fixture
+async def agent_with_address(client, pool, operator_with_username):
+    op = operator_with_username
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO agents (operator_id, name, domain_tags)
+            VALUES ($1, 'test-agent', '{"testing"}')
+            RETURNING id, name, operator_id, persona, domain_tags, metadata, created_at, is_active
+        """, op["id"])
+        from mnemo.server.services.address_service import create_address
+        address = await create_address(conn, row["id"], row["name"], op["username"], op["org"])
+    agent = dict(row)
+    agent["address"] = address
+    agent["operator"] = op
+    return agent

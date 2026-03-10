@@ -7,6 +7,8 @@ CREATE TABLE operators (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        TEXT NOT NULL UNIQUE,
     email       TEXT,
+    username    TEXT NOT NULL,
+    org         TEXT NOT NULL DEFAULT 'mnemo',
     created_at  TIMESTAMPTZ DEFAULT now(),
     is_active   BOOLEAN DEFAULT true
 );
@@ -32,6 +34,15 @@ CREATE TABLE agents (
 CREATE INDEX idx_agents_operator ON agents(operator_id);
 CREATE INDEX idx_agents_domain_tags ON agents USING GIN (domain_tags);
 CREATE INDEX idx_agents_active ON agents (is_active) WHERE is_active = true;
+
+-- Agent addresses (canonical agent_name:operator_username.org)
+CREATE TABLE agent_addresses (
+    agent_id    UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    address     TEXT NOT NULL UNIQUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_agent_addresses_address ON agent_addresses (address);
 
 -- Core memory atoms
 CREATE TABLE atoms (
@@ -265,7 +276,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================================
 
 GRANT SELECT, INSERT, UPDATE, DELETE
-    ON operators, agents, atoms, edges, views, snapshot_atoms, capabilities
+    ON operators, agents, atoms, edges, views, snapshot_atoms, capabilities, agent_addresses
     TO mnemo;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO mnemo;
