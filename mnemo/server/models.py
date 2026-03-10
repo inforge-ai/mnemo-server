@@ -19,6 +19,7 @@ class AgentResponse(BaseModel):
     metadata: dict
     created_at: datetime
     is_active: bool
+    address: Optional[str] = None
 
 # ── Remember (primary interface) ──
 
@@ -135,6 +136,27 @@ class ViewResponse(BaseModel):
     atom_count: int
     created_at: datetime
 
+class SharedViewResponse(BaseModel):
+    id: UUID
+    owner_agent_id: UUID
+    name: str
+    description: Optional[str]
+    alpha: float
+    atom_filter: dict
+    atom_count: int
+    created_at: datetime
+    grantor_id: Optional[UUID] = None
+    source_address: Optional[str] = None
+    granted_at: Optional[datetime] = None
+
+class SharedRecallRequest(BaseModel):
+    query: str
+    from_agent: Optional[str] = None
+    min_similarity: float = Field(default=0.15, ge=0.0, le=1.0)
+    max_results: int = Field(default=5, ge=1, le=100)
+    verbosity: str = Field(default="summary", pattern="^(full|summary|truncated)$")
+    max_total_tokens: Optional[int] = Field(default=None, ge=50, le=10000)
+
 class SkillExport(BaseModel):
     view_id: UUID
     name: str
@@ -176,3 +198,4 @@ class AgentStats(BaseModel):
     active_views: int
     granted_capabilities: int
     received_capabilities: int
+    address: Optional[str] = None

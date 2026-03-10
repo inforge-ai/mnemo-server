@@ -1,3 +1,4 @@
+import json
 import time
 from uuid import UUID
 
@@ -6,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..auth import get_current_operator, verify_agent_ownership
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
-from ..models import RetrieveRequest, RetrieveResponse, SkillExport, ViewCreate, ViewResponse
+from ..models import RetrieveRequest, RetrieveResponse, SharedRecallRequest, SharedViewResponse, SkillExport, ViewCreate, ViewResponse
 from ..services import view_service
 from ..services.ops_service import log_operation
 
@@ -40,6 +41,31 @@ async def list_views(agent_id: str, operator=Depends(get_current_operator)):
         await _require_active_agent(conn, agent_uuid)
         results = await view_service.list_views(conn, agent_uuid)
     return results
+
+
+@router.post("/agents/{agent_id}/shared_views/recall")
+async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, operator=Depends(get_current_operator)):
+    """Search across all views shared with this agent."""
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
+
+    from_agent_id = None
+    if body.from_agent:
+        from ..services.address_service import resolve_address
+        from_agent_id = await resolve_address(pool, body.from_agent)
+
+    async with get_conn() as conn:
+        await _require_active_agent(conn, agent_uuid)
+        result = await view_service.recall_all_shared(
+            conn=conn,
+            grantee_id=agent_uuid,
+            query=body.query,
+            from_agent_id=from_agent_id,
+            min_similarity=body.min_similarity,
+            max_results=body.max_results,
+        )
+    return result
 
 
 @router.get("/agents/{agent_id}/views/{view_id}/export_skill", response_model=SkillExport)
@@ -100,7 +126,7 @@ async def recall_shared(
     return result
 
 
-@router.get("/agents/{agent_id}/shared_views", response_model=list[ViewResponse])
+@router.get("/agents/{agent_id}/shared_views", response_model=list[SharedViewResponse])
 async def list_shared_views(agent_id: str, operator=Depends(get_current_operator)):
     """List all views shared with this agent via active capabilities."""
     pool = await get_pool()
@@ -112,22 +138,44 @@ async def list_shared_views(agent_id: str, operator=Depends(get_current_operator
             """
             SELECT v.id, v.owner_agent_id, v.name, v.description, v.alpha,
                    v.atom_filter, v.created_at,
-                   COUNT(sa.atom_id) AS atom_count
+                   COUNT(sa.atom_id) AS atom_count,
+                   c.grantor_id,
+                   c.created_at AS granted_at,
+                   aa.address AS source_address
             FROM capabilities c
             JOIN views v ON v.id = c.view_id
             LEFT JOIN snapshot_atoms sa ON sa.view_id = v.id
+            LEFT JOIN agent_addresses aa ON aa.agent_id = c.grantor_id
             WHERE c.grantee_id = $1
               AND c.revoked = false
               AND (c.expires_at IS NULL OR c.expires_at > now())
-            GROUP BY v.id
+            GROUP BY v.id, c.grantor_id, c.created_at, aa.address
             ORDER BY v.created_at DESC
             """,
             agent_uuid,
         )
-    return [view_service._view_row(r) for r in rows]
+    return [_shared_view_row(r) for r in rows]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _shared_view_row(row) -> dict:
+    af = row["atom_filter"]
+    if isinstance(af, str):
+        af = json.loads(af)
+    return {
+        "id": row["id"],
+        "owner_agent_id": row["owner_agent_id"],
+        "name": row["name"],
+        "description": row["description"],
+        "alpha": row["alpha"],
+        "atom_filter": af or {},
+        "atom_count": row["atom_count"],
+        "created_at": row["created_at"],
+        "grantor_id": row["grantor_id"],
+        "source_address": row["source_address"],
+        "granted_at": row["granted_at"],
+    }
 
 async def _require_active_agent(conn, agent_id: UUID):
     row = await conn.fetchrow(

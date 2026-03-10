@@ -43,20 +43,43 @@ async def create_snapshot(
     """Create a snapshot view, freezing matching atom IDs."""
     atom_types: list[str] | None = atom_filter.get("atom_types") or None
     domain_tags: list[str] | None = atom_filter.get("domain_tags") or None
+    query = atom_filter.get("query") or None
+    max_atoms = atom_filter.get("max_atoms", 20)
 
     # Collect matching atom IDs at this moment
-    atom_rows = await conn.fetch(
-        """
-        SELECT id FROM atoms
-        WHERE agent_id = $1
-          AND is_active = true
-          AND ($2::text[] IS NULL OR atom_type = ANY($2))
-          AND ($3::text[] IS NULL OR domain_tags && $3)
-        """,
-        owner_agent_id,
-        atom_types,
-        domain_tags,
-    )
+    if query:
+        embedding = await encode(query)
+        atom_rows = await conn.fetch(
+            """
+            SELECT id, 1 - (embedding <=> $1::vector) AS similarity
+            FROM atoms
+            WHERE agent_id = $2
+              AND is_active = true
+              AND ($3::text[] IS NULL OR atom_type = ANY($3))
+              AND ($4::text[] IS NULL OR domain_tags && $4)
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> $1::vector ASC
+            LIMIT $5
+            """,
+            embedding,
+            owner_agent_id,
+            atom_types,
+            domain_tags,
+            max_atoms,
+        )
+    else:
+        atom_rows = await conn.fetch(
+            """
+            SELECT id FROM atoms
+            WHERE agent_id = $1
+              AND is_active = true
+              AND ($2::text[] IS NULL OR atom_type = ANY($2))
+              AND ($3::text[] IS NULL OR domain_tags && $3)
+            """,
+            owner_agent_id,
+            atom_types,
+            domain_tags,
+        )
     atom_ids = [r["id"] for r in atom_rows]
 
     # Insert view
@@ -378,6 +401,79 @@ async def recall_shared(
         "atoms": primary_responses,
         "expanded_atoms": expanded_responses,
         "total_retrieved": total,
+    }
+
+
+async def recall_all_shared(
+    conn: asyncpg.Connection,
+    grantee_id: UUID,
+    query: str,
+    from_agent_id: UUID | None = None,
+    min_similarity: float = 0.15,
+    max_results: int = 5,
+) -> dict:
+    """Search across ALL views shared with this agent in a single query."""
+    embedding = await encode(query)
+
+    rows = await conn.fetch(
+        """
+        SELECT
+            a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
+            a.confidence_alpha, a.confidence_beta,
+            a.source_type, a.domain_tags, a.created_at,
+            a.last_accessed, a.access_count, a.is_active,
+            1 - (a.embedding <=> $1::vector) AS similarity,
+            effective_confidence(
+                a.confidence_alpha, a.confidence_beta,
+                a.decay_type, a.decay_half_life_days,
+                a.created_at, a.last_accessed, a.access_count
+            ) AS confidence_effective,
+            aa.address AS source_address,
+            v.name AS view_name,
+            c.grantor_id
+        FROM capabilities c
+        JOIN views v ON v.id = c.view_id
+        JOIN snapshot_atoms sa ON sa.view_id = v.id
+        JOIN atoms a ON a.id = sa.atom_id
+        LEFT JOIN agent_addresses aa ON aa.agent_id = c.grantor_id
+        WHERE c.grantee_id = $2
+          AND c.revoked = false
+          AND (c.expires_at IS NULL OR c.expires_at > now())
+          AND a.is_active = true
+          AND ($3::uuid IS NULL OR c.grantor_id = $3)
+        ORDER BY a.embedding <=> $1::vector ASC
+        LIMIT $4
+        """,
+        embedding,
+        grantee_id,
+        from_agent_id,
+        max_results * 2,
+    )
+
+    filtered = []
+    for r in rows:
+        if r["similarity"] >= min_similarity and r["confidence_effective"] >= 0.05:
+            filtered.append(r)
+    filtered = filtered[:max_results]
+
+    atom_ids = [r["id"] for r in filtered]
+    if atom_ids:
+        await conn.execute(
+            "UPDATE atoms SET last_accessed = now(), access_count = access_count + 1 WHERE id = ANY($1)",
+            atom_ids,
+        )
+
+    from ..services.atom_service import _row_to_atom_response
+    atoms = []
+    for r in filtered:
+        atom = _row_to_atom_response(r, relevance_score=r["similarity"])
+        atom["source_address"] = r["source_address"]
+        atom["view_name"] = r["view_name"]
+        atoms.append(atom)
+
+    return {
+        "atoms": atoms,
+        "total_retrieved": len(atoms),
     }
 
 
