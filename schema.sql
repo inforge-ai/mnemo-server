@@ -89,7 +89,10 @@ CREATE TABLE atoms (
     is_active       BOOLEAN NOT NULL DEFAULT true,
 
     -- Consolidation tracking (used to skip atoms already processed in recent runs)
-    last_consolidated_at TIMESTAMPTZ
+    last_consolidated_at TIMESTAMPTZ,
+
+    -- Decomposer provenance
+    decomposer_version TEXT NOT NULL DEFAULT 'regex_v1'
 );
 
 CREATE INDEX idx_atoms_agent_id ON atoms (agent_id);
@@ -107,7 +110,7 @@ CREATE TABLE edges (
     edge_type       TEXT NOT NULL CHECK (edge_type IN (
                         'supports', 'contradicts', 'depends_on',
                         'generalises', 'specialises', 'motivated_by',
-                        'evidence_for', 'supersedes', 'summarises'
+                        'evidence_for', 'supersedes', 'summarises', 'related'
                     )),
     weight          FLOAT NOT NULL DEFAULT 1.0
                     CHECK (weight >= 0.0 AND weight <= 1.0),
@@ -197,6 +200,19 @@ CREATE TABLE operations (
 
 CREATE INDEX idx_operations_agent ON operations (agent_id, created_at);
 CREATE INDEX idx_operations_type  ON operations (operation, created_at);
+
+-- Failed async store jobs (ops visibility, not agent-facing)
+CREATE TABLE store_failures (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id    UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    original_text TEXT NOT NULL,
+    error       TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_store_failures_agent ON store_failures (agent_id, created_at);
+
+GRANT SELECT, INSERT, DELETE ON store_failures TO mnemo;
 
 -- ============================================================
 -- HELPER FUNCTIONS

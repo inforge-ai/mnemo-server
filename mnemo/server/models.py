@@ -108,7 +108,7 @@ class EdgeCreate(BaseModel):
     target_id: UUID
     edge_type: Literal[
         "supports", "contradicts", "depends_on", "generalises",
-        "specialises", "motivated_by", "evidence_for", "supersedes", "summarises"
+        "specialises", "motivated_by", "evidence_for", "supersedes", "summarises", "related"
     ]
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
 
