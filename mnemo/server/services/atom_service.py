@@ -215,6 +215,36 @@ def _apply_token_budget(
     return result, max(0, int(budget))
 
 
+def _dedup_results(rows: list, threshold: float = 0.95) -> list:
+    """Collapse near-duplicate atoms (>threshold cosine similarity).
+    Keeps the first occurrence (highest-ranked after sorting).
+    Uses embeddings already fetched in the retrieval query."""
+    if len(rows) <= 1:
+        return rows
+
+    kept = []
+    dropped_ids: set = set()
+
+    for i, row in enumerate(rows):
+        if row["id"] in dropped_ids:
+            continue
+        kept.append(row)
+        emb_i = row.get("embedding")
+        if emb_i is None:
+            continue
+        for j in range(i + 1, len(rows)):
+            if rows[j]["id"] in dropped_ids:
+                continue
+            emb_j = rows[j].get("embedding")
+            if emb_j is None:
+                continue
+            sim = _cosine_sim(list(emb_i), list(emb_j))
+            if sim > threshold:
+                dropped_ids.add(rows[j]["id"])
+
+    return kept
+
+
 def _apply_verbosity(atoms: list[dict], verbosity: str, max_chars: int) -> list[dict]:
     """Compress text_content according to verbosity mode."""
     if verbosity == "full":
@@ -463,6 +493,7 @@ async def retrieve(
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
             source_type, domain_tags, created_at, last_accessed, access_count, is_active,
+            embedding,
             1 - (embedding <=> $1::vector) AS cosine_sim,
             effective_confidence(
                 confidence_alpha, confidence_beta,
@@ -491,6 +522,8 @@ async def retrieve(
     # Filter superseded atoms unless requested
     if not include_superseded:
         rows = await _filter_superseded(conn, rows)
+
+    rows = _dedup_results(rows)
 
     rows.sort(
         key=lambda r: r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]),

@@ -342,6 +342,10 @@ async def recall_shared(
     )
 
     rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
+    rows.sort(
+        key=lambda r: r["similarity"] * (0.7 + 0.3 * r["confidence_effective"]),
+        reverse=True,
+    )
     primary = rows[:max_results]
     primary_ids = [r["id"] for r in primary]
 
@@ -381,7 +385,10 @@ async def recall_shared(
         )
 
     from ..services.atom_service import _row_to_atom_response
-    primary_responses = [_row_to_atom_response(r) for r in primary]
+    primary_responses = [
+        _row_to_atom_response(r, r["similarity"] * (0.7 + 0.3 * r["confidence_effective"]))
+        for r in primary
+    ]
     expanded_responses = [_row_to_atom_response(r) for r in expanded_rows]
 
     total = len(primary_responses) + len(expanded_responses)
@@ -466,7 +473,7 @@ async def recall_all_shared(
     from ..services.atom_service import _row_to_atom_response
     atoms = []
     for r in filtered:
-        atom = _row_to_atom_response(r, relevance_score=r["similarity"])
+        atom = _row_to_atom_response(r, relevance_score=r["similarity"] * (0.7 + 0.3 * r["confidence_effective"]))
         atom["source_address"] = r["source_address"]
         atom["view_name"] = r["view_name"]
         atoms.append(atom)
