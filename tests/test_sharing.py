@@ -2,24 +2,16 @@
 
 import pytest
 import pytest_asyncio
+from tests.conftest import remember
 
 
 @pytest.mark.asyncio
 class TestQueryBasedViewCreation:
     async def test_query_selects_relevant_atoms(self, client, agent):
         """View created with query= should only include semantically relevant atoms."""
-        await client.post(f"/v1/agents/{agent['id']}/remember", json={
-            "text": "Always validate SQL parameters to prevent injection attacks.",
-            "domain_tags": ["security"],
-        })
-        await client.post(f"/v1/agents/{agent['id']}/remember", json={
-            "text": "The cafeteria serves good pasta on Tuesdays.",
-            "domain_tags": ["food"],
-        })
-        await client.post(f"/v1/agents/{agent['id']}/remember", json={
-            "text": "Use prepared statements for database queries.",
-            "domain_tags": ["security"],
-        })
+        await remember(client, agent["id"], "Always validate SQL parameters to prevent injection attacks.", domain_tags=["security"])
+        await remember(client, agent["id"], "The cafeteria serves good pasta on Tuesdays.", domain_tags=["food"])
+        await remember(client, agent["id"], "Use prepared statements for database queries.", domain_tags=["security"])
 
         resp = await client.post(f"/v1/agents/{agent['id']}/views", json={
             "name": "sql-security",
@@ -41,10 +33,7 @@ class TestQueryBasedViewCreation:
             "List comprehensions are faster than equivalent for-loops in Python.",
         ]
         for text in texts:
-            await client.post(f"/v1/agents/{agent['id']}/remember", json={
-                "text": text,
-                "domain_tags": ["python"],
-            })
+            await remember(client, agent["id"], text, domain_tags=["python"])
 
         resp = await client.post(f"/v1/agents/{agent['id']}/views", json={
             "name": "all-python",
@@ -114,14 +103,8 @@ class TestCrossViewRecall:
             await create_address(conn, bob["id"], "bob", op["username"], op["org"])
 
         # Alice stores memories
-        await client.post(f"/v1/agents/{alice['id']}/remember", json={
-            "text": "Always check NII sustainability against rate expectations for bank earnings.",
-            "domain_tags": ["finance"],
-        })
-        await client.post(f"/v1/agents/{alice['id']}/remember", json={
-            "text": "Revenue growth in tech sector correlates with R&D spending.",
-            "domain_tags": ["finance"],
-        })
+        await remember(client, str(alice["id"]), "Always check NII sustainability against rate expectations for bank earnings.", domain_tags=["finance"])
+        await remember(client, str(alice["id"]), "Revenue growth in tech sector correlates with R&D spending.", domain_tags=["finance"])
 
         # Alice creates a view and grants to Bob
         view = (await client.post(f"/v1/agents/{alice['id']}/views", json={
@@ -156,10 +139,7 @@ class TestCrossViewRecall:
         alice, bob = ctx["alice"], ctx["bob"]
 
         # Alice stores a memory AFTER creating the view
-        await client.post(f"/v1/agents/{alice['id']}/remember", json={
-            "text": "Secret proprietary trading strategy that should not be shared.",
-            "domain_tags": ["finance"],
-        })
+        await remember(client, str(alice["id"]), "Secret proprietary trading strategy that should not be shared.", domain_tags=["finance"])
 
         resp = await client.post(f"/v1/agents/{bob['id']}/shared_views/recall", json={
             "query": "proprietary trading strategy",

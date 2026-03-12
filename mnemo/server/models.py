@@ -29,10 +29,8 @@ class RememberRequest(BaseModel):
     domain_tags: list[str] = []
 
 class RememberResponse(BaseModel):
-    atoms_created: int
-    edges_created: int
-    atoms: list["AtomResponse"]
-    duplicates_merged: int
+    status: str = "queued"
+    store_id: UUID
 
 # ── Atoms (power-user interface) ──
 

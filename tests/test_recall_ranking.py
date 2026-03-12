@@ -2,6 +2,7 @@
 """Tests for composite ranking and retrieval improvements."""
 
 import pytest
+from tests.conftest import remember
 
 
 class TestCompositeRanking:
@@ -11,9 +12,7 @@ class TestCompositeRanking:
     async def test_all_results_have_relevance_score(self, client, agent):
         """Every recalled atom should have a non-None relevance_score."""
         aid = agent["id"]
-        await client.post(f"/v1/agents/{aid}/remember", json={
-            "text": "The PostgreSQL cosine distance operator is <=> and it is confirmed working correctly.",
-        })
+        await remember(client, aid, "The PostgreSQL cosine distance operator is <=> and it is confirmed working correctly.")
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "PostgreSQL distance operator",
@@ -32,9 +31,7 @@ class TestCompositeRanking:
     async def test_results_sorted_by_relevance_score(self, client, agent):
         """Results should be sorted by relevance_score descending."""
         aid = agent["id"]
-        await client.post(f"/v1/agents/{aid}/remember", json={
-            "text": "Python is a programming language. PostgreSQL is a database. Redis is a cache.",
-        })
+        await remember(client, aid, "Python is a programming language. PostgreSQL is a database. Redis is a cache.")
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "database systems",

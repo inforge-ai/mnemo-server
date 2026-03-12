@@ -1,9 +1,11 @@
+import asyncio
 import time
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import get_current_operator, verify_agent_ownership
+from ..config import settings
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..models import RememberRequest, RememberResponse, RetrieveRequest, RetrieveResponse
@@ -15,25 +17,28 @@ router = APIRouter(tags=["memory"])
 
 @router.post("/agents/{agent_id}/remember", response_model=RememberResponse, status_code=201)
 async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_current_operator)):
-    """Store a free-text memory. Server decomposes, deduplicates, and links atoms."""
+    """Store a free-text memory. Returns immediately; decomposition runs in background."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
     await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
-        t0 = time.monotonic()
-        result = await atom_service.store_from_text(
-            conn=conn,
-            agent_id=agent_uuid,
-            text=body.text,
-            domain_tags=body.domain_tags,
-        )
-        await log_operation(
-            conn, "remember", operator["id"], target_id=agent_uuid,
-            duration_ms=int((time.monotonic() - t0) * 1000),
-            metadata={"atoms_created": result["atoms_created"]},
-        )
-    return result
+
+    store_id = uuid4()
+    async with get_conn() as conn:
+        await log_operation(conn, "remember", operator["id"], target_id=agent_uuid)
+    coro = atom_service.store_background(
+        pool=pool,
+        store_id=store_id,
+        agent_id=agent_uuid,
+        text=body.text,
+        domain_tags=body.domain_tags,
+    )
+    if settings.sync_store_for_tests:
+        await coro
+    else:
+        asyncio.create_task(coro)
+    return {"status": "queued", "store_id": store_id}
 
 
 @router.post("/agents/{agent_id}/recall", response_model=RetrieveResponse)

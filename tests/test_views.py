@@ -3,6 +3,7 @@ Tests for view creation and skill export (Part 1 of build spec).
 """
 
 import pytest
+from tests.conftest import remember
 
 
 class TestCreateView:
@@ -12,10 +13,7 @@ class TestCreateView:
             "I discovered SQL injection in a legacy project.",
             "Always validate user input before processing.",
         ]:
-            await client.post(f"/v1/agents/{agent['id']}/remember", json={
-                "text": text,
-                "domain_tags": ["python"],
-            })
+            await remember(client, agent["id"], text, domain_tags=["python"])
 
         resp = await client.post(f"/v1/agents/{agent['id']}/views", json={
             "name": "python-skills",
@@ -40,10 +38,7 @@ class TestCreateView:
 
     async def test_snapshot_is_immutable(self, client, agent):
         """Atoms deleted after snapshot creation still count in export_skill."""
-        await client.post(f"/v1/agents/{agent['id']}/remember", json={
-            "text": "Always use connection pooling for database access.",
-            "domain_tags": ["db"],
-        })
+        await remember(client, agent["id"], "Always use connection pooling for database access.", domain_tags=["db"])
 
         # Create view
         view = (await client.post(f"/v1/agents/{agent['id']}/views", json={
@@ -74,10 +69,7 @@ class TestCreateView:
         assert len(skill["procedures"]) + len(skill["supporting_facts"]) >= 0  # no error
 
     async def test_export_skill_markdown(self, client, agent):
-        await client.post(f"/v1/agents/{agent['id']}/remember", json={
-            "text": "Always specify dtype when using pandas read_csv.",
-            "domain_tags": ["pandas"],
-        })
+        await remember(client, agent["id"], "Always specify dtype when using pandas read_csv.", domain_tags=["pandas"])
         view = (await client.post(f"/v1/agents/{agent['id']}/views", json={
             "name": "pandas-skills",
             "atom_filter": {"atom_types": ["procedural"]},
@@ -95,10 +87,7 @@ class TestCreateView:
     async def test_export_skill_no_procedures(self, client, agent):
         """View with only semantic atoms: procedures=[], Background Knowledge section."""
         # Store only semantic content (facts, no imperatives)
-        await client.post(f"/v1/agents/{agent['id']}/remember", json={
-            "text": "PostgreSQL supports JSONB for storing structured data.",
-            "domain_tags": ["db"],
-        })
+        await remember(client, agent["id"], "PostgreSQL supports JSONB for storing structured data.", domain_tags=["db"])
         view = (await client.post(f"/v1/agents/{agent['id']}/views", json={
             "name": "db-facts",
             "atom_filter": {"atom_types": ["semantic"]},

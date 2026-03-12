@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Admin
     admin_token: str = ""  # set MNEMO_ADMIN_TOKEN; empty = admin disabled
 
+    # Testing
+    sync_store_for_tests: bool = False  # if True, /remember awaits the store task inline
+
     class Config:
         env_prefix = "MNEMO_"
 

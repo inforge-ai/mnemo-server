@@ -15,6 +15,7 @@ from uuid import UUID
 
 from mnemo.server.services.consolidation import run_consolidation, _CONSOLIDATION_LOCK_KEY
 from mnemo.server.embeddings import encode
+from tests.conftest import remember
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -62,16 +63,7 @@ async def _insert_atom_sql(
 async def test_decay_deactivates_old_atoms(client, agent, pool):
     """Atoms whose effective_confidence drops below 0.05 are deactivated."""
     # Store an atom via the API (normal path, gets episodic half-life 14d)
-    r = await client.post(
-        f"/v1/agents/{agent['id']}/remember",
-        json={
-            "text": "I found a memory leak in the authentication service.",
-            "domain_tags": ["bugs"],
-        },
-    )
-    assert r.status_code == 201
-    data = r.json()
-    assert data["atoms_created"] >= 1
+    await remember(client, agent["id"], "I found a memory leak in the authentication service.", domain_tags=["bugs"])
 
     agent_id = UUID(agent["id"])
 
@@ -101,19 +93,13 @@ async def test_decay_deactivates_old_atoms(client, agent, pool):
 
 async def test_decay_does_not_touch_fresh_atoms(client, agent, pool):
     """Freshly created atoms should not be deactivated by consolidation."""
-    r = await client.post(
-        f"/v1/agents/{agent['id']}/remember",
-        json={"text": "Python dict comprehensions are very efficient.", "domain_tags": []},
-    )
-    assert r.status_code == 201
+    await remember(client, agent["id"], "Python dict comprehensions are very efficient.")
 
     result = await run_consolidation(pool)
 
     # None of the fresh atoms should have been deactivated
     stats_r = await client.get(f"/v1/agents/{agent['id']}/stats")
     assert stats_r.json()["active_atoms"] > 0
-    # decayed could be 0 or include atoms from other agents/runs — just check ours
-    assert stats_r.json()["active_atoms"] >= r.json()["atoms_created"]
 
 
 # ── Cluster / generalise tests ─────────────────────────────────────────────────
@@ -403,10 +389,7 @@ async def test_purge_removes_capability_references(client, two_agents, pool):
     alice, bob = two_agents
 
     # Alice stores something and creates a view
-    await client.post(
-        f"/v1/agents/{alice['id']}/remember",
-        json={"text": "pandas handles missing values automatically.", "domain_tags": ["data"]},
-    )
+    await remember(client, alice["id"], "pandas handles missing values automatically.", domain_tags=["data"])
     view_r = await client.post(
         f"/v1/agents/{alice['id']}/views",
         json={"name": "alice-view", "atom_filter": {"atom_types": ["semantic"]}},
@@ -487,11 +470,7 @@ async def test_consolidation_step_rollback(client, agent, pool):
     agent_id = UUID(agent["id"])
 
     # Store an atom and age it so it gets decayed
-    r = await client.post(
-        f"/v1/agents/{agent_id}/remember",
-        json={"text": "The connection pool is exhausted under high load.", "domain_tags": ["ops"]},
-    )
-    assert r.status_code == 201
+    await remember(client, str(agent_id), "The connection pool is exhausted under high load.", domain_tags=["ops"])
 
     async with pool.acquire() as conn:
         await conn.execute(

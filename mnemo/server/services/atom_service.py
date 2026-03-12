@@ -23,7 +23,8 @@ RETRIEVE FLOW (via /recall):
 import json
 import logging
 import os
-from uuid import UUID
+import traceback
+from uuid import UUID, uuid4
 
 import asyncpg
 import numpy as np
@@ -343,7 +344,9 @@ async def store_from_text(
 
     for atom in decomposed:
         embedding = await encode(atom.text)
-        duplicate = await _check_duplicate(conn, agent_id, embedding)
+        # Arc atoms are synthetic summaries — never deduplicate them against
+        # their component sentences (their embeddings overlap by design).
+        duplicate = None if atom.source_type == "arc" else await _check_duplicate(conn, agent_id, embedding)
 
         if duplicate:
             await _merge_duplicate(
@@ -401,6 +404,41 @@ async def store_from_text(
         "edges_created": edges_created,
         "duplicates_merged": duplicates_merged,
     }
+
+
+async def store_background(
+    pool: asyncpg.Pool,
+    store_id: UUID,
+    agent_id: UUID,
+    text: str,
+    domain_tags: list[str],
+) -> None:
+    """Background task: decompose, embed, store atoms, and create edges.
+
+    Runs as an asyncio.create_task — not on the request path.
+    Operation logging is handled by the route handler before this task is spawned.
+    On failure, logs to store_failures table (operator visibility, not agent-facing).
+    """
+    try:
+        async with pool.acquire() as conn:
+            await store_from_text(conn, agent_id, text, domain_tags)
+    except Exception:
+        error_msg = traceback.format_exc()
+        logger.error("Background store %s failed: %s", store_id, error_msg)
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO store_failures (id, agent_id, original_text, error)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    store_id,
+                    agent_id,
+                    text,
+                    error_msg,
+                )
+        except Exception:
+            logger.error("Failed to log store failure %s", store_id)
 
 
 async def store_explicit(

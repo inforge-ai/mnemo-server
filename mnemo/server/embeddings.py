@@ -38,5 +38,9 @@ def _encode_sync(text: str) -> list[float]:
 
 
 async def encode(text: str) -> list[float]:
+    # In test mode, run encoding synchronously to avoid yielding the event
+    # loop to pytest-asyncio fixture setup (clean_db) mid-request.
+    if settings.sync_store_for_tests:
+        return _encode_sync(text)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_executor, _encode_sync, text)

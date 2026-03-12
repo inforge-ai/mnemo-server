@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from tests.conftest import remember
 
 
 class TestCapabilities:
@@ -16,9 +17,7 @@ class TestCapabilities:
             f"I discovered the importance of {domain} best practices.",
             f"Use linting tools to enforce {domain} code quality.",
         ]:
-            await client.post(f"/v1/agents/{alice['id']}/remember", json={
-                "text": text, "domain_tags": [domain],
-            })
+            await remember(client, alice["id"], text, domain_tags=[domain])
         view = (await client.post(f"/v1/agents/{alice['id']}/views", json={
             "name": f"{domain}-skills",
             "atom_filter": {"domain_tags": [domain]},
@@ -94,14 +93,8 @@ class TestCapabilities:
         alice, bob = two_agents
 
         # Alice stores python AND finance memories
-        await client.post(f"/v1/agents/{alice['id']}/remember", json={
-            "text": "Always use virtualenv for Python isolation.",
-            "domain_tags": ["python"],
-        })
-        await client.post(f"/v1/agents/{alice['id']}/remember", json={
-            "text": "Diversify bond portfolios to reduce interest rate risk.",
-            "domain_tags": ["finance"],
-        })
+        await remember(client, alice["id"], "Always use virtualenv for Python isolation.", domain_tags=["python"])
+        await remember(client, alice["id"], "Diversify bond portfolios to reduce interest rate risk.", domain_tags=["finance"])
 
         # View is scoped to python only
         view = (await client.post(f"/v1/agents/{alice['id']}/views", json={
@@ -142,9 +135,7 @@ class TestCapabilities:
     async def test_recall_shared_expired_capability(self, client, two_agents):
         alice, bob = two_agents
         for text in ["Use linting to enforce code quality.", "I ran the linter today."]:
-            await client.post(f"/v1/agents/{alice['id']}/remember", json={
-                "text": text, "domain_tags": ["python"],
-            })
+            await remember(client, alice["id"], text, domain_tags=["python"])
         view = (await client.post(f"/v1/agents/{alice['id']}/views", json={
             "name": "short-lived",
             "atom_filter": {"domain_tags": ["python"]},
