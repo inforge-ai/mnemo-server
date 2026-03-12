@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.26.0",
     "click>=8.3.1",
     "mnemo-client",
+    "anthropic>=0.84.0",
 ]
 
 [project.optional-dependencies]
