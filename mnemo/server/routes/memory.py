@@ -49,7 +49,6 @@ async def recall(agent_id: str, body: RetrieveRequest, operator=Depends(get_curr
             conn=conn,
             agent_id=agent_uuid,
             query=body.query,
-            atom_types=body.atom_types,
             domain_tags=body.domain_tags,
             min_confidence=body.min_confidence,
             min_similarity=body.min_similarity,

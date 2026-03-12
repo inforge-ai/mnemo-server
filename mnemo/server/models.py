@@ -65,7 +65,6 @@ class AtomResponse(BaseModel):
 
 class RetrieveRequest(BaseModel):
     query: str
-    atom_types: Optional[list[str]] = None
     domain_tags: Optional[list[str]] = None
     min_confidence: float = 0.1
     min_similarity: float = Field(

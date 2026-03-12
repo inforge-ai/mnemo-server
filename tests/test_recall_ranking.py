@@ -103,3 +103,33 @@ class TestPostRetrievalDedup:
         assert resp.status_code == 200
         atoms = resp.json()["atoms"]
         assert len(atoms) == 2
+
+
+class TestNoTypeFiltering:
+    """Verify that atom_type is not used in retrieval filtering."""
+
+    @pytest.mark.asyncio
+    async def test_recall_returns_all_types(self, client, agent):
+        """Recall should return atoms regardless of type."""
+        aid = agent["id"]
+        await client.post(f"/v1/agents/{aid}/atoms", json={
+            "atom_type": "episodic",
+            "text_content": "I observed the sky is blue today",
+        })
+        await client.post(f"/v1/agents/{aid}/atoms", json={
+            "atom_type": "procedural",
+            "text_content": "Always check the sky color before going outside",
+        })
+
+        resp = await client.post(f"/v1/agents/{aid}/recall", json={
+            "query": "sky color",
+            "max_results": 10,
+            "expand_graph": False,
+            "similarity_drop_threshold": None,
+        })
+        assert resp.status_code == 200
+        atoms = resp.json()["atoms"]
+        assert len(atoms) == 2
+        types = {a["atom_type"] for a in atoms}
+        assert "episodic" in types
+        assert "procedural" in types

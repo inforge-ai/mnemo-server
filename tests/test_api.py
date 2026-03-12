@@ -174,22 +174,6 @@ class TestRecall:
         data = resp.json()
         assert data["total_retrieved"] == 0
 
-    async def test_recall_filters_by_atom_type(self, client, agent):
-        await client.post(f"/v1/agents/{agent['id']}/remember", json={
-            "text": (
-                "Indexes speed up queries significantly. "
-                "Always add indexes on foreign keys."
-            ),
-        })
-        resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
-            "query": "database indexes",
-            "atom_types": ["procedural"],
-        })
-        assert resp.status_code == 200
-        primary = resp.json()["atoms"]
-        for atom in primary:
-            assert atom["atom_type"] == "procedural"
-
     async def test_recall_respects_agent_isolation(self, client, two_agents):
         alice, bob = two_agents
         await client.post(f"/v1/agents/{alice['id']}/remember", json={

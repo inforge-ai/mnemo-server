@@ -60,7 +60,6 @@ def _atom_row_to_dict(row: asyncpg.Record) -> dict:
 async def _check_duplicate(
     conn: asyncpg.Connection,
     agent_id: UUID,
-    atom_type: str,
     embedding: list[float],
 ) -> asyncpg.Record | None:
     """Return the most similar existing active atom if similarity > threshold."""
@@ -71,15 +70,13 @@ async def _check_duplicate(
                1 - (embedding <=> $1::vector) AS similarity
         FROM atoms
         WHERE agent_id = $2
-          AND atom_type = $3
           AND is_active = true
-          AND 1 - (embedding <=> $1::vector) > $4
+          AND 1 - (embedding <=> $1::vector) > $3
         ORDER BY similarity DESC
         LIMIT 1
         """,
         embedding,
         agent_id,
-        atom_type,
         threshold,
     )
     return row
@@ -346,7 +343,7 @@ async def store_from_text(
 
     for atom in decomposed:
         embedding = await encode(atom.text)
-        duplicate = await _check_duplicate(conn, agent_id, atom.atom_type, embedding)
+        duplicate = await _check_duplicate(conn, agent_id, embedding)
 
         if duplicate:
             await _merge_duplicate(
@@ -431,7 +428,7 @@ async def store_explicit(
         alpha, beta = (4.0, 2.0)
 
     embedding = await encode(text_content)
-    duplicate = await _check_duplicate(conn, agent_id, atom_type, embedding)
+    duplicate = await _check_duplicate(conn, agent_id, embedding)
 
     if duplicate:
         await _merge_duplicate(
@@ -461,7 +458,6 @@ async def retrieve(
     conn: asyncpg.Connection,
     agent_id: UUID,
     query: str,
-    atom_types: list[str] | None,
     domain_tags: list[str] | None,
     min_confidence: float,
     min_similarity: float,
@@ -503,14 +499,12 @@ async def retrieve(
         FROM atoms
         WHERE agent_id = $2
           AND is_active = true
-          AND ($3::text[] IS NULL OR atom_type = ANY($3))
-          AND ($4::text[] IS NULL OR domain_tags && $4)
+          AND ($3::text[] IS NULL OR domain_tags && $3)
         ORDER BY cosine_sim DESC
-        LIMIT $5
+        LIMIT $4
         """,
         embedding,
         agent_id,
-        atom_types,
         domain_tags,
         over_fetch,
     )
