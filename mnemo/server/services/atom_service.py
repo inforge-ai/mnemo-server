@@ -22,6 +22,7 @@ RETRIEVE FLOW (via /recall):
 
 import json
 import logging
+import os
 from uuid import UUID
 
 import asyncpg
@@ -29,7 +30,7 @@ import numpy as np
 
 from ..config import settings
 from ..embeddings import encode
-from ..decomposer import decompose, infer_edges, DecomposedAtom
+from ..decomposer import decompose as regex_decompose, infer_edges, DecomposedAtom
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,14 @@ HALF_LIVES: dict[str, float] = {
     "procedural": settings.decay_procedural,
     "relational": settings.decay_relational,
 }
+
+
+async def _decompose(text: str, domain_tags: list[str] | None = None) -> list[DecomposedAtom]:
+    """Use LLM decomposer if ANTHROPIC_API_KEY is set, else fall back to regex."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        from ..llm_decomposer import llm_decompose
+        return await llm_decompose(text)
+    return regex_decompose(text, domain_tags)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -113,6 +122,7 @@ async def _insert_atom(
     domain_tags: list[str],
     source_type: str = "direct_experience",
     source_ref: UUID | None = None,
+    decomposer_version: str = "regex_v1",
 ) -> asyncpg.Record:
     half_life = HALF_LIVES.get(atom.atom_type, 30.0)
     row = await conn.fetchrow(
@@ -121,8 +131,8 @@ async def _insert_atom(
             agent_id, atom_type, text_content, structured, embedding,
             confidence_alpha, confidence_beta,
             source_type, source_ref,
-            domain_tags, decay_half_life_days, decay_type
-        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential')
+            domain_tags, decay_half_life_days, decay_type, decomposer_version
+        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12)
         RETURNING
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
@@ -144,6 +154,7 @@ async def _insert_atom(
         source_ref,
         domain_tags,
         half_life,
+        decomposer_version,
     )
     return row
 
@@ -250,6 +261,37 @@ def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = N
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+async def _create_similarity_edges(
+    conn: asyncpg.Connection,
+    stored_ids: list[UUID],
+    embeddings: list[list[float]],
+    threshold: float = 0.7,
+) -> int:
+    """Create 'related' edges between atoms from the same /remember call
+    that have cosine similarity above threshold. Preserves graph connectivity
+    without depending on type classification."""
+    edges_created = 0
+    for i in range(len(stored_ids)):
+        for j in range(i + 1, len(stored_ids)):
+            sim = _cosine_sim(embeddings[i], embeddings[j])
+            if sim > threshold:
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO edges (source_id, target_id, edge_type, weight)
+                        VALUES ($1, $2, 'related', $3)
+                        ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
+                        """,
+                        stored_ids[i],
+                        stored_ids[j],
+                        round(sim, 3),
+                    )
+                    edges_created += 1
+                except Exception:
+                    pass
+    return edges_created
+
+
 async def store_from_text(
     conn: asyncpg.Connection,
     agent_id: UUID,
@@ -260,12 +302,15 @@ async def store_from_text(
     Decompose free text into atoms, deduplicate, store, and link.
     Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N}
     """
-    decomposed = decompose(text, domain_tags)
+    decomposed = await _decompose(text, domain_tags)
     if not decomposed:
         return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0}
 
+    decomposer_version = "haiku_v1" if os.environ.get("ANTHROPIC_API_KEY") else "regex_v1"
+
     stored_ids: list[UUID] = []
     stored_rows: list[asyncpg.Record] = []
+    stored_embeddings: list[list[float]] = []
     atoms_created = 0
     duplicates_merged = 0
 
@@ -285,35 +330,43 @@ async def store_from_text(
             stored_ids.append(duplicate["id"])
             row = await _get_atom_row(conn, duplicate["id"], agent_id)
             stored_rows.append(row)
+            stored_embeddings.append(embedding)
             duplicates_merged += 1
         else:
-            row = await _insert_atom(conn, agent_id, atom, embedding, domain_tags, atom.source_type)
+            row = await _insert_atom(
+                conn, agent_id, atom, embedding, domain_tags,
+                atom.source_type, decomposer_version=decomposer_version,
+            )
             stored_ids.append(row["id"])
             stored_rows.append(row)
+            stored_embeddings.append(embedding)
             atoms_created += 1
 
-    # Create edges between atoms in this /remember call
-    edges_created = 0
-    edge_pairs = infer_edges(decomposed)
-    for src_idx, tgt_idx, edge_type in edge_pairs:
-        src_id = stored_ids[src_idx]
-        tgt_id = stored_ids[tgt_idx]
-        if src_id == tgt_id:
-            continue
-        try:
-            await conn.execute(
-                """
-                INSERT INTO edges (source_id, target_id, edge_type, weight)
-                VALUES ($1, $2, $3, 1.0)
-                ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
-                """,
-                src_id,
-                tgt_id,
-                edge_type,
-            )
-            edges_created += 1
-        except Exception:
-            logger.exception("Failed to create edge %s -> %s (%s)", src_id, tgt_id, edge_type)
+    # Create similarity-based edges between atoms in this /remember call
+    edges_created = await _create_similarity_edges(conn, stored_ids, stored_embeddings)
+
+    # Also create arc→non-arc 'summarises' edges (arc atoms need structural links)
+    arc_idxs = [i for i, a in enumerate(decomposed) if a.source_type == "arc"]
+    non_arc_idxs = [i for i, a in enumerate(decomposed) if a.source_type != "arc"]
+    for arc_idx in arc_idxs:
+        for other_idx in non_arc_idxs:
+            src_id = stored_ids[arc_idx]
+            tgt_id = stored_ids[other_idx]
+            if src_id == tgt_id:
+                continue
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO edges (source_id, target_id, edge_type, weight)
+                    VALUES ($1, $2, 'summarises', 1.0)
+                    ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
+                    """,
+                    src_id,
+                    tgt_id,
+                )
+                edges_created += 1
+            except Exception:
+                pass
 
     return {
         "atoms": [_row_to_atom_response(r) for r in stored_rows],

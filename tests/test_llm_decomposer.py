@@ -135,3 +135,25 @@ class TestLLMDecomposer:
         system_msg = call_kwargs["system"][0]
         assert system_msg["cache_control"] == {"type": "ephemeral"}
         assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+
+
+class TestDecomposerIntegration:
+    """Test that the correct decomposer is selected based on ANTHROPIC_API_KEY."""
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_regex_without_api_key(self):
+        """Without ANTHROPIC_API_KEY, _decompose uses the regex decomposer."""
+        from mnemo.server.services.atom_service import _decompose
+        import os
+
+        # Ensure no API key
+        key = os.environ.pop("ANTHROPIC_API_KEY", None)
+        try:
+            atoms = await _decompose("The sky is blue.")
+            assert len(atoms) >= 1
+            # Regex decomposer returns DecomposedAtom objects
+            assert hasattr(atoms[0], "text")
+            assert hasattr(atoms[0], "atom_type")
+        finally:
+            if key:
+                os.environ["ANTHROPIC_API_KEY"] = key
