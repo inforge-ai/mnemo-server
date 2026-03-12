@@ -18,7 +18,11 @@ _executor = ThreadPoolExecutor(max_workers=2)
 def _get_model():
     from sentence_transformers import SentenceTransformer
     logger.info("Loading embedding model %s (once at startup)", settings.embedding_model)
-    model = SentenceTransformer(settings.embedding_model, local_files_only=True)
+    try:
+        model = SentenceTransformer(settings.embedding_model, local_files_only=True)
+    except OSError:
+        logger.info("Model not cached locally, downloading %s", settings.embedding_model)
+        model = SentenceTransformer(settings.embedding_model)
     logger.info("Embedding model ready")
     return model
 

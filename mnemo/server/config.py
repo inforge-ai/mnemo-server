@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     database_url: str = "postgresql://mnemo:mnemo@localhost:5432/mnemo"
-    embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_model: str = "thenlper/gte-small"
     embedding_dim: int = 384
     max_retrieval_results: int = 50
     default_retrieval_limit: int = 10
