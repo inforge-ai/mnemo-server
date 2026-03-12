@@ -70,7 +70,12 @@ async def haiku_decompose(client: AsyncAnthropic, text: str) -> list[dict]:
         }],
         messages=[{"role": "user", "content": text}],
     )
-    return json.loads(response.content[0].text)
+    raw = response.content[0].text
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]  # remove opening ```json line
+        raw = raw.rsplit("```", 1)[0]  # remove closing ```
+    return json.loads(raw.strip())
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:

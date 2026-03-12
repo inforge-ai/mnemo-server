@@ -84,7 +84,12 @@ async def llm_decompose(text: str) -> list[DecomposedAtom]:
         messages=[{"role": "user", "content": text}],
     )
 
-    raw = json.loads(response.content[0].text)
+    raw_text = response.content[0].text
+    # Strip markdown code fences if the model wraps JSON in ```
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("\n", 1)[1]
+        raw_text = raw_text.rsplit("```", 1)[0]
+    raw = json.loads(raw_text.strip())
     atoms = []
     for item in raw:
         alpha, beta = _confidence_to_beta(item.get("confidence", 0.5))
