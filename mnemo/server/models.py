@@ -68,7 +68,12 @@ class RetrieveRequest(BaseModel):
     atom_types: Optional[list[str]] = None
     domain_tags: Optional[list[str]] = None
     min_confidence: float = 0.1
-    min_similarity: float = 0.2
+    min_similarity: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cosine similarity floor. Consider raising to 0.3 after LLM decomposer ships and similarity distribution shifts upward.",
+    )
     max_results: int = 10
     expand_graph: bool = True
     expansion_depth: int = 2
