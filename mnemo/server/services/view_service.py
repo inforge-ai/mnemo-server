@@ -31,6 +31,68 @@ from ..embeddings import encode
 logger = logging.getLogger(__name__)
 
 
+# ── Revocation ────────────────────────────────────────────────────────────────
+
+async def revoke_shared_view(
+    conn: asyncpg.Connection,
+    grantor_id: UUID,
+    capability_id: UUID,
+) -> dict | None:
+    """Revoke a shared view capability. Idempotent."""
+    row = await conn.fetchrow(
+        """
+        SELECT id, view_id, grantee_id, revoked, revoked_at
+        FROM capabilities
+        WHERE id = $1 AND grantor_id = $2
+        """,
+        capability_id,
+        grantor_id,
+    )
+    if not row:
+        return None  # caller returns 404
+
+    was_already_revoked = row["revoked"]
+
+    if not was_already_revoked:
+        await conn.execute(
+            """
+            UPDATE capabilities
+            SET revoked = true, revoked_at = now()
+            WHERE id = $1
+            """,
+            capability_id,
+        )
+
+    # Audit log
+    await conn.execute(
+        """
+        INSERT INTO access_log (agent_id, action, target_id, metadata)
+        VALUES ($1, 'revoke_shared', $2, $3)
+        """,
+        grantor_id,
+        row["view_id"],
+        json.dumps({
+            "capability_id": str(capability_id),
+            "grantee_id": str(row["grantee_id"]),
+            "was_already_revoked": was_already_revoked,
+        }),
+    )
+
+    updated = await conn.fetchrow(
+        "SELECT revoked_at FROM capabilities WHERE id = $1",
+        capability_id,
+    )
+
+    return {
+        "capability_id": capability_id,
+        "view_id": row["view_id"],
+        "grantee_id": row["grantee_id"],
+        "revoked": True,
+        "revoked_at": updated["revoked_at"],
+        "was_already_revoked": was_already_revoked,
+    }
+
+
 # ── Snapshot creation ─────────────────────────────────────────────────────────
 
 async def create_snapshot(

@@ -187,6 +187,25 @@ class CapabilityResponse(BaseModel):
     expires_at: Optional[datetime]
     created_at: datetime
 
+class RevokeResponse(BaseModel):
+    capability_id: UUID
+    view_id: UUID
+    grantee_id: UUID
+    revoked: bool
+    revoked_at: datetime
+    was_already_revoked: bool
+
+class OutboundCapabilityResponse(BaseModel):
+    capability_id: UUID
+    view_id: UUID
+    view_name: str
+    grantee_id: UUID
+    grantee_address: Optional[str] = None
+    permissions: list[str]
+    revoked: bool
+    revoked_at: Optional[datetime] = None
+    granted_at: datetime
+
 # ── Stats ──
 
 class AgentStats(BaseModel):

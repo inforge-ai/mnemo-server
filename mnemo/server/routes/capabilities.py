@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..auth import get_current_operator, verify_agent_ownership
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
-from ..models import CapabilityResponse, GrantCreate
+from ..models import CapabilityResponse, GrantCreate, OutboundCapabilityResponse, RevokeResponse
+from ..services import view_service
 
 router = APIRouter(tags=["capabilities"])
 
@@ -121,7 +122,7 @@ async def revoke_capability(cap_id: UUID, operator=Depends(get_current_operator)
                 JOIN cap_tree ct ON c.parent_cap_id = ct.id
                 WHERE c.revoked = false
             )
-            UPDATE capabilities SET revoked = true
+            UPDATE capabilities SET revoked = true, revoked_at = now()
             WHERE id IN (SELECT id FROM cap_tree)
             RETURNING id
             """,
@@ -140,6 +141,73 @@ async def revoke_capability(cap_id: UUID, operator=Depends(get_current_operator)
         )
 
     return {"revoked": True, "cascade_revoked": revoked_count}
+
+
+@router.post(
+    "/agents/{agent_id}/capabilities/{capability_id}/revoke",
+    response_model=RevokeResponse,
+)
+async def revoke_shared_view(
+    agent_id: str, capability_id: UUID, operator=Depends(get_current_operator)
+):
+    """Revoke a shared view capability. Idempotent — revoking already-revoked returns success."""
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
+    async with get_conn() as conn:
+        await _require_active_agent(conn, agent_uuid)
+        result = await view_service.revoke_shared_view(
+            conn=conn,
+            grantor_id=agent_uuid,
+            capability_id=capability_id,
+        )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Capability not found or not owned by this agent")
+    return result
+
+
+@router.get(
+    "/agents/{agent_id}/capabilities",
+    response_model=list[OutboundCapabilityResponse],
+)
+async def list_outbound_capabilities(
+    agent_id: str,
+    direction: str = "outbound",
+    operator=Depends(get_current_operator),
+):
+    """List capabilities granted by this agent (outbound)."""
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
+    async with get_conn() as conn:
+        await _require_active_agent(conn, agent_uuid)
+        rows = await conn.fetch(
+            """
+            SELECT c.id AS capability_id, c.view_id, v.name AS view_name,
+                   c.grantee_id, aa.address AS grantee_address,
+                   c.permissions, c.revoked, c.revoked_at, c.created_at AS granted_at
+            FROM capabilities c
+            JOIN views v ON v.id = c.view_id
+            LEFT JOIN agent_addresses aa ON aa.agent_id = c.grantee_id
+            WHERE c.grantor_id = $1
+            ORDER BY c.created_at DESC
+            """,
+            agent_uuid,
+        )
+    return [
+        {
+            "capability_id": r["capability_id"],
+            "view_id": r["view_id"],
+            "view_name": r["view_name"],
+            "grantee_id": r["grantee_id"],
+            "grantee_address": r["grantee_address"],
+            "permissions": list(r["permissions"]),
+            "revoked": r["revoked"],
+            "revoked_at": r["revoked_at"],
+            "granted_at": r["granted_at"],
+        }
+        for r in rows
+    ]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

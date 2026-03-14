@@ -152,6 +152,7 @@ CREATE TABLE capabilities (
     grantee_id      UUID NOT NULL REFERENCES agents(id),
     permissions     TEXT[] NOT NULL DEFAULT '{read}',
     revoked         BOOLEAN NOT NULL DEFAULT false,
+    revoked_at      TIMESTAMPTZ DEFAULT NULL,
     parent_cap_id   UUID REFERENCES capabilities(id),
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -277,7 +278,7 @@ BEGIN
         JOIN cap_tree ct ON c.parent_cap_id = ct.id
         WHERE c.revoked = false
     )
-    UPDATE capabilities SET revoked = true
+    UPDATE capabilities SET revoked = true, revoked_at = now()
     WHERE id IN (SELECT id FROM cap_tree);
 
     GET DIAGNOSTICS revoked_count = ROW_COUNT;
