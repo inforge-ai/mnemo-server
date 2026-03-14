@@ -8,7 +8,7 @@ import pytest
 import respx
 import httpx
 
-from mnemo_client import (
+from mnemo.client import (
     MnemoClient,
     MnemoClientSync,
     MnemoAuthError,
