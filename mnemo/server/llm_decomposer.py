@@ -24,10 +24,16 @@ Rules:
 - Each atom should be ONE coherent claim, fact, or observation
 - Preserve specificity — don't over-generalise
 - Don't split tightly coupled facts into separate atoms
-- If the text describes an event, capture the event as one atom
-- If the text states a general fact, capture it as one atom
-- Return JSON array of objects: {"text": "...", "confidence": 0.0-1.0}
+- Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0}
 - Confidence should reflect how certain/well-supported the claim is in the source text
+
+Types:
+- episodic: A specific experience, event, or observation tied to a moment in time.
+  "I discovered that row 847 had a string in the account_id column."
+- semantic: A general fact about how something works, independent of any specific event.
+  "pandas.read_csv silently coerces mixed-type columns."
+- procedural: A rule, practice, or instruction for future behavior.
+  "Always specify dtype explicitly when using read_csv."
 
 Return ONLY the JSON array, no other text."""
 
@@ -66,8 +72,7 @@ async def llm_decompose(text: str) -> list[DecomposedAtom]:
     """Decompose text into atoms using Haiku with prompt caching.
 
     Returns DecomposedAtom list compatible with the existing store pipeline.
-    All atoms are typed 'semantic' — the LLM focuses on content quality,
-    not type classification (which Task 4 removes from retrieval anyway).
+    The LLM classifies each atom as episodic, semantic, or procedural.
     """
     if not text or not text.strip():
         return []
@@ -93,9 +98,12 @@ async def llm_decompose(text: str) -> list[DecomposedAtom]:
     atoms = []
     for item in raw:
         alpha, beta = _confidence_to_beta(item.get("confidence", 0.5))
+        atom_type = item.get("type", "semantic")
+        if atom_type not in ("episodic", "semantic", "procedural"):
+            atom_type = "semantic"
         atoms.append(DecomposedAtom(
             text=item["text"],
-            atom_type="semantic",
+            atom_type=atom_type,
             confidence_alpha=alpha,
             confidence_beta=beta,
             source_type="direct_experience",

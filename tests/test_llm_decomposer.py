@@ -16,8 +16,8 @@ class TestLLMDecomposer:
         """LLM decomposer returns DecomposedAtom list from API response."""
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=json.dumps([
-            {"text": "Mnemo uses Beta distributions for confidence", "confidence": 0.9},
-            {"text": "Expected confidence is alpha/(alpha+beta)", "confidence": 0.85},
+            {"text": "Mnemo uses Beta distributions for confidence", "type": "semantic", "confidence": 0.9},
+            {"text": "Expected confidence is alpha/(alpha+beta)", "type": "semantic", "confidence": 0.85},
         ]))]
 
         mock_client = AsyncMock()
@@ -135,6 +135,107 @@ class TestLLMDecomposer:
         system_msg = call_kwargs["system"][0]
         assert system_msg["cache_control"] == {"type": "ephemeral"}
         assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+
+
+class TestTypeClassification:
+    """Tests for LLM type classification (episodic/semantic/procedural)."""
+
+    @pytest.mark.asyncio
+    async def test_type_classification_procedural(self):
+        """Procedural type is mapped from LLM response."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Always run migrations before deploying", "type": "procedural", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            atoms = await llm_decompose("Always run migrations before deploying.")
+
+        assert atoms[0].atom_type == "procedural"
+
+    @pytest.mark.asyncio
+    async def test_type_classification_episodic(self):
+        """Episodic type is mapped from LLM response."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "I found a deadlock when running the batch job yesterday", "type": "episodic", "confidence": 0.8},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            atoms = await llm_decompose("I found a deadlock when running the batch job yesterday.")
+
+        assert atoms[0].atom_type == "episodic"
+
+    @pytest.mark.asyncio
+    async def test_type_classification_semantic(self):
+        """Semantic type is mapped from LLM response."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "PostgreSQL uses MVCC for concurrent access", "type": "semantic", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            atoms = await llm_decompose("PostgreSQL uses MVCC for concurrent access.")
+
+        assert atoms[0].atom_type == "semantic"
+
+    @pytest.mark.asyncio
+    async def test_mixed_input_produces_mixed_types(self):
+        """Mixed input returns atoms with at least two distinct types."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "I discovered that row 847 had a string in the account_id column", "type": "episodic", "confidence": 0.85},
+            {"text": "pandas.read_csv silently coerces mixed-type columns", "type": "semantic", "confidence": 0.9},
+            {"text": "Always specify dtype explicitly when using read_csv", "type": "procedural", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            atoms = await llm_decompose(
+                "I discovered that row 847 had a string in the account_id column. "
+                "pandas.read_csv silently coerces mixed-type columns. "
+                "Always specify dtype explicitly when using read_csv."
+            )
+
+        types = {a.atom_type for a in atoms}
+        assert len(types) >= 2
+
+    @pytest.mark.asyncio
+    async def test_invalid_type_falls_back_to_semantic(self):
+        """Invalid type string falls back to semantic."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Some fact", "type": "declarative", "confidence": 0.7},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            atoms = await llm_decompose("Some fact")
+
+        assert atoms[0].atom_type == "semantic"
+
+    @pytest.mark.asyncio
+    async def test_missing_type_falls_back_to_semantic(self):
+        """Missing type field falls back to semantic."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Some fact", "confidence": 0.7},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            atoms = await llm_decompose("Some fact")
+
+        assert atoms[0].atom_type == "semantic"
 
 
 class TestDecomposerIntegration:
