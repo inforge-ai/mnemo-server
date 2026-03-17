@@ -1,15 +1,24 @@
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from .database import create_pool, close_pool, set_pool
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from .embeddings import warmup
     await asyncio.get_event_loop().run_in_executor(None, warmup)
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        logger.info("LLM decomposer active (Haiku)")
+    else:
+        logger.warning("ANTHROPIC_API_KEY not set — falling back to regex decomposer")
 
     pool = await create_pool()
     set_pool(pool)
