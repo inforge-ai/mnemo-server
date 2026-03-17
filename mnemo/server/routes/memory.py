@@ -23,6 +23,11 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
     await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
+        # Resolve operator_id for decomposer usage logging
+        op_row = await conn.fetchrow(
+            "SELECT operator_id FROM agents WHERE id = $1", agent_uuid,
+        )
+        operator_id = op_row["operator_id"] if op_row else None
 
     store_id = uuid4()
     async with get_conn() as conn:
@@ -33,6 +38,7 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
         agent_id=agent_uuid,
         text=body.text,
         domain_tags=body.domain_tags,
+        operator_id=operator_id,
     )
     if settings.sync_store_for_tests:
         await coro

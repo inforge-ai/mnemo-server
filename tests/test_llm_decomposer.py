@@ -13,7 +13,7 @@ class TestLLMDecomposer:
 
     @pytest.mark.asyncio
     async def test_basic_decomposition(self):
-        """LLM decomposer returns DecomposedAtom list from API response."""
+        """LLM decomposer returns DecomposerResult with atoms from API response."""
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=json.dumps([
             {"text": "Mnemo uses Beta distributions for confidence", "type": "semantic", "confidence": 0.9},
@@ -24,8 +24,9 @@ class TestLLMDecomposer:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("Mnemo uses Beta distributions for confidence. Expected confidence is alpha/(alpha+beta).")
+            result = await llm_decompose("Mnemo uses Beta distributions for confidence. Expected confidence is alpha/(alpha+beta).")
 
+        atoms = result.atoms
         assert len(atoms) == 2
         assert atoms[0].text == "Mnemo uses Beta distributions for confidence"
         assert atoms[0].atom_type == "semantic"
@@ -44,10 +45,10 @@ class TestLLMDecomposer:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("This is certain")
+            result = await llm_decompose("This is certain")
 
-        assert atoms[0].confidence_alpha == 8.0
-        assert atoms[0].confidence_beta == 1.0
+        assert result.atoms[0].confidence_alpha == 8.0
+        assert result.atoms[0].confidence_beta == 1.0
 
     @pytest.mark.asyncio
     async def test_confidence_mapping_moderate(self):
@@ -60,10 +61,10 @@ class TestLLMDecomposer:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("A known fact")
+            result = await llm_decompose("A known fact")
 
-        assert atoms[0].confidence_alpha == 4.0
-        assert atoms[0].confidence_beta == 2.0
+        assert result.atoms[0].confidence_alpha == 4.0
+        assert result.atoms[0].confidence_beta == 2.0
 
     @pytest.mark.asyncio
     async def test_confidence_mapping_low(self):
@@ -76,10 +77,10 @@ class TestLLMDecomposer:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("Maybe this is true")
+            result = await llm_decompose("Maybe this is true")
 
-        assert atoms[0].confidence_alpha == 2.0
-        assert atoms[0].confidence_beta == 3.0
+        assert result.atoms[0].confidence_alpha == 2.0
+        assert result.atoms[0].confidence_beta == 3.0
 
     @pytest.mark.asyncio
     async def test_confidence_mapping_very_low(self):
@@ -92,20 +93,21 @@ class TestLLMDecomposer:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("I have no idea if this is right")
+            result = await llm_decompose("I have no idea if this is right")
 
-        assert atoms[0].confidence_alpha == 2.0
-        assert atoms[0].confidence_beta == 4.0
+        assert result.atoms[0].confidence_alpha == 2.0
+        assert result.atoms[0].confidence_beta == 4.0
 
     @pytest.mark.asyncio
     async def test_empty_input(self):
-        """Empty or whitespace input returns empty list without API call."""
+        """Empty or whitespace input returns empty DecomposerResult without API call."""
         mock_client = AsyncMock()
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("")
+            result = await llm_decompose("")
 
-        assert atoms == []
+        assert result.atoms == []
+        assert result.usage is None
         mock_client.messages.create.assert_not_called()
 
     @pytest.mark.asyncio
@@ -151,9 +153,9 @@ class TestTypeClassification:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("Always run migrations before deploying.")
+            result = await llm_decompose("Always run migrations before deploying.")
 
-        assert atoms[0].atom_type == "procedural"
+        assert result.atoms[0].atom_type == "procedural"
 
     @pytest.mark.asyncio
     async def test_type_classification_episodic(self):
@@ -166,9 +168,9 @@ class TestTypeClassification:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("I found a deadlock when running the batch job yesterday.")
+            result = await llm_decompose("I found a deadlock when running the batch job yesterday.")
 
-        assert atoms[0].atom_type == "episodic"
+        assert result.atoms[0].atom_type == "episodic"
 
     @pytest.mark.asyncio
     async def test_type_classification_semantic(self):
@@ -181,9 +183,9 @@ class TestTypeClassification:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("PostgreSQL uses MVCC for concurrent access.")
+            result = await llm_decompose("PostgreSQL uses MVCC for concurrent access.")
 
-        assert atoms[0].atom_type == "semantic"
+        assert result.atoms[0].atom_type == "semantic"
 
     @pytest.mark.asyncio
     async def test_mixed_input_produces_mixed_types(self):
@@ -198,13 +200,13 @@ class TestTypeClassification:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose(
+            result = await llm_decompose(
                 "I discovered that row 847 had a string in the account_id column. "
                 "pandas.read_csv silently coerces mixed-type columns. "
                 "Always specify dtype explicitly when using read_csv."
             )
 
-        types = {a.atom_type for a in atoms}
+        types = {a.atom_type for a in result.atoms}
         assert len(types) >= 2
 
     @pytest.mark.asyncio
@@ -218,9 +220,9 @@ class TestTypeClassification:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("Some fact")
+            result = await llm_decompose("Some fact")
 
-        assert atoms[0].atom_type == "semantic"
+        assert result.atoms[0].atom_type == "semantic"
 
     @pytest.mark.asyncio
     async def test_missing_type_falls_back_to_semantic(self):
@@ -233,9 +235,9 @@ class TestTypeClassification:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            atoms = await llm_decompose("Some fact")
+            result = await llm_decompose("Some fact")
 
-        assert atoms[0].atom_type == "semantic"
+        assert result.atoms[0].atom_type == "semantic"
 
 
 class TestDecomposerIntegration:
@@ -250,11 +252,11 @@ class TestDecomposerIntegration:
         # Ensure no API key
         key = os.environ.pop("ANTHROPIC_API_KEY", None)
         try:
-            atoms = await _decompose("The sky is blue.")
-            assert len(atoms) >= 1
+            result = await _decompose("The sky is blue.")
+            assert len(result.atoms) >= 1
             # Regex decomposer returns DecomposedAtom objects
-            assert hasattr(atoms[0], "text")
-            assert hasattr(atoms[0], "atom_type")
+            assert hasattr(result.atoms[0], "text")
+            assert hasattr(result.atoms[0], "atom_type")
         finally:
             if key:
                 os.environ["ANTHROPIC_API_KEY"] = key

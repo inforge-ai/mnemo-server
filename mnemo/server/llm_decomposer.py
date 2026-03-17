@@ -10,11 +10,19 @@ identical system prompts within a 5-minute window are served from cache.
 
 import json
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 
 from anthropic import AsyncAnthropic
 
 from .decomposer import DecomposedAtom
+
+
+@dataclass
+class DecomposerResult:
+    """Bundle of decomposed atoms + optional LLM usage metadata."""
+    atoms: list[DecomposedAtom]
+    usage: dict | None = None  # {model, input_tokens, output_tokens, cache_*}
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +76,14 @@ def _confidence_to_beta(confidence: float) -> tuple[float, float]:
         return (2.0, 4.0)
 
 
-async def llm_decompose(text: str) -> list[DecomposedAtom]:
+async def llm_decompose(text: str) -> DecomposerResult:
     """Decompose text into atoms using Haiku with prompt caching.
 
-    Returns DecomposedAtom list compatible with the existing store pipeline.
+    Returns DecomposerResult containing atoms + token usage metadata.
     The LLM classifies each atom as episodic, semantic, or procedural.
     """
     if not text or not text.strip():
-        return []
+        return DecomposerResult(atoms=[])
 
     client = _get_client()
     response = await client.messages.create(
@@ -88,6 +96,15 @@ async def llm_decompose(text: str) -> list[DecomposedAtom]:
         }],
         messages=[{"role": "user", "content": text}],
     )
+
+    # Extract usage metadata for cost tracking
+    usage = {
+        "model": response.model,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", None),
+        "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", None),
+    }
 
     raw_text = response.content[0].text
     # Strip markdown code fences if the model wraps JSON in ```
@@ -109,4 +126,4 @@ async def llm_decompose(text: str) -> list[DecomposedAtom]:
             source_type="direct_experience",
         ))
 
-    return atoms
+    return DecomposerResult(atoms=atoms, usage=usage)

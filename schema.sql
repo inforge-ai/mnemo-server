@@ -215,6 +215,23 @@ CREATE INDEX idx_store_failures_agent ON store_failures (agent_id, created_at);
 
 GRANT SELECT, INSERT, DELETE ON store_failures TO mnemo;
 
+-- Decomposer token usage (operator cost visibility)
+CREATE TABLE decomposer_usage (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    store_id                    UUID NOT NULL,
+    operator_id                 UUID NOT NULL,
+    agent_id                    UUID NOT NULL,
+    model                       TEXT NOT NULL,
+    input_tokens                INTEGER NOT NULL,
+    cache_creation_input_tokens INTEGER,
+    cache_read_input_tokens     INTEGER,
+    output_tokens               INTEGER NOT NULL
+);
+
+CREATE INDEX idx_decomposer_usage_operator_created
+    ON decomposer_usage (operator_id, created_at);
+
 -- ============================================================
 -- HELPER FUNCTIONS
 -- ============================================================
@@ -303,6 +320,9 @@ GRANT INSERT, SELECT
     TO mnemo;
 
 GRANT SELECT, INSERT, DELETE ON operations TO mnemo;
+
+-- Test DB needs DELETE for cleanup; prod only needs SELECT, INSERT
+GRANT SELECT, INSERT ON decomposer_usage TO mnemo;
 
 GRANT EXECUTE
     ON FUNCTION effective_confidence(float, float, text, float, timestamptz, timestamptz, integer)

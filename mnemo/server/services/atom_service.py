@@ -44,12 +44,14 @@ HALF_LIVES: dict[str, float] = {
 }
 
 
-async def _decompose(text: str, domain_tags: list[str] | None = None) -> list[DecomposedAtom]:
-    """Use LLM decomposer if ANTHROPIC_API_KEY is set, else fall back to regex."""
+async def _decompose(text: str, domain_tags: list[str] | None = None):
+    """Use LLM decomposer if ANTHROPIC_API_KEY is set, else fall back to regex.
+    Returns DecomposerResult (atoms + optional usage metadata)."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         from ..llm_decomposer import llm_decompose
         return await llm_decompose(text)
-    return regex_decompose(text, domain_tags)
+    from ..llm_decomposer import DecomposerResult
+    return DecomposerResult(atoms=regex_decompose(text, domain_tags))
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -320,25 +322,106 @@ async def _create_similarity_edges(
     return edges_created
 
 
+async def _create_cross_call_edges(
+    conn: asyncpg.Connection,
+    agent_id: UUID,
+    new_atom_id: UUID,
+    embedding: list[float],
+    exclude_ids: set[UUID],
+) -> int:
+    """Query existing atoms via ANN and create 'related' edges for any above threshold.
+
+    This connects atoms across /remember calls. Only creates edges — never merges
+    or updates existing atoms. See spec §1: "Edges Only, Not Merging".
+
+    Uses ORDER BY distance ASC (not computed similarity DESC) so pgvector can
+    use the ivfflat index. Threshold filtering is applied in Python.
+    """
+    threshold = settings.cross_call_edge_threshold
+    # Use the ivfflat-friendly ORDER BY pattern; over-fetch then filter by threshold
+    rows = await conn.fetch(
+        """
+        SELECT id, 1 - (embedding <=> $1::vector) AS similarity
+        FROM atoms
+        WHERE agent_id = $2
+          AND is_active = true
+          AND id != ALL($3::uuid[])
+        ORDER BY embedding <=> $1::vector
+        LIMIT 10
+        """,
+        embedding,
+        agent_id,
+        list(exclude_ids),
+    )
+
+    edges_created = 0
+    for row in rows:
+        if row["similarity"] < threshold:
+            continue
+        try:
+            await conn.execute(
+                """
+                INSERT INTO edges (source_id, target_id, edge_type, weight)
+                VALUES ($1, $2, 'related', $3)
+                ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
+                """,
+                new_atom_id,
+                row["id"],
+                round(row["similarity"], 3),
+            )
+            edges_created += 1
+        except Exception:
+            logger.debug("Failed to create cross-call edge %s -> %s", new_atom_id, row["id"], exc_info=True)
+    return edges_created
+
+
 async def store_from_text(
     conn: asyncpg.Connection,
     agent_id: UUID,
     text: str,
     domain_tags: list[str],
+    store_id: UUID | None = None,
+    operator_id: UUID | None = None,
 ) -> dict:
     """
     Decompose free text into atoms, deduplicate, store, and link.
     Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N}
     """
-    decomposed = await _decompose(text, domain_tags)
+    decomposer_result = await _decompose(text, domain_tags)
+    decomposed = decomposer_result.atoms
     if not decomposed:
         return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0}
+
+    # Log decomposer token usage if available
+    if decomposer_result.usage and store_id and operator_id:
+        usage = decomposer_result.usage
+        try:
+            await conn.execute(
+                """
+                INSERT INTO decomposer_usage (
+                    store_id, operator_id, agent_id, model,
+                    input_tokens, cache_creation_input_tokens,
+                    cache_read_input_tokens, output_tokens
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                store_id,
+                operator_id,
+                agent_id,
+                usage["model"],
+                usage["input_tokens"],
+                usage.get("cache_creation_input_tokens"),
+                usage.get("cache_read_input_tokens"),
+                usage["output_tokens"],
+            )
+        except Exception:
+            logger.warning("Failed to log decomposer usage for store %s", store_id, exc_info=True)
 
     decomposer_version = "haiku_v1" if os.environ.get("ANTHROPIC_API_KEY") else "regex_v1"
 
     stored_ids: list[UUID] = []
     stored_rows: list[asyncpg.Record] = []
     stored_embeddings: list[list[float]] = []
+    new_atom_indices: list[int] = []  # indices of newly inserted (not merged) atoms
     atoms_created = 0
     duplicates_merged = 0
 
@@ -370,6 +453,7 @@ async def store_from_text(
             stored_ids.append(row["id"])
             stored_rows.append(row)
             stored_embeddings.append(embedding)
+            new_atom_indices.append(len(stored_ids) - 1)
             atoms_created += 1
 
     # Create similarity-based edges between atoms in this /remember call
@@ -398,6 +482,16 @@ async def store_from_text(
             except Exception:
                 pass
 
+    # Cross-call edge inference: link NEW atoms to existing similar atoms
+    # from previous /remember calls. Edges only — no merging.
+    # Skip merged duplicates — they already exist in the DB and have their own edges.
+    current_call_ids = set(stored_ids)
+    for i in new_atom_indices:
+        cross_edges = await _create_cross_call_edges(
+            conn, agent_id, stored_ids[i], stored_embeddings[i], current_call_ids,
+        )
+        edges_created += cross_edges
+
     return {
         "atoms": [_row_to_atom_response(r) for r in stored_rows],
         "atoms_created": atoms_created,
@@ -412,6 +506,7 @@ async def store_background(
     agent_id: UUID,
     text: str,
     domain_tags: list[str],
+    operator_id: UUID | None = None,
 ) -> None:
     """Background task: decompose, embed, store atoms, and create edges.
 
@@ -421,7 +516,10 @@ async def store_background(
     """
     try:
         async with pool.acquire() as conn:
-            await store_from_text(conn, agent_id, text, domain_tags)
+            await store_from_text(
+                conn, agent_id, text, domain_tags,
+                store_id=store_id, operator_id=operator_id,
+            )
     except Exception:
         error_msg = traceback.format_exc()
         logger.error("Background store %s failed: %s", store_id, error_msg)

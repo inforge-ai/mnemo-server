@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     consolidation_interval_minutes: int = 60
     min_effective_confidence: float = 0.05
     duplicate_similarity_threshold: float = 0.90
+    cross_call_edge_threshold: float = 0.78
 
     # Default decay half-lives (days) by atom type
     decay_episodic: float = 14.0
