@@ -32,8 +32,8 @@ mnemo = "mnemo.cli:cli"
 [tool.uv]
 package = true
 
-[tool.uv.sources]
-mnemo-ai = { path = "../mnemo-client" }
+#[tool.uv.sources]
+#mnemo-ai = { path = "../mnemo-client" }
 
 [build-system]
 requires = ["hatchling"]
