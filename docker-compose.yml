@@ -1,0 +1,17 @@
+services:
+  mnemo-server:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    environment:
+      # Override the .env database URL to route through Docker's host gateway
+      - MNEMO_DATABASE_URL=${MNEMO_DOCKER_DATABASE_URL}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - hf-cache:/app/.cache
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
