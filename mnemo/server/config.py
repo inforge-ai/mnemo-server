@@ -2,7 +2,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://mnemo:mnemo@localhost:5432/mnemo"
+    database_url: str  # required — set MNEMO_DATABASE_URL in env or .env file
+    test_database_url: str = ""  # set MNEMO_TEST_DATABASE_URL for test suite
     embedding_model: str = "thenlper/gte-small"
     embedding_dim: int = 384
     max_retrieval_results: int = 50
@@ -39,6 +40,8 @@ class Settings(BaseSettings):
 
     class Config:
         env_prefix = "MNEMO_"
+        env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()

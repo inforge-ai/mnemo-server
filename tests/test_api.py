@@ -1,6 +1,6 @@
 """
 Integration tests for the Mnemo API.
-Requires a running PostgreSQL instance (uses the configured MNEMO_DATABASE_URL).
+Requires a running PostgreSQL instance (uses MNEMO_TEST_DATABASE_URL from .env).
 Tables are truncated before each test by the autouse clean_db fixture.
 """
 

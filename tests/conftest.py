@@ -15,14 +15,18 @@ Strategy:
 
 import os
 
-# Force test database BEFORE mnemo imports so Settings() picks it up at instantiation time.
-# This prevents tests from ever touching the production database.
-_TEST_DB = "postgresql://mnemo:mnemo@localhost:5432/mnemo_test"
-os.environ.setdefault("MNEMO_DATABASE_URL", _TEST_DB)
+# Override database_url with test_database_url so the test suite uses the test DB.
+# MNEMO_TEST_DATABASE_URL must be set in .env or environment.
+from dotenv import load_dotenv
+load_dotenv()
 
-# Force synchronous store mode so /remember completes storage inline.
-# Without this, background tasks can outlive the test and cause FK violations
-# or interleave with clean_db fixture setup for the next test.
+_test_url = os.environ.get("MNEMO_TEST_DATABASE_URL", "")
+if not _test_url:
+    raise RuntimeError(
+        "MNEMO_TEST_DATABASE_URL is not set. "
+        "Add it to your .env file, e.g.: MNEMO_TEST_DATABASE_URL=postgresql://mnemo:pw@localhost:5432/mnemo_test"
+    )
+os.environ["MNEMO_DATABASE_URL"] = _test_url
 os.environ.setdefault("MNEMO_SYNC_STORE_FOR_TESTS", "true")
 
 import asyncpg
@@ -36,7 +40,7 @@ from mnemo.server.config import settings
 # Hard guard: refuse to run if somehow pointed at a non-test database.
 assert "test" in settings.database_url, (
     f"Refusing to run tests against non-test database: {settings.database_url}\n"
-    "Set MNEMO_DATABASE_URL to a test database (must contain 'test' in the name)."
+    "Set MNEMO_TEST_DATABASE_URL to a database with 'test' in the name."
 )
 from mnemo.server.database import set_pool
 from mnemo.server.main import app
