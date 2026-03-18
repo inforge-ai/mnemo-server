@@ -474,7 +474,7 @@ async def test_consolidation_step_rollback(client, agent, pool):
 
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE atoms SET created_at = now() - interval '365 days', last_accessed = NULL WHERE agent_id = $1",
+            "UPDATE atoms SET created_at = now() - interval '3 years', last_accessed = NULL, access_count = 0 WHERE agent_id = $1",
             agent_id,
         )
 
