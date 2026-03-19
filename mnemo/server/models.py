@@ -150,6 +150,7 @@ class SharedViewResponse(BaseModel):
     grantor_id: Optional[UUID] = None
     source_address: Optional[str] = None
     granted_at: Optional[datetime] = None
+    trusted: bool = False
 
 class SharedRecallRequest(BaseModel):
     query: str

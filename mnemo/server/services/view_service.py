@@ -378,6 +378,24 @@ async def recall_shared(
     """
     embedding = await encode(query)
 
+    # Trust check: grantee must trust the grantor of this capability
+    trust_row = await conn.fetchrow(
+        """
+        SELECT 1 FROM capabilities c
+        JOIN agent_trust at ON at.agent_uuid = c.grantee_id
+                           AND at.trusted_sender_uuid = c.grantor_id
+        WHERE c.id = $1 AND c.grantee_id = $2
+        """,
+        capability_id,
+        grantee_id,
+    )
+    if not trust_row:
+        return {
+            "atoms": [],
+            "expanded_atoms": [],
+            "total_retrieved": 0,
+        }
+
     rows = await conn.fetch(
         """
         SELECT
@@ -504,6 +522,7 @@ async def recall_all_shared(
         JOIN views v ON v.id = c.view_id
         JOIN snapshot_atoms sa ON sa.view_id = v.id
         JOIN atoms a ON a.id = sa.atom_id
+        JOIN agent_trust at ON at.agent_uuid = c.grantee_id AND at.trusted_sender_uuid = c.grantor_id
         LEFT JOIN agent_addresses aa ON aa.agent_id = c.grantor_id
         WHERE c.grantee_id = $2
           AND c.revoked = false
