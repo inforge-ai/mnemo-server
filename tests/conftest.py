@@ -49,6 +49,7 @@ from mnemo.server.main import app
 # access_log is an immutable audit trail — mnemo user has no DELETE on it,
 # and it has no FK dependencies that block cleaning other tables.
 _CLEAN = """
+DELETE FROM agent_trust;
 DELETE FROM capabilities;
 DELETE FROM snapshot_atoms;
 DELETE FROM edges;

@@ -44,6 +44,24 @@ async def register_agent(body: AgentCreate, operator=Depends(get_current_operato
             address = None
             if op_row:
                 address = await create_address(conn, row["id"], body.name, op_row["username"], op_row["org"])
+
+                # Auto-seed symmetric trust rows for all agents in the same org
+                if op_row["org"]:
+                    await conn.execute(
+                        """
+                        INSERT INTO agent_trust (agent_uuid, trusted_sender_uuid)
+                        SELECT $1, a.id FROM agents a
+                        JOIN operators o ON o.id = a.operator_id
+                        WHERE o.org = $2 AND a.id != $1
+                        UNION ALL
+                        SELECT a.id, $1 FROM agents a
+                        JOIN operators o ON o.id = a.operator_id
+                        WHERE o.org = $2 AND a.id != $1
+                        ON CONFLICT DO NOTHING
+                        """,
+                        row["id"],
+                        op_row["org"],
+                    )
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail=f"Agent name '{body.name}' already exists")
     return _agent_row(row, address=address)

@@ -161,6 +161,19 @@ CREATE TABLE capabilities (
 CREATE INDEX idx_capabilities_grantee ON capabilities (grantee_id, revoked);
 CREATE INDEX idx_capabilities_view ON capabilities (view_id);
 
+-- Agent trust (directional: agent_uuid trusts trusted_sender_uuid)
+CREATE TABLE agent_trust (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_uuid          UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    trusted_sender_uuid UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    note                TEXT,
+    UNIQUE(agent_uuid, trusted_sender_uuid),
+    CHECK(agent_uuid != trusted_sender_uuid)
+);
+
+CREATE INDEX idx_agent_trust_agent ON agent_trust(agent_uuid);
+
 -- Access log (immutable audit trail)
 CREATE TABLE access_log (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -310,7 +323,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================================
 
 GRANT SELECT, INSERT, UPDATE, DELETE
-    ON operators, agents, atoms, edges, views, snapshot_atoms, capabilities, agent_addresses
+    ON operators, agents, atoms, edges, views, snapshot_atoms, capabilities, agent_addresses, agent_trust
     TO mnemo;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO mnemo;

@@ -141,11 +141,13 @@ async def list_shared_views(agent_id: str, operator=Depends(get_current_operator
                    COUNT(sa.atom_id) AS atom_count,
                    c.grantor_id,
                    c.created_at AS granted_at,
-                   aa.address AS source_address
+                   aa.address AS source_address,
+                   bool_or(at.id IS NOT NULL) AS trusted
             FROM capabilities c
             JOIN views v ON v.id = c.view_id
             LEFT JOIN snapshot_atoms sa ON sa.view_id = v.id
             LEFT JOIN agent_addresses aa ON aa.agent_id = c.grantor_id
+            LEFT JOIN agent_trust at ON at.agent_uuid = c.grantee_id AND at.trusted_sender_uuid = c.grantor_id
             WHERE c.grantee_id = $1
               AND c.revoked = false
               AND (c.expires_at IS NULL OR c.expires_at > now())
@@ -175,6 +177,7 @@ def _shared_view_row(row) -> dict:
         "grantor_id": row["grantor_id"],
         "source_address": row["source_address"],
         "granted_at": row["granted_at"],
+        "trusted": row["trusted"],
     }
 
 async def _require_active_agent(conn, agent_id: UUID):
