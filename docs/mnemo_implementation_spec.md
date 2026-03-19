@@ -48,9 +48,6 @@ The system consists of:
 3. **Decomposition service** that breaks free-text into typed atoms
 4. **Python client library** for agent integration
 5. **MCP server wrapper** for framework-agnostic discovery
-6. **Mock agent framework** for simulation and testing
-7. **Simulation harness** to run experiments
-
 Tech stack: Python 3.11+, FastAPI, asyncpg, pgvector, sentence-transformers
 (for embeddings), PostgreSQL 16+. Use `uv` for package management.
 
@@ -328,19 +325,12 @@ mnemo/
 ├── skills/
 │   ├── claude_skill.md       # SKILL.md for Claude Code agents
 │   └── openclaw_skill.md     # Skill file for OpenClaw/Moltbook agents
-├── simulation/
-│   ├── __init__.py
-│   ├── mock_agent.py         # MockAgent class (uses /remember)
-│   ├── personas.py           # Agent persona definitions
-│   ├── harness.py            # Simulation runner
-│   └── metrics.py            # Measurement and reporting
 ├── tests/
 │   ├── test_remember.py      # NEW: test decomposition pipeline
 │   ├── test_atoms.py
 │   ├── test_graph.py
 │   ├── test_views.py
 │   ├── test_decay.py         # NEW: test that decay affects retrieval
-│   └── test_simulation.py
 ├── pyproject.toml
 ├── docker-compose.yml
 └── README.md
@@ -1244,62 +1234,7 @@ class MnemoClient:
 
 ---
 
-## 4. Mock Agent Framework
-
-The mock agent framework is updated to use the `/remember` endpoint
-instead of explicit atom creation. The personas and simulation harness
-remain as specified in v0.1 with one change: the MockAgent's `tick()`
-method now uses `client.remember()` with natural-language text instead
-of calling `store_experience()`, `store_fact()`, and `store_procedure()`
-separately.
-
-```python
-# simulation/mock_agent.py (updated tick method)
-
-    async def tick(self):
-        """One cycle: recall context → do work → remember learnings."""
-        discovery = random.choice(self.persona["discoveries"])
-        params = discovery["params"]
-
-        # Phase 1: Recall relevant context
-        query = self._generate_text(discovery["semantic"], params)
-        context = await self.mnemo.recall(
-            agent_id=self.agent_id,
-            query=query,
-            min_confidence=0.1,
-            max_results=5,
-            expand_graph=True,
-        )
-        self.retrievals_done += 1
-        hit_count = len(context.get("atoms", []))
-        self.retrieval_hit_rates.append(min(hit_count / 5.0, 1.0))
-
-        # Phase 2: Remember learnings as natural text
-        # Combine episodic + semantic + procedural into one /remember call
-        memory_text = (
-            f"{self._generate_text(discovery['episodic'], params)}. "
-            f"{self._generate_text(discovery['semantic'], params)}. "
-            f"{self._generate_text(discovery['procedural'], params)}."
-        )
-
-        result = await self.mnemo.remember(
-            agent_id=self.agent_id,
-            text=memory_text,
-            domain_tags=random.sample(
-                self.domain_tags, k=min(2, len(self.domain_tags))
-            ),
-        )
-
-        self.atoms_stored += result.get("atoms_created", 0)
-        self.tick_count += 1
-        return result
-```
-
-The personas, harness, and metrics modules remain as in v0.1 (no changes needed).
-
----
-
-## 5. Skill Files (Deliverable)
+## 4. Skill Files (Deliverable)
 
 ### 5.1 Claude Code Skill (skills/claude_skill.md)
 
@@ -1392,7 +1327,6 @@ dev = [
 7. **Graph expansion** (1 hour — scope-bounded recursive CTE)
 8. **Stats endpoint** (30 min)
 9. **Client library** (1 hour)
-10. **Mock agents + simulation** (2 hours — uses `/remember`)
 11. **View creation + snapshot caching** (1 hour)
 12. **Skill export with markdown rendering** (1 hour)
 13. **Capabilities + grant/revoke + cascade** (1-2 hours)

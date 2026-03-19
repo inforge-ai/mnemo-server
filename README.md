@@ -23,7 +23,6 @@ All core phases are complete and passing 183 tests:
 | CLI (register-operator, create-agent, list-agents, new-key, whoami) | Done |
 | MCP server (Claude tool interface) | Done |
 | Multi-agent MCP support | Done |
-| Mock agent simulation framework | Done |
 
 Not yet built (v0.1 scope exclusions): rate limiting, live view subscriptions, LLM-based decomposition, contradiction detection, horizontal scaling, skill files, any UI.
 
@@ -202,7 +201,6 @@ mnemo/
 │   └── services/         # atom_service, graph_service, view_service, consolidation
 ├── client/mnemo_client.py  # async httpx client
 ├── mcp/mcp_server.py       # MCP wrapper for Claude
-├── simulation/             # mock agent framework for testing memory dynamics
 └── tests/
 ```
 

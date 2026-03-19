@@ -89,28 +89,6 @@ This means after a combined cluster+merge run, the generalised atom has only 1 e
 
 ---
 
-### 4. `test_simulation.py` — 13 tests
-
-Integration tests for the mock agent simulation framework.
-
-| Test | What it verifies |
-|---|---|
-| `test_mock_agent_tick_records_metrics` | Single tick increments tick_count, retrievals_done, populates retrieval_hit_rates. |
-| `test_mock_agent_run_n_ticks` | `run(5)` completes exactly 5 ticks. |
-| `test_mock_agent_metrics_dict` | `metrics()` returns dict with all expected keys and valid ranges. |
-| `test_mock_agent_generate_text` | All placeholders filled from params dict. |
-| `test_mock_agent_generate_text_unknown_placeholder` | Unknown placeholders left as `{name}` without error. |
-| `test_harness_setup_creates_agents` | `setup([P1, P2])` → 2 `MockAgent` objects with correct personas. |
-| `test_harness_run_completes_ticks` | `run(3)` → each agent has `tick_count == 3`. |
-| `test_harness_report_structure` | `report()` returns dict with agents/total_atoms/avg_hit_rate/timeline. |
-| `test_harness_stores_atoms_in_db` | After 5 ticks, DB query confirms atoms exist (count ≥ 0 — may be 0 if all deduplicated). |
-| `test_metrics_record_and_summary` | Accumulates ticks across agents; summary totals are correct. |
-| `test_metrics_hit_rate_by_agent` | `hit_rate_by_tick("alice")` filters correctly; no-arg returns all. |
-| `test_metrics_avg_hit_rate_empty` | Returns 0.0 (not ZeroDivisionError) on empty timeline. |
-| `test_all_personas_have_required_fields` | All 3 personas have correct top-level structure and non-empty param lists. |
-
-The simulation tests use a `_AsgiMnemoClient` adapter that wraps the test fixture's httpx `AsyncClient` to match the duck-typed interface expected by `MockAgent` and `SimulationHarness`. This avoids spinning up a real HTTP server in tests.
-
 ---
 
 ## Bugs Found and Fixed During Development
@@ -118,7 +96,6 @@ The simulation tests use a `_AsgiMnemoClient` adapter that wraps the test fixtur
 | Bug | Root cause | Fix |
 |---|---|---|
 | `assert r.status_code == 200` in consolidation tests | `/remember` returns 201 Created, not 200 OK | Changed assertions to `== 201` |
-| `AttributeError: 'UUID' object has no attribute 'replace'` in simulation test | `harness.agents[0].agent_id` is already a `UUID`; wrapping in `UUID()` again failed | Removed the redundant `UUID()` wrapper |
 | `assert edge_count >= 3` in cluster test (actual: 1) | Cluster step creates 3 edges, then merge step consolidates the 3 identical episodic atoms, leaving only 1 edge on the surviving atom | Changed assertion to `>= 1` with explanatory comment; documented the cluster+merge interaction |
 | FK violation during purge | `capabilities` table has `grantor_id`/`grantee_id` FKs without `ON DELETE CASCADE` | Added explicit `DELETE FROM capabilities WHERE grantor_id = ANY(ids) OR grantee_id = ANY(ids)` before agent delete |
 

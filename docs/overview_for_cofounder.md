@@ -187,7 +187,6 @@ As of this version, the following is fully built and tested (104 automated tests
 | REST API (full) | Complete |
 | Python client library | Complete |
 | MCP server (Claude Desktop / claude.ai integration) | Complete — 3 tools: remember, recall, stats |
-| Simulation framework (mock agents, scenarios) | Complete |
 
 ---
 

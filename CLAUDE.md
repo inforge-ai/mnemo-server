@@ -53,7 +53,6 @@ mnemo/
 │   └── services/         # atom_service, graph_service, view_service, consolidation
 ├── client/mnemo_client.py  # httpx async client
 ├── mcp/mcp_server.py       # MCP wrapper
-├── simulation/             # mock_agent, personas, harness, metrics
 └── tests/
 ```
 

@@ -396,7 +396,6 @@ When disabled, all requests succeed with an anonymous operator sentinel.
 | Stats endpoint | **Implemented** | Extended with arc_atoms count |
 | Client library | **Implemented** | Extended beyond spec with auth support, shared recall methods |
 | MCP server | **Partially implemented** | Files exist but not fully documented here |
-| Simulation framework | **Implemented** | mock_agent, personas, harness, metrics all present |
 | Docker Compose | **Not implemented** | Running directly on host |
 | `relational` atom type | **Schema only** | Defined in schema CHECK constraint but decomposer never produces it |
 | Contradiction detection | **Not implemented** | Spec explicitly deferred to post-v0.1 |
