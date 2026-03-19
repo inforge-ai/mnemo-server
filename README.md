@@ -4,7 +4,7 @@
 
 ## Status
 
-All core phases are complete and passing 183 tests:
+All core phases are complete:
 
 | Feature | Status |
 |---|---|
@@ -17,14 +17,15 @@ All core phases are complete and passing 183 tests:
 | Knowledge graph edges + expansion | Done |
 | Views and snapshot sharing | Done |
 | Capabilities / permission grants | Done |
+| Sharing trust auth (directional trust gating) | Done |
 | Background consolidation (decay, clustering, merge, purge) | Done |
 | Operator-scoped authentication (API keys, ownership) | Done |
 | Admin API (agents, operations, keys, glance) | Done |
-| CLI (register-operator, create-agent, list-agents, new-key, whoami) | Done |
+| CLI (register-operator, create-agent, list-agents, new-key, whoami, trust management) | Done |
 | MCP server (Claude tool interface) | Done |
 | Multi-agent MCP support | Done |
 
-Not yet built (v0.1 scope exclusions): rate limiting, live view subscriptions, LLM-based decomposition, contradiction detection, horizontal scaling, skill files, any UI.
+Not yet built (v0.1 scope exclusions): rate limiting, live view subscriptions, contradiction detection, horizontal scaling, skill files, any UI.
 
 ## Requirements
 
@@ -155,6 +156,35 @@ curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/depart \
   -H "Authorization: Bearer $MNEMO_API_KEY"
 ```
 
+## Sharing Trust Auth
+
+Mnemo uses directional trust to gate memory sharing. When agent B holds a capability granted by agent A, B can only recall shared memories if a trust row exists (`agent_trust`) from B toward A. Without trust, `recall_shared` and `recall_all_shared` return empty results silently.
+
+Trust is managed via the CLI (operator-only, never exposed as MCP tools):
+
+```bash
+# List trust relationships for an agent
+uv run python -m mnemo.cli admin trust list <agent>
+
+# Add trust (agent trusts sender)
+uv run python -m mnemo.cli admin trust add <agent> <sender>
+
+# Remove trust
+uv run python -m mnemo.cli admin trust remove <agent> <sender>
+
+# Revoke: remove trust + revoke all capabilities from that sender
+uv run python -m mnemo.cli admin trust revoke <agent> <sender>
+
+# Inbox: show pending untrusted shares
+uv run python -m mnemo.cli admin trust inbox <agent>
+```
+
+Agents can be specified by UUID or address (`agent:operator.org`).
+
+**Auto-seeding:** When an agent is created under an operator with an `org` field, symmetric trust rows are automatically created between the new agent and all existing agents in the same org.
+
+**`list_shared_views` response** includes a `trusted` boolean per view, so MCP tools can display trust status without extra queries.
+
 ## MCP Server (Claude integration)
 
 Mnemo ships an MCP server so Claude can use it as a memory tool directly. Agent identity is resolved by name (unique per operator).
@@ -199,6 +229,7 @@ mnemo/
 │   ├── decomposer.py     # rule-based free-text -> typed atoms + arc synthesis
 │   └── routes/           # agents, memory, atoms, views, capabilities, auth, admin
 │   └── services/         # atom_service, graph_service, view_service, consolidation
+├── cli.py                  # operator CLI (trust, agents, keys)
 ├── client/mnemo_client.py  # async httpx client
 ├── mcp/mcp_server.py       # MCP wrapper for Claude
 └── tests/
@@ -215,3 +246,5 @@ mnemo/
 **Confidence** is stored as Beta(alpha, beta) parameters. The API exposes only `confidence_expected` and `confidence_effective` (after decay). Atoms below 0.05 effective confidence are deactivated by the background consolidation job.
 
 **Auth model:** API key -> operator -> [agents]. Each operator has one API key and owns zero or more agents. Agent names are unique per operator.
+
+**Trust model:** Directional trust rows gate sharing. Agent B can only recall memories shared by agent A if `agent_trust(agent_uuid=B, trusted_sender_uuid=A)` exists. Same-org agents get auto-seeded trust on creation.
