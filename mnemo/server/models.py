@@ -27,6 +27,7 @@ class RememberRequest(BaseModel):
     """The simple interface. Agent just says what happened."""
     text: str
     domain_tags: list[str] = []
+    remembered_on: Optional[datetime] = None
 
 class RememberResponse(BaseModel):
     status: str = "queued"

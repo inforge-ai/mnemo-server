@@ -11,6 +11,7 @@ identical system prompts within a 5-minute window are served from cache.
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 
 from anthropic import AsyncAnthropic
@@ -32,6 +33,8 @@ Rules:
 - Each atom should be ONE coherent claim, fact, or observation
 - Preserve specificity — don't over-generalise
 - Don't split tightly coupled facts into separate atoms
+- Resolve relative time references (e.g., "last Saturday", "yesterday", "next month") into absolute dates using the provided date context. If the memory is from May 25, 2023 and mentions "last Saturday", the atom should say "Saturday, approximately May 20, 2023".
+- Preserve specific details exactly: names, dates, quantities, places, identity terms, breeds, titles. Do NOT generalise — "transgender woman" stays "transgender woman", not "LGBTQ+ individual"; "golden retriever puppy" stays "golden retriever puppy", not "dog".
 - Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0}
 - Confidence should reflect how certain/well-supported the claim is in the source text
 
@@ -76,7 +79,22 @@ def _confidence_to_beta(confidence: float) -> tuple[float, float]:
         return (2.0, 4.0)
 
 
-async def llm_decompose(text: str) -> DecomposerResult:
+def _build_system_prompt(remembered_on: datetime | None) -> str:
+    """Build the system prompt, injecting date context if provided."""
+    if remembered_on is None:
+        return DECOMPOSER_PROMPT
+    date_str = remembered_on.strftime("%B %d, %Y")
+    date_line = (
+        f"The following text describes experiences from {date_str}. "
+        "Resolve all relative time references against this date."
+    )
+    return f"{date_line}\n\n{DECOMPOSER_PROMPT}"
+
+
+async def llm_decompose(
+    text: str,
+    remembered_on: datetime | None = None,
+) -> DecomposerResult:
     """Decompose text into atoms using Haiku with prompt caching.
 
     Returns DecomposerResult containing atoms + token usage metadata.
@@ -86,12 +104,13 @@ async def llm_decompose(text: str) -> DecomposerResult:
         return DecomposerResult(atoms=[])
 
     client = _get_client()
+    system_prompt = _build_system_prompt(remembered_on)
     response = await client.messages.create(
         model=MODEL,
         max_tokens=2048,
         system=[{
             "type": "text",
-            "text": DECOMPOSER_PROMPT,
+            "text": system_prompt,
             "cache_control": {"type": "ephemeral"},
         }],
         messages=[{"role": "user", "content": text}],

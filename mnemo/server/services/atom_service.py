@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import traceback
+from datetime import datetime
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -44,12 +45,16 @@ HALF_LIVES: dict[str, float] = {
 }
 
 
-async def _decompose(text: str, domain_tags: list[str] | None = None):
+async def _decompose(
+    text: str,
+    domain_tags: list[str] | None = None,
+    remembered_on: datetime | None = None,
+):
     """Use LLM decomposer if ANTHROPIC_API_KEY is set, else fall back to regex.
     Returns DecomposerResult (atoms + optional usage metadata)."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         from ..llm_decomposer import llm_decompose
-        return await llm_decompose(text)
+        return await llm_decompose(text, remembered_on=remembered_on)
     from ..llm_decomposer import DecomposerResult
     return DecomposerResult(atoms=regex_decompose(text, domain_tags))
 
@@ -382,12 +387,13 @@ async def store_from_text(
     domain_tags: list[str],
     store_id: UUID | None = None,
     operator_id: UUID | None = None,
+    remembered_on: datetime | None = None,
 ) -> dict:
     """
     Decompose free text into atoms, deduplicate, store, and link.
     Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N}
     """
-    decomposer_result = await _decompose(text, domain_tags)
+    decomposer_result = await _decompose(text, domain_tags, remembered_on=remembered_on)
     decomposed = decomposer_result.atoms
     if not decomposed:
         return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0}
@@ -507,6 +513,7 @@ async def store_background(
     text: str,
     domain_tags: list[str],
     operator_id: UUID | None = None,
+    remembered_on: datetime | None = None,
 ) -> None:
     """Background task: decompose, embed, store atoms, and create edges.
 
@@ -519,6 +526,7 @@ async def store_background(
             await store_from_text(
                 conn, agent_id, text, domain_tags,
                 store_id=store_id, operator_id=operator_id,
+                remembered_on=remembered_on,
             )
     except Exception:
         error_msg = traceback.format_exc()

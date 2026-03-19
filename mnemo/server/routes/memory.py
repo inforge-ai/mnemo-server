@@ -39,6 +39,7 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
         text=body.text,
         domain_tags=body.domain_tags,
         operator_id=operator_id,
+        remembered_on=body.remembered_on,
     )
     if settings.sync_store_for_tests:
         await coro
