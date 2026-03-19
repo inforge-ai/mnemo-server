@@ -309,7 +309,7 @@ class TestViews:
         await remember(client, agent["id"], "Always use parameterised queries to prevent SQL injection.", domain_tags=["security"])
         resp = await client.post(f"/v1/agents/{agent['id']}/views", json={
             "name": "security-practices",
-            "atom_filter": {"atom_types": ["procedural"], "domain_tags": ["security"]},
+            "atom_filter": {"domain_tags": ["security"]},
         })
         assert resp.status_code == 201
         data = resp.json()

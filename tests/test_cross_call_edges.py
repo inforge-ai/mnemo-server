@@ -37,11 +37,10 @@ class TestCrossCallEdges:
 
     async def test_no_edges_between_unrelated_atoms_across_calls(self, client, agent, pool):
         """Unrelated topics across calls should NOT produce cross-call edges."""
-        # These have ~0.70 similarity (below 0.78 threshold)
         await remember(client, agent["id"],
             "pgvector uses HNSW indexes for approximate nearest neighbor search.")
         await remember(client, agent["id"],
-            "The French Revolution fundamentally changed European politics in the 18th century.")
+            "My grandmother's apple pie recipe uses cinnamon and brown sugar.")
 
         async with pool.acquire() as conn:
             cross_edges = await conn.fetch(
