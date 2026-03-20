@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     graph_expansion_max_depth: int = 3
     consolidation_interval_minutes: int = 60
     min_effective_confidence: float = 0.05
-    duplicate_similarity_threshold: float = 0.90
+    duplicate_similarity_threshold: float = 0.97
     cross_call_edge_threshold: float = 0.78
 
     # Default decay half-lives (days) by atom type

@@ -33,7 +33,12 @@ Rules:
 - Each atom should be ONE coherent claim, fact, or observation
 - Preserve specificity — don't over-generalise
 - Don't split tightly coupled facts into separate atoms
-- Resolve relative time references (e.g., "last Saturday", "yesterday", "next month") into absolute dates using the provided date context. If the memory is from May 25, 2023 and mentions "last Saturday", the atom should say "Saturday, approximately May 20, 2023".
+- Extract ALL distinct facts, events, preferences, opinions, relationships, locations, and details. Err on the side of too many atoms rather than too few. A 20-turn conversation typically contains 15-30 extractable facts.
+- Minor details matter: book titles, place names, food preferences, pet breeds, specific activities, peoples' reactions and opinions about events. If someone mentions it in conversation, it is worth capturing.
+- Each person's opinion or reaction to another person's news is a separate atom. "Melanie was supportive of Caroline's adoption plans" is its own atom.
+- ALWAYS resolve relative time references into absolute dates. This is mandatory, not optional. Use the provided date context. "Last Saturday" from a memory dated May 25, 2023 MUST become "Saturday, May 20, 2023". "Next month" from June 15 MUST become "July 2023". "Two weekends ago" MUST be calculated to the approximate date.
+- Every episodic atom MUST include when it happened. If the text says "I went camping" and the memory is from July 17, 2023, the atom should say "Went camping approximately early July 2023" at minimum.
+- If a future plan is mentioned ("I'm going camping next month"), create a separate atom for the plan with the projected date, distinct from any later atom about the actual event.
 - Preserve specific details exactly: names, dates, quantities, places, identity terms, breeds, titles. Do NOT generalise — "transgender woman" stays "transgender woman", not "LGBTQ+ individual"; "golden retriever puppy" stays "golden retriever puppy", not "dog".
 - Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0}
 - Confidence should reflect how certain/well-supported the claim is in the source text
@@ -107,7 +112,7 @@ async def llm_decompose(
     system_prompt = _build_system_prompt(remembered_on)
     response = await client.messages.create(
         model=MODEL,
-        max_tokens=2048,
+        max_tokens=4096,
         system=[{
             "type": "text",
             "text": system_prompt,
