@@ -4,6 +4,7 @@ Mnemo CLI — manage operators and agents.
 Commands:
   mnemo register-operator <name>   Create operator, print API key once.
   mnemo create-agent <name>        Create agent under authenticated operator.
+  mnemo reactivate-agent <id>      Reactivate a departed agent.
   mnemo list-agents                List agents for authenticated operator.
   mnemo new-key                    Generate additional API key for operator.
   mnemo whoami                     Verify API key and show operator info.
@@ -143,6 +144,37 @@ async def _create_agent(base_url, api_key, name, persona, domain_tags):
     data = resp.json()
     click.echo(f"\nAgent   : {data['name']}")
     click.echo(f"ID      : {data['id']}")
+    click.echo()
+
+
+@cli.command("reactivate-agent")
+@click.argument("agent_id")
+@click.pass_context
+def reactivate_agent(ctx, agent_id):
+    """Reactivate a departed agent (by UUID or address)."""
+    api_key = _api_key_from_env()
+    _run(_reactivate_agent(ctx.obj["base_url"], api_key, agent_id))
+
+
+async def _reactivate_agent(base_url, api_key, agent_id):
+    async with httpx.AsyncClient(
+        base_url=base_url, timeout=30.0,
+        headers={"Authorization": f"Bearer {api_key}"},
+    ) as client:
+        resp = await client.post(f"/v1/agents/{agent_id}/reactivate")
+    if resp.status_code == 404:
+        click.echo("Agent not found.", err=True)
+        sys.exit(1)
+    if resp.status_code == 409:
+        click.echo("Agent is already active.", err=True)
+        sys.exit(1)
+    if resp.status_code not in (200, 201):
+        click.echo(f"Error {resp.status_code}: {resp.text}", err=True)
+        sys.exit(1)
+    data = resp.json()
+    click.echo(f"\nReactivated: {data['name']}")
+    click.echo(f"ID         : {data['id']}")
+    click.echo(f"\nNote: previously revoked capabilities must be re-granted.")
     click.echo()
 
 

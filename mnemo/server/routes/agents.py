@@ -247,6 +247,58 @@ async def depart_agent(agent_id: str, operator=Depends(get_current_operator)):
     }
 
 
+@router.post("/agents/{agent_id}/reactivate")
+async def reactivate_agent(agent_id: str, operator=Depends(get_current_operator)):
+    """
+    Reactivate a departed agent:
+    1. Clear departure and expiry timestamps.
+    2. Mark agent active.
+    3. Log the reactivation.
+
+    Note: capabilities revoked during departure are NOT restored.
+    """
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    await verify_agent_ownership(operator, agent_uuid)
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, is_active, departed_at FROM agents WHERE id = $1",
+            agent_uuid,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if row["is_active"]:
+            raise HTTPException(status_code=409, detail="Agent is already active")
+
+        updated = await conn.fetchrow(
+            """
+            UPDATE agents
+            SET is_active       = true,
+                departed_at     = NULL,
+                data_expires_at = NULL
+            WHERE id = $1
+            RETURNING name, created_at
+            """,
+            agent_uuid,
+        )
+
+        # Audit log
+        await conn.execute(
+            """
+            INSERT INTO access_log (agent_id, action, metadata)
+            VALUES ($1, 'reactivation', '{}')
+            """,
+            agent_uuid,
+        )
+
+    return {
+        "id": str(agent_uuid),
+        "name": updated["name"],
+        "is_active": True,
+        "message": "Agent reactivated. Previously revoked capabilities must be re-granted.",
+    }
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _agent_row(row, address: str | None = None) -> dict:
