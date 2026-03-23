@@ -336,7 +336,7 @@ async def test_purge_deletes_expired_departed_agents(client, pool):
         await conn.execute(
             """
             UPDATE agents
-            SET is_active = false,
+            SET status = 'departed',
                 departed_at = now() - interval '31 days',
                 data_expires_at = now() - interval '1 day'
             WHERE id = $1
@@ -366,7 +366,7 @@ async def test_purge_keeps_agents_with_future_expiry(client, pool):
         await conn.execute(
             """
             UPDATE agents
-            SET is_active = false,
+            SET status = 'departed',
                 departed_at = now() - interval '1 day',
                 data_expires_at = now() + interval '29 days'
             WHERE id = $1
@@ -409,7 +409,7 @@ async def test_purge_removes_capability_references(client, two_agents, pool):
         await conn.execute(
             """
             UPDATE agents
-            SET is_active = false,
+            SET status = 'departed',
                 departed_at = now() - interval '31 days',
                 data_expires_at = now() - interval '1 day'
             WHERE id = $1

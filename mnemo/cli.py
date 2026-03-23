@@ -8,15 +8,16 @@ Commands:
   mnemo list-agents                List agents for authenticated operator.
   mnemo new-key                    Generate additional API key for operator.
   mnemo whoami                     Verify API key and show operator info.
-  mnemo admin trust ...            Trust management (direct DB).
+  mnemo admin operator ...         Operator management (API).
+  mnemo admin agent ...            Agent management (API).
+  mnemo admin trust ...            Trust/sharing management (API).
 """
 
 import asyncio
+import json as json_mod
 import os
 import sys
-from uuid import UUID
 
-import asyncpg
 import click
 import httpx
 
@@ -36,39 +37,25 @@ def _api_key_from_env():
     return key
 
 
-def _database_url():
-    url = os.environ.get("MNEMO_DATABASE_URL", "")
-    if not url:
-        click.echo("MNEMO_DATABASE_URL environment variable not set.", err=True)
+def _admin_token(ctx):
+    """Get admin token from click context, env, or abort."""
+    token = ctx.obj.get("admin_token") or os.environ.get("MNEMO_ADMIN_TOKEN", "")
+    if not token:
+        click.echo("MNEMO_ADMIN_TOKEN not set. Pass --admin-token or set the env var.", err=True)
         sys.exit(1)
-    return url
+    return token
 
 
-async def _resolve_agent(conn: asyncpg.Connection, identifier: str) -> UUID:
-    """Resolve an agent address (e.g. astraea:tom.inforge) or UUID string to a UUID."""
-    try:
-        return UUID(identifier)
-    except ValueError:
-        pass
-    row = await conn.fetchrow(
-        "SELECT agent_id FROM agent_addresses WHERE address = $1",
-        identifier.lower(),
-    )
-    if not row:
-        click.echo(f"Agent not found: {identifier}", err=True)
+async def _admin_request(base_url, token, method, path, json=None, params=None):
+    """Send an admin API request and return the response, exiting on error."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
+        resp = await getattr(client, method)(
+            path, headers={"X-Admin-Token": token}, json=json, params=params,
+        )
+    if resp.status_code >= 400:
+        click.echo(f"Error {resp.status_code}: {resp.text}", err=True)
         sys.exit(1)
-    return row["agent_id"]
-
-
-async def _agent_display(conn: asyncpg.Connection, agent_id: UUID) -> str:
-    """Return 'address (uuid)' for display, falling back to just the UUID."""
-    row = await conn.fetchrow(
-        "SELECT address FROM agent_addresses WHERE agent_id = $1", agent_id,
-    )
-    addr = row["address"] if row else None
-    if addr:
-        return f"{addr} ({agent_id})"
-    return str(agent_id)
+    return resp
 
 
 # ── Commands ───────────────────────────────────────────────────────────────────
@@ -262,208 +249,413 @@ async def _whoami(base_url, api_key):
     click.echo()
 
 
-# ── Admin commands (direct DB access) ─────────────────────────────────────────
+# ── Admin commands (API-based) ─────────────────────────────────────────────────
 
 @cli.group()
+@click.option("--admin-token", envvar="MNEMO_ADMIN_TOKEN", default=None, help="Admin token.")
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON.")
 @click.pass_context
-def admin(ctx):
-    """Administrative commands (direct database access)."""
+def admin(ctx, admin_token, output_json):
+    """Administrative commands (requires admin token)."""
+    ctx.ensure_object(dict)
+    ctx.obj["admin_token"] = admin_token
+    ctx.obj["json"] = output_json
+
+
+# ── Admin: operator subgroup ──────────────────────────────────────────────────
+
+@admin.group()
+@click.pass_context
+def operator(ctx):
+    """Manage operators."""
     pass
 
+
+@operator.command("create")
+@click.option("--username", required=True, help="Operator username (lowercase, a-z0-9-).")
+@click.option("--org", required=True, help="Organization slug (lowercase, a-z0-9-).")
+@click.option("--display-name", required=True, help="Display name for the operator.")
+@click.option("--email", required=True, help="Operator email address.")
+@click.pass_context
+def operator_create(ctx, username, org, display_name, email):
+    """Create a new operator."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_operator_create(base_url, token, username, org, display_name, email, ctx.obj["json"]))
+
+
+async def _operator_create(base_url, token, username, org, display_name, email, output_json):
+    resp = await _admin_request(base_url, token, "post", "/v1/admin/operators", json={
+        "username": username,
+        "org": org,
+        "display_name": display_name,
+        "email": email,
+    })
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nOperator created:")
+    click.echo(f"  UUID        : {data['uuid']}")
+    click.echo(f"  Username    : {data['username']}")
+    click.echo(f"  Org         : {data['org']}")
+    click.echo(f"  Display Name: {data['display_name']}")
+    click.echo(f"  Email       : {data['email']}")
+    click.echo(f"  API Key     : {data['api_key']}")
+    click.echo()
+    click.echo("Save this key — it will not be shown again.")
+    click.echo()
+
+
+@operator.command("list")
+@click.pass_context
+def operator_list(ctx):
+    """List all operators."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_operator_list(base_url, token, ctx.obj["json"]))
+
+
+async def _operator_list(base_url, token, output_json):
+    resp = await _admin_request(base_url, token, "get", "/v1/admin/operators")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    operators = data.get("operators", [])
+    if not operators:
+        click.echo("No operators.")
+        return
+    click.echo(f"\n{'UUID':<38} {'Username':<20} {'Org':<15} {'Status':<12} {'Agents':<8} {'Email'}")
+    click.echo("-" * 120)
+    for op in operators:
+        click.echo(
+            f"{op['uuid']:<38} {op['username']:<20} {op['org']:<15} "
+            f"{op['status']:<12} {op['agent_count']:<8} {op.get('email') or ''}"
+        )
+    click.echo()
+
+
+@operator.command("show")
+@click.argument("operator_id")
+@click.pass_context
+def operator_show(ctx, operator_id):
+    """Show details for a single operator."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_operator_show(base_url, token, operator_id, ctx.obj["json"]))
+
+
+async def _operator_show(base_url, token, operator_id, output_json):
+    resp = await _admin_request(base_url, token, "get", f"/v1/admin/operators/{operator_id}")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nOperator: {data['display_name']}")
+    click.echo(f"  UUID    : {data['uuid']}")
+    click.echo(f"  Username: {data['username']}")
+    click.echo(f"  Org     : {data['org']}")
+    click.echo(f"  Email   : {data.get('email') or '(none)'}")
+    click.echo(f"  Status  : {data['status']}")
+    agents = data.get("agents", [])
+    if agents:
+        click.echo(f"\n  Agents ({len(agents)}):")
+        for a in agents:
+            addr = a.get("address") or "(no address)"
+            click.echo(f"    {a['name']:<20} {addr:<35} {a['status']}")
+    else:
+        click.echo("\n  Agents: (none)")
+    click.echo()
+
+
+@operator.command("suspend")
+@click.argument("operator_id")
+@click.pass_context
+def operator_suspend(ctx, operator_id):
+    """Suspend an operator and depart all their agents."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_operator_suspend(base_url, token, operator_id, ctx.obj["json"]))
+
+
+async def _operator_suspend(base_url, token, operator_id, output_json):
+    resp = await _admin_request(base_url, token, "post", f"/v1/admin/operators/{operator_id}/suspend")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nSuspended operator {data['username']} ({data['uuid']})")
+    click.echo(f"  Agents departed: {data.get('agents_departed', 0)}")
+    click.echo()
+
+
+@operator.command("reinstate")
+@click.argument("operator_id")
+@click.pass_context
+def operator_reinstate(ctx, operator_id):
+    """Reinstate a suspended operator."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_operator_reinstate(base_url, token, operator_id, ctx.obj["json"]))
+
+
+async def _operator_reinstate(base_url, token, operator_id, output_json):
+    resp = await _admin_request(base_url, token, "post", f"/v1/admin/operators/{operator_id}/reinstate")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nReinstated operator {data['username']} ({data['uuid']})")
+    click.echo(f"  Status: {data['status']}")
+    if data.get("note"):
+        click.echo(f"  Note  : {data['note']}")
+    click.echo()
+
+
+@operator.command("rotate-key")
+@click.argument("operator_id")
+@click.pass_context
+def operator_rotate_key(ctx, operator_id):
+    """Rotate API keys for an operator (deactivate old, issue new)."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_operator_rotate_key(base_url, token, operator_id, ctx.obj["json"]))
+
+
+async def _operator_rotate_key(base_url, token, operator_id, output_json):
+    resp = await _admin_request(base_url, token, "post", f"/v1/admin/operators/{operator_id}/rotate-key")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nRotated keys for {data['username']} ({data['uuid']})")
+    click.echo(f"  New API Key: {data['api_key']}")
+    click.echo()
+    click.echo("Save this key — it will not be shown again.")
+    click.echo()
+
+
+# ── Admin: agent subgroup ─────────────────────────────────────────────────────
+
+@admin.group()
+@click.pass_context
+def agent(ctx):
+    """Manage agents."""
+    pass
+
+
+@agent.command("list")
+@click.option("--operator", "operator_id", default=None, help="Filter by operator UUID.")
+@click.option("--status", default=None, type=click.Choice(["active", "departed"]), help="Filter by status.")
+@click.pass_context
+def agent_list(ctx, operator_id, status):
+    """List all agents."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_agent_list(base_url, token, operator_id, status, ctx.obj["json"]))
+
+
+async def _agent_list(base_url, token, operator_id, status, output_json):
+    params = {}
+    if operator_id:
+        params["operator"] = operator_id
+    if status:
+        params["status"] = status
+    resp = await _admin_request(base_url, token, "get", "/v1/admin/agents", params=params or None)
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    agents = data.get("agents", [])
+    if not agents:
+        click.echo("No agents found.")
+        return
+    click.echo(f"\n{'UUID':<38} {'Address':<30} {'Name':<20} {'Status':<12} {'Operator'}")
+    click.echo("-" * 130)
+    for a in agents:
+        addr = a.get("address") or "(none)"
+        click.echo(
+            f"{a['uuid']:<38} {addr:<30} {a['display_name']:<20} "
+            f"{a['status']:<12} {a.get('operator_username', '')}"
+        )
+    click.echo()
+
+
+@agent.command("depart")
+@click.argument("agent_id")
+@click.pass_context
+def agent_depart(ctx, agent_id):
+    """Force-depart an agent."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_agent_depart(base_url, token, agent_id, ctx.obj["json"]))
+
+
+async def _agent_depart(base_url, token, agent_id, output_json):
+    resp = await _admin_request(base_url, token, "post", f"/v1/admin/agents/{agent_id}/depart")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    addr = data.get("address") or data.get("uuid", agent_id)
+    click.echo(f"\nDeparted agent: {addr}")
+    click.echo(f"  UUID                 : {data.get('uuid', agent_id)}")
+    click.echo(f"  Capabilities revoked : {data.get('capabilities_revoked', 0)}")
+    click.echo(f"  Data expires at      : {data.get('data_expires_at', 'N/A')}")
+    click.echo()
+
+
+@agent.command("reinstate")
+@click.argument("agent_id")
+@click.pass_context
+def agent_reinstate(ctx, agent_id):
+    """Reinstate a departed agent."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_agent_reinstate(base_url, token, agent_id, ctx.obj["json"]))
+
+
+async def _agent_reinstate(base_url, token, agent_id, output_json):
+    resp = await _admin_request(base_url, token, "post", f"/v1/admin/agents/{agent_id}/reinstate")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    addr = data.get("address") or data.get("uuid", agent_id)
+    click.echo(f"\nReinstated agent: {addr}")
+    click.echo(f"  UUID   : {data.get('uuid', agent_id)}")
+    click.echo(f"  Status : {data.get('status', 'active')}")
+    if data.get("message"):
+        click.echo(f"  Note   : {data['message']}")
+    click.echo()
+
+
+# ── Admin: trust subgroup ─────────────────────────────────────────────────────
 
 @admin.group()
 @click.pass_context
 def trust(ctx):
-    """Manage agent trust relationships."""
+    """Manage trust and sharing."""
     pass
 
 
+@trust.command("status")
+@click.pass_context
+def trust_status(ctx):
+    """Show current sharing enabled/disabled status."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_trust_status(base_url, token, ctx.obj["json"]))
+
+
+async def _trust_status(base_url, token, output_json):
+    resp = await _admin_request(base_url, token, "get", "/v1/admin/trust/status")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    enabled = data.get("sharing_enabled", False)
+    click.echo(f"\nSharing: {'ENABLED' if enabled else 'DISABLED'}")
+    click.echo()
+
+
+@trust.command("disable")
+@click.pass_context
+def trust_disable(ctx):
+    """Disable sharing globally."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_trust_disable(base_url, token, ctx.obj["json"]))
+
+
+async def _trust_disable(base_url, token, output_json):
+    resp = await _admin_request(base_url, token, "post", "/v1/admin/trust/disable")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nSharing: DISABLED")
+    if data.get("note"):
+        click.echo(f"  Note: {data['note']}")
+    click.echo()
+
+
+@trust.command("enable")
+@click.pass_context
+def trust_enable(ctx):
+    """Enable sharing globally."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_trust_enable(base_url, token, ctx.obj["json"]))
+
+
+async def _trust_enable(base_url, token, output_json):
+    resp = await _admin_request(base_url, token, "post", "/v1/admin/trust/enable")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nSharing: ENABLED")
+    click.echo()
+
+
 @trust.command("list")
-@click.option("--agent", required=True, help="Agent address or UUID.")
-def trust_list(agent):
-    """List an agent's trusted senders."""
-    _run(_trust_list(agent))
+@click.option("--operator", "operator_id", default=None, help="Filter by operator UUID.")
+@click.option("--agent", "agent_id", default=None, help="Filter by agent UUID.")
+@click.pass_context
+def trust_list(ctx, operator_id, agent_id):
+    """List active shares/capabilities."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_trust_list(base_url, token, operator_id, agent_id, ctx.obj["json"]))
 
 
-async def _trust_list(agent_identifier):
-    conn = await asyncpg.connect(_database_url())
-    try:
-        agent_id = await _resolve_agent(conn, agent_identifier)
-        display = await _agent_display(conn, agent_id)
-
-        rows = await conn.fetch("""
-            SELECT t.trusted_sender_uuid, t.created_at, t.note,
-                   aa.address AS sender_address
-            FROM agent_trust t
-            LEFT JOIN agent_addresses aa ON aa.agent_id = t.trusted_sender_uuid
-            WHERE t.agent_uuid = $1
-            ORDER BY t.created_at
-        """, agent_id)
-
-        click.echo(f"\nTrusted senders for {display}:")
-        if not rows:
-            click.echo("  (none)")
-        else:
-            click.echo(f"\n  {'Sender':<40} {'Since':<22} {'Note'}")
-            click.echo("  " + "-" * 80)
-            for r in rows:
-                sender = r["sender_address"] or str(r["trusted_sender_uuid"])
-                since = r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
-                note = r["note"] or ""
-                click.echo(f"  {sender:<40} {since:<22} {note}")
-        click.echo()
-    finally:
-        await conn.close()
-
-
-@trust.command("add")
-@click.option("--agent", required=True, help="Agent address or UUID (the one granting trust).")
-@click.option("--trusts", required=True, help="Sender address or UUID to trust.")
-@click.option("--mutual", is_flag=True, default=False, help="Create trust in both directions.")
-@click.option("--note", default=None, help="Optional note for the trust relationship.")
-def trust_add(agent, trusts, mutual, note):
-    """Add a trust relationship (unidirectional by default)."""
-    _run(_trust_add(agent, trusts, mutual, note))
-
-
-async def _trust_add(agent_identifier, sender_identifier, mutual, note):
-    conn = await asyncpg.connect(_database_url())
-    try:
-        agent_id = await _resolve_agent(conn, agent_identifier)
-        sender_id = await _resolve_agent(conn, sender_identifier)
-
-        if agent_id == sender_id:
-            click.echo("An agent cannot trust itself.", err=True)
-            sys.exit(1)
-
-        agent_display = await _agent_display(conn, agent_id)
-        sender_display = await _agent_display(conn, sender_id)
-
-        # Insert forward trust
-        await conn.execute("""
-            INSERT INTO agent_trust (agent_uuid, trusted_sender_uuid, note)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (agent_uuid, trusted_sender_uuid) DO NOTHING
-        """, agent_id, sender_id, note)
-        click.echo(f"\n  {agent_display} now trusts {sender_display}")
-
-        if mutual:
-            await conn.execute("""
-                INSERT INTO agent_trust (agent_uuid, trusted_sender_uuid, note)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (agent_uuid, trusted_sender_uuid) DO NOTHING
-            """, sender_id, agent_id, note)
-            click.echo(f"  {sender_display} now trusts {agent_display}")
-
-        click.echo()
-    finally:
-        await conn.close()
-
-
-@trust.command("remove")
-@click.option("--agent", required=True, help="Agent address or UUID.")
-@click.option("--trusts", required=True, help="Sender address or UUID to remove from trust list.")
-def trust_remove(agent, trusts):
-    """Remove a single trust relationship."""
-    _run(_trust_remove(agent, trusts))
-
-
-async def _trust_remove(agent_identifier, sender_identifier):
-    conn = await asyncpg.connect(_database_url())
-    try:
-        agent_id = await _resolve_agent(conn, agent_identifier)
-        sender_id = await _resolve_agent(conn, sender_identifier)
-
-        agent_display = await _agent_display(conn, agent_id)
-        sender_display = await _agent_display(conn, sender_id)
-
-        result = await conn.execute("""
-            DELETE FROM agent_trust
-            WHERE agent_uuid = $1 AND trusted_sender_uuid = $2
-        """, agent_id, sender_id)
-
-        count = int(result.split()[-1])
-        if count:
-            click.echo(f"\n  Removed: {agent_display} no longer trusts {sender_display}")
-        else:
-            click.echo(f"\n  No trust relationship found from {agent_display} to {sender_display}.")
-        click.echo()
-    finally:
-        await conn.close()
+async def _trust_list(base_url, token, operator_id, agent_id, output_json):
+    params = {}
+    if operator_id:
+        params["operator"] = operator_id
+    if agent_id:
+        params["agent"] = agent_id
+    resp = await _admin_request(base_url, token, "get", "/v1/admin/trust/shares", params=params or None)
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    shares = data.get("shares", [])
+    if not shares:
+        click.echo("No active shares.")
+        return
+    click.echo(f"\n{'Capability ID':<38} {'Grantor':<28} {'Grantee':<28} {'View Name':<20} {'Created'}")
+    click.echo("-" * 140)
+    for s in shares:
+        grantor = s.get("grantor_address") or "(unknown)"
+        grantee = s.get("grantee_address") or "(unknown)"
+        view = s.get("view_name") or "(unnamed)"
+        created = str(s.get("created_at", ""))[:19]
+        click.echo(f"{s['capability_id']:<38} {grantor:<28} {grantee:<28} {view:<20} {created}")
+    click.echo()
 
 
 @trust.command("revoke")
-@click.option("--agent", required=True, help="Agent address or UUID.")
-@click.confirmation_option(prompt="This will remove ALL trust rows involving this agent in both directions. Continue?")
-def trust_revoke(agent):
-    """Remove ALL trust rows involving this agent (both directions)."""
-    _run(_trust_revoke(agent))
+@click.argument("capability_id")
+@click.pass_context
+def trust_revoke(ctx, capability_id):
+    """Revoke a capability (with cascade)."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_trust_revoke(base_url, token, capability_id, ctx.obj["json"]))
 
 
-async def _trust_revoke(agent_identifier):
-    conn = await asyncpg.connect(_database_url())
-    try:
-        agent_id = await _resolve_agent(conn, agent_identifier)
-        agent_display = await _agent_display(conn, agent_id)
-
-        result = await conn.execute("""
-            DELETE FROM agent_trust
-            WHERE agent_uuid = $1 OR trusted_sender_uuid = $1
-        """, agent_id)
-
-        count = int(result.split()[-1])
-        click.echo(f"\n  Revoked {count} trust relationship(s) involving {agent_display}.")
-        click.echo()
-    finally:
-        await conn.close()
-
-
-@trust.command("inbox")
-@click.option("--agent", required=True, help="Agent address or UUID.")
-def trust_inbox(agent):
-    """List capabilities/shared views from untrusted senders."""
-    _run(_trust_inbox(agent))
-
-
-async def _trust_inbox(agent_identifier):
-    conn = await asyncpg.connect(_database_url())
-    try:
-        agent_id = await _resolve_agent(conn, agent_identifier)
-        agent_display = await _agent_display(conn, agent_id)
-
-        rows = await conn.fetch("""
-            SELECT c.id AS cap_id, c.grantor_id, c.permissions, c.created_at,
-                   v.name AS view_name, v.description AS view_desc,
-                   aa.address AS grantor_address
-            FROM capabilities c
-            JOIN views v ON v.id = c.view_id
-            LEFT JOIN agent_addresses aa ON aa.agent_id = c.grantor_id
-            WHERE c.grantee_id = $1
-              AND c.revoked = false
-              AND (c.expires_at IS NULL OR c.expires_at > now())
-              AND c.grantor_id NOT IN (
-                  SELECT trusted_sender_uuid
-                  FROM agent_trust
-                  WHERE agent_uuid = $1
-              )
-            ORDER BY c.created_at DESC
-        """, agent_id)
-
-        click.echo(f"\nUntrusted inbox for {agent_display}:")
-        if not rows:
-            click.echo("  (empty)")
-        else:
-            click.echo(f"\n  {'From':<35} {'View':<25} {'Permissions':<18} {'Shared'}")
-            click.echo("  " + "-" * 100)
-            for r in rows:
-                grantor = r["grantor_address"] or str(r["grantor_id"])
-                view = r["view_name"] or "(unnamed)"
-                perms = ", ".join(r["permissions"])
-                shared = r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
-                click.echo(f"  {grantor:<35} {view:<25} {perms:<18} {shared}")
-        click.echo()
-    finally:
-        await conn.close()
+async def _trust_revoke(base_url, token, capability_id, output_json):
+    resp = await _admin_request(base_url, token, "delete", f"/v1/admin/trust/shares/{capability_id}")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nRevoked capability: {data.get('capability_id', capability_id)}")
+    click.echo(f"  Cascade count: {data.get('cascade_count', 0)}")
+    click.echo()
 
 
 if __name__ == "__main__":

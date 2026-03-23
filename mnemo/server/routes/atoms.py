@@ -96,10 +96,10 @@ async def link_atoms(agent_id: str, body: EdgeCreate, operator=Depends(get_curre
 
 async def _require_active_agent(conn, agent_id: UUID):
     row = await conn.fetchrow(
-        "SELECT is_active FROM agents WHERE id = $1",
+        "SELECT status FROM agents WHERE id = $1",
         agent_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if not row["is_active"]:
+    if row["status"] != "active":
         raise HTTPException(status_code=410, detail="Agent has departed")

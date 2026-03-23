@@ -10,6 +10,7 @@ from ..services.address_service import resolve_agent_identifier
 from ..models import RetrieveRequest, RetrieveResponse, SharedRecallRequest, SharedViewResponse, SkillExport, ViewCreate, ViewResponse
 from ..services import view_service
 from ..services.ops_service import log_operation
+from ..services.platform_service import is_sharing_enabled
 
 router = APIRouter(tags=["views"])
 
@@ -57,6 +58,11 @@ async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, o
 
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
+
+        # Global sharing toggle
+        if not await is_sharing_enabled(conn):
+            return {"atoms": [], "note": "Sharing is currently disabled"}
+
         result = await view_service.recall_all_shared(
             conn=conn,
             grantee_id=agent_uuid,
@@ -106,6 +112,11 @@ async def recall_shared(
     await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
+
+        # Global sharing toggle
+        if not await is_sharing_enabled(conn):
+            raise HTTPException(status_code=403, detail="Sharing is currently disabled")
+
         cap = await _require_capability(conn, agent_uuid, view_id)
         t0 = time.monotonic()
         result = await view_service.recall_shared(
@@ -182,11 +193,11 @@ def _shared_view_row(row) -> dict:
 
 async def _require_active_agent(conn, agent_id: UUID):
     row = await conn.fetchrow(
-        "SELECT is_active FROM agents WHERE id = $1", agent_id
+        "SELECT status FROM agents WHERE id = $1", agent_id
     )
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if not row["is_active"]:
+    if row["status"] != "active":
         raise HTTPException(status_code=410, detail="Agent has departed")
 
 

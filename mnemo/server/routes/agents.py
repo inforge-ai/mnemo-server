@@ -8,6 +8,7 @@ from ..auth import get_current_operator, verify_agent_ownership
 from ..database import get_conn, get_pool
 from ..services.address_service import create_address, resolve_address as resolve_address_fn, resolve_agent_identifier
 from ..models import AgentCreate, AgentResponse, AgentStats
+from ..services.agent_service import depart_agent as do_depart, reinstate_agent as do_reinstate
 from ..services.atom_service import get_agent_stats
 from ..services.auth_service import get_or_create_local_operator
 
@@ -28,7 +29,7 @@ async def register_agent(body: AgentCreate, operator=Depends(get_current_operato
                 """
                 INSERT INTO agents (operator_id, name, persona, domain_tags, metadata)
                 VALUES ($1, $2, $3, $4, $5)
-                RETURNING id, operator_id, name, persona, domain_tags, metadata, created_at, is_active
+                RETURNING id, operator_id, name, persona, domain_tags, metadata, created_at, status
                 """,
                 operator_id,
                 body.name,
@@ -80,11 +81,11 @@ async def list_agents(
             if name is not None:
                 rows = await conn.fetch(
                     """
-                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.status,
                            aa.address
                     FROM agents a
                     LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
-                    WHERE a.operator_id = $1 AND a.name = $2 AND a.is_active = true
+                    WHERE a.operator_id = $1 AND a.name = $2 AND a.status = 'active'
                     ORDER BY a.created_at ASC
                     """,
                     operator_id,
@@ -93,11 +94,11 @@ async def list_agents(
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.status,
                            aa.address
                     FROM agents a
                     LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
-                    WHERE a.operator_id = $1 AND a.is_active = true
+                    WHERE a.operator_id = $1 AND a.status = 'active'
                     ORDER BY a.created_at ASC
                     """,
                     operator_id,
@@ -107,11 +108,11 @@ async def list_agents(
             if name is not None:
                 rows = await conn.fetch(
                     """
-                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.status,
                            aa.address
                     FROM agents a
                     LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
-                    WHERE a.name = $1 AND a.is_active = true
+                    WHERE a.name = $1 AND a.status = 'active'
                     ORDER BY a.created_at ASC
                     """,
                     name,
@@ -119,11 +120,11 @@ async def list_agents(
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+                    SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.status,
                            aa.address
                     FROM agents a
                     LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
-                    WHERE a.is_active = true
+                    WHERE a.status = 'active'
                     ORDER BY a.created_at ASC
                     """,
                 )
@@ -162,7 +163,7 @@ async def get_agent(agent_id: str):
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
-            SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.is_active,
+            SELECT a.id, a.operator_id, a.name, a.persona, a.domain_tags, a.metadata, a.created_at, a.status,
                    aa.address
             FROM agents a
             LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
@@ -202,49 +203,13 @@ async def depart_agent(agent_id: str, operator=Depends(get_current_operator)):
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
     await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, is_active FROM agents WHERE id = $1",
-            agent_uuid,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        if not row["is_active"]:
-            raise HTTPException(status_code=409, detail="Agent already departed")
-
-        # Cascade-revoke capabilities
-        revoked_count = await conn.fetchval(
-            "SELECT revoke_agent_capabilities($1)",
-            agent_uuid,
-        )
-
-        # Mark departed
-        row = await conn.fetchrow(
-            """
-            UPDATE agents
-            SET is_active       = false,
-                departed_at     = now(),
-                data_expires_at = now() + interval '30 days'
-            WHERE id = $1
-            RETURNING departed_at, data_expires_at
-            """,
-            agent_uuid,
-        )
-
-        # Audit log
-        await conn.execute(
-            """
-            INSERT INTO access_log (agent_id, action, metadata)
-            VALUES ($1, 'departure', $2)
-            """,
-            agent_uuid,
-            json.dumps({"capabilities_revoked": revoked_count}),
-        )
-
-    return {
-        "capabilities_revoked": revoked_count,
-        "departed_at": row["departed_at"],
-        "data_expires_at": row["data_expires_at"],
-    }
+        try:
+            result = await do_depart(conn, agent_uuid)
+        except ValueError as e:
+            detail = str(e)
+            code = 404 if "not found" in detail else 409
+            raise HTTPException(status_code=code, detail=detail)
+    return result
 
 
 @router.post("/agents/{agent_id}/reactivate")
@@ -261,42 +226,13 @@ async def reactivate_agent(agent_id: str, operator=Depends(get_current_operator)
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
     await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, is_active, departed_at FROM agents WHERE id = $1",
-            agent_uuid,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        if row["is_active"]:
-            raise HTTPException(status_code=409, detail="Agent is already active")
-
-        updated = await conn.fetchrow(
-            """
-            UPDATE agents
-            SET is_active       = true,
-                departed_at     = NULL,
-                data_expires_at = NULL
-            WHERE id = $1
-            RETURNING name, created_at
-            """,
-            agent_uuid,
-        )
-
-        # Audit log
-        await conn.execute(
-            """
-            INSERT INTO access_log (agent_id, action, metadata)
-            VALUES ($1, 'reactivation', '{}')
-            """,
-            agent_uuid,
-        )
-
-    return {
-        "id": str(agent_uuid),
-        "name": updated["name"],
-        "is_active": True,
-        "message": "Agent reactivated. Previously revoked capabilities must be re-granted.",
-    }
+        try:
+            result = await do_reinstate(conn, agent_uuid)
+        except ValueError as e:
+            detail = str(e)
+            code = 404 if "not found" in detail else 409
+            raise HTTPException(status_code=code, detail=detail)
+    return {**result, "message": "Agent reactivated. Previously revoked capabilities must be re-granted."}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -309,17 +245,17 @@ def _agent_row(row, address: str | None = None) -> dict:
         "domain_tags": list(row["domain_tags"]) if row["domain_tags"] else [],
         "metadata": json.loads(row["metadata"]) if isinstance(row["metadata"], str) else (row["metadata"] or {}),
         "created_at": row["created_at"],
-        "is_active": row["is_active"],
+        "status": row["status"],
         "address": address if address is not None else row.get("address"),
     }
 
 
 async def _require_active_agent(conn, agent_id: UUID):
     row = await conn.fetchrow(
-        "SELECT is_active FROM agents WHERE id = $1",
+        "SELECT status FROM agents WHERE id = $1",
         agent_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if not row["is_active"]:
+    if row["status"] != "active":
         raise HTTPException(status_code=410, detail="Agent has departed")

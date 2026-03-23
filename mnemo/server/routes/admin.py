@@ -45,7 +45,7 @@ async def list_agents():
                 a.name,
                 a.persona,
                 a.domain_tags,
-                a.is_active,
+                a.status,
                 a.created_at,
                 a.departed_at,
                 COUNT(DISTINCT at.id) FILTER (WHERE at.is_active)  AS active_atoms,
@@ -64,7 +64,7 @@ async def list_agents():
             "name": r["name"],
             "persona": r["persona"],
             "domain_tags": list(r["domain_tags"]) if r["domain_tags"] else [],
-            "is_active": r["is_active"],
+            "status": r["status"],
             "created_at": r["created_at"],
             "departed_at": r["departed_at"],
             "active_atoms": r["active_atoms"],
@@ -144,8 +144,8 @@ async def glance():
     async with get_conn() as conn:
         agents_row = await conn.fetchrow(
             """
-            SELECT COUNT(*) FILTER (WHERE is_active)  AS active_agents,
-                   COUNT(*)                            AS total_agents
+            SELECT COUNT(*) FILTER (WHERE status = 'active')  AS active_agents,
+                   COUNT(*)                                    AS total_agents
             FROM agents
             """
         )

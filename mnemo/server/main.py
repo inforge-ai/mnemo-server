@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,8 +24,13 @@ async def lifespan(app: FastAPI):
     pool = await create_pool()
     set_pool(pool)
 
+    from .services.migration_service import run_migrations
+    await run_migrations(pool)
+
     from .services.consolidation import consolidation_loop
     task = asyncio.create_task(consolidation_loop(pool))
+
+    app.state.start_time = time.time()
 
     yield
 
@@ -39,13 +45,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Mnemo", version="0.2.0", lifespan=lifespan)
 
 
-@app.get("/v1/health")
-async def health():
-    return {"status": "ok"}
-
-
 def _register_routers():
-    from .routes import admin, agents, atoms, auth, capabilities, memory, views
+    from .routes import admin, admin_agents, admin_operators, admin_trust, agents, atoms, auth, capabilities, health, memory, views
+    app.include_router(health.router, prefix="/v1")
     app.include_router(auth.router, prefix="/v1")
     app.include_router(agents.router, prefix="/v1")
     app.include_router(memory.router, prefix="/v1")
@@ -53,6 +55,9 @@ def _register_routers():
     app.include_router(views.router, prefix="/v1")
     app.include_router(capabilities.router, prefix="/v1")
     app.include_router(admin.router, prefix="/v1")
+    app.include_router(admin_operators.router, prefix="/v1")
+    app.include_router(admin_agents.router, prefix="/v1")
+    app.include_router(admin_trust.router, prefix="/v1")
 
 
 _register_routers()

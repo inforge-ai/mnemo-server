@@ -102,7 +102,7 @@ async def me(credentials: HTTPAuthorizationCredentials | None = Security(_bearer
     from uuid import UUID
     async with get_conn() as conn:
         agent_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM agents WHERE operator_id = $1 AND is_active = true",
+            "SELECT COUNT(*) FROM agents WHERE operator_id = $1 AND status = 'active'",
             UUID(operator["id"]),
         )
 

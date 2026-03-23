@@ -3,14 +3,31 @@
 -- ============================================================
 
 -- Operator registry (billing/credential entity)
+-- schema_migrations tracking table
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version VARCHAR(16) PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- platform_config table
+CREATE TABLE IF NOT EXISTS platform_config (
+    key VARCHAR(64) PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE operators (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        TEXT NOT NULL UNIQUE,
-    email       TEXT,
-    username    TEXT NOT NULL,
-    org         TEXT NOT NULL DEFAULT 'mnemo',
-    created_at  TIMESTAMPTZ DEFAULT now(),
-    is_active   BOOLEAN DEFAULT true
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                    TEXT NOT NULL UNIQUE,
+    email                   TEXT,
+    username                TEXT NOT NULL,
+    org                     TEXT NOT NULL DEFAULT 'mnemo',
+    created_at              TIMESTAMPTZ DEFAULT now(),
+    status                  VARCHAR(16) NOT NULL DEFAULT 'active'
+                            CHECK (status IN ('active', 'suspended', 'cancelled')),
+    stripe_customer_id      VARCHAR(64),
+    stripe_subscription_id  VARCHAR(64),
+    updated_at              TIMESTAMPTZ DEFAULT now()
 );
 
 -- Agent registry (scoped under operators)
@@ -23,7 +40,8 @@ CREATE TABLE agents (
     metadata        JSONB DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_active_at  TIMESTAMPTZ,
-    is_active       BOOLEAN NOT NULL DEFAULT true,
+    status          VARCHAR(16) NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'departed')),
     -- Departure handling
     departed_at     TIMESTAMPTZ,             -- NULL = active, set on departure
     data_expires_at TIMESTAMPTZ,             -- departed_at + 30 days
@@ -33,7 +51,9 @@ CREATE TABLE agents (
 
 CREATE INDEX idx_agents_operator ON agents(operator_id);
 CREATE INDEX idx_agents_domain_tags ON agents USING GIN (domain_tags);
-CREATE INDEX idx_agents_active ON agents (is_active) WHERE is_active = true;
+CREATE INDEX idx_agents_active ON agents (status) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_operators_org ON operators(org);
+CREATE INDEX IF NOT EXISTS idx_operators_status ON operators(status);
 
 -- Agent addresses (canonical agent_name:operator_username.org)
 CREATE TABLE agent_addresses (
@@ -325,6 +345,9 @@ $$ LANGUAGE plpgsql;
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON operators, agents, atoms, edges, views, snapshot_atoms, capabilities, agent_addresses, agent_trust
     TO mnemo;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON platform_config TO mnemo;
+GRANT SELECT, INSERT ON schema_migrations TO mnemo;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO mnemo;
 
