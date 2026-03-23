@@ -60,7 +60,7 @@ async def backfill_addresses(pool: asyncpg.Pool) -> int:
         agents = await conn.fetch("""
             SELECT a.id, a.name, o.username, o.org
             FROM agents a JOIN operators o ON o.id = a.operator_id
-            WHERE a.is_active = true
+            WHERE a.status = 'active'
         """)
         for agent in agents:
             address = build_address(agent["name"], agent["username"], agent["org"])

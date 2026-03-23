@@ -34,6 +34,12 @@ async def get_current_operator(
     if operator is None:
         raise HTTPException(status_code=401, detail="Invalid or inactive API key")
 
+    if operator.get("status") != "active":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Operator account is {operator.get('status', 'unknown')}",
+        )
+
     return operator
 
 
@@ -52,7 +58,7 @@ async def verify_agent_ownership(operator: dict, agent_id: UUID | str) -> None:
         row = await conn.fetchrow(
             """
             SELECT id FROM agents
-            WHERE id = $1 AND operator_id = $2 AND is_active = true
+            WHERE id = $1 AND operator_id = $2 AND status = 'active'
             """,
             agent_id,
             UUID(operator["id"]),

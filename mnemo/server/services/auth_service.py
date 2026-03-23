@@ -21,6 +21,8 @@ async def create_operator_with_key(
     username: str | None = None,
     org: str = "mnemo",
     key_name: str = "default",
+    stripe_customer_id: str | None = None,
+    stripe_subscription_id: str | None = None,
 ) -> tuple[dict, str]:
     """
     Create a new operator and generate an API key.
@@ -32,14 +34,16 @@ async def create_operator_with_key(
 
     row = await conn.fetchrow(
         """
-        INSERT INTO operators (name, email, username, org)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, name, email, username, org, created_at, is_active
+        INSERT INTO operators (name, email, username, org, stripe_customer_id, stripe_subscription_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, name, email, username, org, created_at, status
         """,
         name,
         email,
         username,
         org,
+        stripe_customer_id,
+        stripe_subscription_id,
     )
 
     operator = {
@@ -49,7 +53,7 @@ async def create_operator_with_key(
         "username": row["username"],
         "org": row["org"],
         "created_at": row["created_at"],
-        "is_active": row["is_active"],
+        "status": row["status"],
     }
 
     plaintext_key = await create_operator_key(conn, UUID(operator["id"]), key_name)
@@ -65,7 +69,7 @@ async def validate_api_key(conn, key: str) -> dict | None:
     row = await conn.fetchrow(
         """
         SELECT k.id AS key_id, k.key_prefix, k.last_used_at,
-               o.id AS operator_id, o.name, o.email, o.is_active
+               o.id AS operator_id, o.name, o.email, o.status AS operator_status
         FROM api_keys k
         JOIN operators o ON o.id = k.operator_id
         WHERE k.key_hash = $1 AND k.is_active = true
@@ -75,7 +79,7 @@ async def validate_api_key(conn, key: str) -> dict | None:
     if row is None:
         return None
 
-    if not row["is_active"]:
+    if row["operator_status"] != "active":
         return None
 
     # Update last_used_at
@@ -88,7 +92,7 @@ async def validate_api_key(conn, key: str) -> dict | None:
         "id": str(row["operator_id"]),
         "name": row["name"],
         "email": row["email"],
-        "is_active": row["is_active"],
+        "status": row["operator_status"],
         "key_prefix": row["key_prefix"],
         "last_used_at": row["last_used_at"],
     }

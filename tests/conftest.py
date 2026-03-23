@@ -62,6 +62,7 @@ DELETE FROM agent_addresses;
 DELETE FROM agents;
 DELETE FROM operations;
 DELETE FROM operators;
+DELETE FROM platform_config;
 """
 
 
@@ -150,7 +151,7 @@ async def agent_with_address(client, pool, operator_with_username):
         row = await conn.fetchrow("""
             INSERT INTO agents (operator_id, name, domain_tags)
             VALUES ($1, 'test-agent', '{"testing"}')
-            RETURNING id, name, operator_id, persona, domain_tags, metadata, created_at, is_active
+            RETURNING id, name, operator_id, persona, domain_tags, metadata, created_at, status
         """, op["id"])
         from mnemo.server.services.address_service import create_address
         address = await create_address(conn, row["id"], row["name"], op["username"], op["org"])

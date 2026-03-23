@@ -18,7 +18,7 @@ class AgentResponse(BaseModel):
     domain_tags: list[str]
     metadata: dict
     created_at: datetime
-    is_active: bool
+    status: str
     address: Optional[str] = None
 
 # ── Remember (primary interface) ──
@@ -207,6 +207,26 @@ class OutboundCapabilityResponse(BaseModel):
     revoked: bool
     revoked_at: Optional[datetime] = None
     granted_at: datetime
+
+# ── Operators (admin) ──
+
+class OperatorCreate(BaseModel):
+    username: str
+    org: str
+    display_name: str
+    email: str
+    stripe_customer_id: str | None = None
+    stripe_subscription_id: str | None = None
+
+class OperatorResponse(BaseModel):
+    uuid: str
+    username: str
+    org: str
+    display_name: str
+    email: str | None
+    status: str
+    agent_count: int | None = None
+    created_at: datetime
 
 # ── Stats ──
 

@@ -9,6 +9,7 @@ from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..models import CapabilityResponse, GrantCreate, OutboundCapabilityResponse, RevokeResponse
 from ..services import view_service
+from ..services.platform_service import is_sharing_enabled
 
 router = APIRouter(tags=["capabilities"])
 
@@ -24,6 +25,10 @@ async def grant_capability(agent_id: str, body: GrantCreate, operator=Depends(ge
     await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
+
+        # Global sharing toggle
+        if not await is_sharing_enabled(conn):
+            raise HTTPException(status_code=403, detail="Sharing is currently disabled")
 
         # Verify the grantor owns the view
         view_owner = await conn.fetchval(
@@ -41,12 +46,12 @@ async def grant_capability(agent_id: str, body: GrantCreate, operator=Depends(ge
 
         # Verify grantee exists and is active
         grantee = await conn.fetchrow(
-            "SELECT is_active FROM agents WHERE id = $1",
+            "SELECT status FROM agents WHERE id = $1",
             body.grantee_id,
         )
         if not grantee:
             raise HTTPException(status_code=404, detail="Grantee agent not found")
-        if not grantee["is_active"]:
+        if grantee["status"] != "active":
             raise HTTPException(status_code=410, detail="Grantee agent has departed")
 
         # Idempotency: return existing non-revoked capability for same view+grantee
@@ -227,9 +232,9 @@ def _cap_row(row) -> dict:
 
 async def _require_active_agent(conn, agent_id: UUID):
     row = await conn.fetchrow(
-        "SELECT is_active FROM agents WHERE id = $1", agent_id
+        "SELECT status FROM agents WHERE id = $1", agent_id
     )
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if not row["is_active"]:
+    if row["status"] != "active":
         raise HTTPException(status_code=410, detail="Agent has departed")

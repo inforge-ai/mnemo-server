@@ -34,7 +34,7 @@ class TestAgents:
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "ada"
-        assert data["is_active"] is True
+        assert data["status"] == "active"
         assert "id" in data
 
     async def test_get_agent(self, client, agent):
@@ -1285,4 +1285,9 @@ class TestAdmin:
 async def test_health(client):
     resp = await client.get("/v1/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["postgres"] == "ok"
+    assert "version" in data
+    assert "schema_version" in data
+    assert "uptime_seconds" in data
