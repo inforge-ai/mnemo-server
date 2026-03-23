@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     departure_retention_days: int = 30
 
     # Auth
-    auth_enabled: bool = False
+    auth_enabled: bool = True
 
     # Admin
     admin_token: str = ""  # set MNEMO_ADMIN_TOKEN; empty = admin disabled
