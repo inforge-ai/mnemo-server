@@ -98,7 +98,13 @@ async def _merge_duplicate(
     incoming_alpha: float,
     incoming_beta: float,
 ) -> None:
-    """Bayesian update: add evidence from the incoming atom into the existing one."""
+    """Bayesian update: add evidence from the incoming atom into the existing one.
+
+    Reinforcement increments alpha by (incoming_alpha - 1), the new evidence minus
+    the shared prior. For a typical high-confidence duplicate with incoming
+    Beta(8,1), this adds 7 to alpha per repetition. The update is persisted
+    immediately and reflected in the next recall via effective_confidence().
+    """
     new_alpha = existing_alpha + incoming_alpha - 1.0
     new_beta = existing_beta + incoming_beta - 1.0
     # Clamp to sane minimums
