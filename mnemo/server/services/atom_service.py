@@ -98,7 +98,13 @@ async def _merge_duplicate(
     incoming_alpha: float,
     incoming_beta: float,
 ) -> None:
-    """Bayesian update: add evidence from the incoming atom into the existing one."""
+    """Bayesian update: add evidence from the incoming atom into the existing one.
+
+    Reinforcement increments alpha by (incoming_alpha - 1), the new evidence minus
+    the shared prior. For a typical high-confidence duplicate with incoming
+    Beta(8,1), this adds 7 to alpha per repetition. The update is persisted
+    immediately and reflected in the next recall via effective_confidence().
+    """
     new_alpha = existing_alpha + incoming_alpha - 1.0
     new_beta = existing_beta + incoming_beta - 1.0
     # Clamp to sane minimums
@@ -255,6 +261,8 @@ def _apply_verbosity(atoms: list[dict], verbosity: str, max_chars: int) -> list[
     if verbosity == "full":
         return atoms
     for atom in atoms:
+        atom.pop("confidence_alpha", None)
+        atom.pop("confidence_beta", None)
         text = atom["text_content"]
         if verbosity == "summary":
             end = text.find(". ")
@@ -271,6 +279,14 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
     vb = np.array(b, dtype=np.float32)
     norm = float(np.linalg.norm(va) * np.linalg.norm(vb))
     return float(np.dot(va, vb)) / norm if norm > 0 else 0.0
+
+
+def composite_score(similarity: float, confidence_effective: float, source_type: str) -> float:
+    """Composite ranking score with specificity penalty for consolidated atoms."""
+    base = similarity * (0.7 + 0.3 * confidence_effective)
+    if source_type == "consolidation":
+        base *= 0.85  # 15% penalty — broad embeddings over-match
+    return base
 
 
 def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = None) -> dict:
@@ -291,6 +307,8 @@ def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = N
         "last_accessed": row["last_accessed"],
         "access_count": row["access_count"],
         "is_active": row["is_active"],
+        "confidence_alpha": alpha,
+        "confidence_beta": beta,
     }
 
 
@@ -523,16 +541,37 @@ async def store_background(
     """
     try:
         async with pool.acquire() as conn:
-            await store_from_text(
+            await conn.execute(
+                "UPDATE store_jobs SET status = 'decomposing' WHERE store_id = $1",
+                store_id,
+            )
+            result = await store_from_text(
                 conn, agent_id, text, domain_tags,
                 store_id=store_id, operator_id=operator_id,
                 remembered_on=remembered_on,
+            )
+            await conn.execute(
+                """
+                UPDATE store_jobs
+                SET status = 'complete', atoms_created = $1, completed_at = now()
+                WHERE store_id = $2
+                """,
+                result["atoms_created"],
+                store_id,
             )
     except Exception:
         error_msg = traceback.format_exc()
         logger.error("Background store %s failed: %s", store_id, error_msg)
         try:
             async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE store_jobs
+                    SET status = 'failed', error = $1, completed_at = now()
+                    WHERE store_id = $2
+                    """,
+                    error_msg, store_id,
+                )
                 await conn.execute(
                     """
                     INSERT INTO store_failures (id, agent_id, original_text, error)
@@ -617,7 +656,8 @@ async def retrieve(
     """
     Semantic retrieval with decay filtering, access updates, optional graph expansion.
 
-    Ranking: composite score = similarity * (0.7 + 0.3 * effective_confidence).
+    Ranking: composite score = similarity * (0.7 + 0.3 * effective_confidence),
+    with a 15% specificity penalty for consolidated atoms.
     Similarity floor: atoms below min_similarity are excluded from primary results.
     Expansion floor: expanded atoms below min_similarity * 0.6 are excluded.
     """
@@ -664,7 +704,7 @@ async def retrieve(
     rows = _dedup_results(rows)
 
     rows.sort(
-        key=lambda r: r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]),
+        key=lambda r: composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]),
         reverse=True,
     )
 
@@ -675,7 +715,7 @@ async def retrieve(
     # Gap threshold is applied first so that atoms cut from primary are eligible
     # to surface in expanded_atoms (they must not be in exclude_ids).
     primary_responses = [
-        _row_to_atom_response(r, r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]))
+        _row_to_atom_response(r, composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]))
         for r in primary
     ]
     primary_responses = _apply_gap_threshold(primary_responses, similarity_drop_threshold)
@@ -714,7 +754,7 @@ async def retrieve(
         for r in expanded_rows:
             sim = _cosine_sim(r["embedding"], embedding)
             if sim >= exp_floor:
-                score = sim * (0.7 + 0.3 * r["confidence_effective"])
+                score = composite_score(sim, r["confidence_effective"], r["source_type"])
                 scored.append((r, score))
         scored.sort(key=lambda x: x[1], reverse=True)
 
@@ -871,6 +911,54 @@ async def get_agent_stats(
         agent_id,
     )
 
+    # ── Cold-start enrichment ──
+
+    # Topics: top domain tags by frequency
+    tag_rows = await conn.fetch(
+        """
+        SELECT unnest(domain_tags) AS tag, COUNT(*) AS cnt
+        FROM atoms
+        WHERE agent_id = $1 AND is_active = true AND domain_tags != '{}'
+        GROUP BY tag
+        ORDER BY cnt DESC
+        LIMIT 8
+        """,
+        agent_id,
+    )
+    topics = [r["tag"] for r in tag_rows]
+
+    # Date range
+    date_row = await conn.fetchrow(
+        """
+        SELECT MIN(created_at)::date AS earliest, MAX(created_at)::date AS latest
+        FROM atoms
+        WHERE agent_id = $1 AND is_active = true
+        """,
+        agent_id,
+    )
+    date_range = None
+    if date_row and date_row["earliest"] is not None:
+        date_range = {
+            "earliest": str(date_row["earliest"]),
+            "latest": str(date_row["latest"]),
+        }
+
+    # Most accessed (top 3)
+    accessed_rows = await conn.fetch(
+        """
+        SELECT text_content, access_count
+        FROM atoms
+        WHERE agent_id = $1 AND is_active = true AND access_count > 0
+        ORDER BY access_count DESC
+        LIMIT 3
+        """,
+        agent_id,
+    )
+    most_accessed = [
+        {"text": r["text_content"][:60], "hits": r["access_count"]}
+        for r in accessed_rows
+    ]
+
     return {
         "agent_id": agent_id,
         "total_atoms": row["total_atoms"],
@@ -887,4 +975,7 @@ async def get_agent_stats(
         "active_views": view_count,
         "granted_capabilities": granted_count,
         "received_capabilities": received_count,
+        "topics": topics,
+        "date_range": date_range,
+        "most_accessed": most_accessed,
     }

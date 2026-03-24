@@ -367,3 +367,19 @@ GRANT EXECUTE
 GRANT EXECUTE
     ON FUNCTION revoke_agent_capabilities(uuid)
     TO mnemo;
+
+-- ── Store job tracking ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS store_jobs (
+    store_id        UUID PRIMARY KEY,
+    agent_id        UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    operator_id     UUID NOT NULL REFERENCES operators(id),
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'decomposing', 'complete', 'failed')),
+    atoms_created   INTEGER DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at    TIMESTAMPTZ,
+    error           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_store_jobs_agent ON store_jobs (agent_id);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON store_jobs TO mnemo;

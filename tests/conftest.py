@@ -55,6 +55,7 @@ DELETE FROM snapshot_atoms;
 DELETE FROM edges;
 DELETE FROM views;
 DELETE FROM store_failures;
+DELETE FROM store_jobs;
 DELETE FROM decomposer_usage;
 DELETE FROM atoms;
 DELETE FROM api_keys;
