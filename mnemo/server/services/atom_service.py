@@ -279,6 +279,14 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
     return float(np.dot(va, vb)) / norm if norm > 0 else 0.0
 
 
+def composite_score(similarity: float, confidence_effective: float, source_type: str) -> float:
+    """Composite ranking score with specificity penalty for consolidated atoms."""
+    base = similarity * (0.7 + 0.3 * confidence_effective)
+    if source_type == "consolidation":
+        base *= 0.85  # 15% penalty — broad embeddings over-match
+    return base
+
+
 def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = None) -> dict:
     alpha = row["confidence_alpha"]
     beta = row["confidence_beta"]
@@ -623,7 +631,8 @@ async def retrieve(
     """
     Semantic retrieval with decay filtering, access updates, optional graph expansion.
 
-    Ranking: composite score = similarity * (0.7 + 0.3 * effective_confidence).
+    Ranking: composite score = similarity * (0.7 + 0.3 * effective_confidence),
+    with a 15% specificity penalty for consolidated atoms.
     Similarity floor: atoms below min_similarity are excluded from primary results.
     Expansion floor: expanded atoms below min_similarity * 0.6 are excluded.
     """
@@ -670,7 +679,7 @@ async def retrieve(
     rows = _dedup_results(rows)
 
     rows.sort(
-        key=lambda r: r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]),
+        key=lambda r: composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]),
         reverse=True,
     )
 
@@ -681,7 +690,7 @@ async def retrieve(
     # Gap threshold is applied first so that atoms cut from primary are eligible
     # to surface in expanded_atoms (they must not be in exclude_ids).
     primary_responses = [
-        _row_to_atom_response(r, r["cosine_sim"] * (0.7 + 0.3 * r["confidence_effective"]))
+        _row_to_atom_response(r, composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]))
         for r in primary
     ]
     primary_responses = _apply_gap_threshold(primary_responses, similarity_drop_threshold)
@@ -720,7 +729,7 @@ async def retrieve(
         for r in expanded_rows:
             sim = _cosine_sim(r["embedding"], embedding)
             if sim >= exp_floor:
-                score = sim * (0.7 + 0.3 * r["confidence_effective"])
+                score = composite_score(sim, r["confidence_effective"], r["source_type"])
                 scored.append((r, score))
         scored.sort(key=lambda x: x[1], reverse=True)
 
