@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from uuid import UUID, uuid4
 
@@ -12,12 +13,28 @@ from ..models import RememberRequest, RememberResponse, RetrieveRequest, Retriev
 from ..services import atom_service
 from ..services.ops_service import log_operation
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["memory"])
 
 
 @router.post("/agents/{agent_id}/remember", response_model=RememberResponse, status_code=201)
 async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_current_operator)):
     """Store a free-text memory. Returns immediately; decomposition runs in background."""
+    # ── Input validation ──
+    stripped = body.text.strip()
+    if not stripped:
+        raise HTTPException(status_code=422, detail="text must contain non-whitespace content")
+    if len(stripped) < 3:
+        raise HTTPException(status_code=422, detail="text must be at least 3 characters")
+    if len(body.text) > 50_000:
+        raise HTTPException(status_code=413, detail=(
+            "text exceeds maximum length of 50,000 characters. "
+            "Split large documents into smaller sections before storing."
+        ))
+    if len(body.text) > 10_000:
+        logger.warning("Large input: %d chars from agent %s", len(body.text), agent_id)
+
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
     await verify_agent_ownership(operator, agent_uuid)
