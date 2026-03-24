@@ -261,6 +261,8 @@ def _apply_verbosity(atoms: list[dict], verbosity: str, max_chars: int) -> list[
     if verbosity == "full":
         return atoms
     for atom in atoms:
+        atom.pop("confidence_alpha", None)
+        atom.pop("confidence_beta", None)
         text = atom["text_content"]
         if verbosity == "summary":
             end = text.find(". ")
@@ -305,6 +307,8 @@ def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = N
         "last_accessed": row["last_accessed"],
         "access_count": row["access_count"],
         "is_active": row["is_active"],
+        "confidence_alpha": alpha,
+        "confidence_beta": beta,
     }
 
 
@@ -886,6 +890,54 @@ async def get_agent_stats(
         agent_id,
     )
 
+    # ── Cold-start enrichment ──
+
+    # Topics: top domain tags by frequency
+    tag_rows = await conn.fetch(
+        """
+        SELECT unnest(domain_tags) AS tag, COUNT(*) AS cnt
+        FROM atoms
+        WHERE agent_id = $1 AND is_active = true AND domain_tags != '{}'
+        GROUP BY tag
+        ORDER BY cnt DESC
+        LIMIT 8
+        """,
+        agent_id,
+    )
+    topics = [r["tag"] for r in tag_rows]
+
+    # Date range
+    date_row = await conn.fetchrow(
+        """
+        SELECT MIN(created_at)::date AS earliest, MAX(created_at)::date AS latest
+        FROM atoms
+        WHERE agent_id = $1 AND is_active = true
+        """,
+        agent_id,
+    )
+    date_range = None
+    if date_row and date_row["earliest"] is not None:
+        date_range = {
+            "earliest": str(date_row["earliest"]),
+            "latest": str(date_row["latest"]),
+        }
+
+    # Most accessed (top 3)
+    accessed_rows = await conn.fetch(
+        """
+        SELECT text_content, access_count
+        FROM atoms
+        WHERE agent_id = $1 AND is_active = true AND access_count > 0
+        ORDER BY access_count DESC
+        LIMIT 3
+        """,
+        agent_id,
+    )
+    most_accessed = [
+        {"text": r["text_content"][:60], "hits": r["access_count"]}
+        for r in accessed_rows
+    ]
+
     return {
         "agent_id": agent_id,
         "total_atoms": row["total_atoms"],
@@ -902,4 +954,7 @@ async def get_agent_stats(
         "active_views": view_count,
         "granted_capabilities": granted_count,
         "received_capabilities": received_count,
+        "topics": topics,
+        "date_range": date_range,
+        "most_accessed": most_accessed,
     }

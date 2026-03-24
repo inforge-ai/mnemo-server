@@ -65,7 +65,7 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
     return {"status": "queued", "store_id": store_id}
 
 
-@router.post("/agents/{agent_id}/recall", response_model=RetrieveResponse)
+@router.post("/agents/{agent_id}/recall", response_model=RetrieveResponse, response_model_exclude_none=True)
 async def recall(agent_id: str, body: RetrieveRequest, operator=Depends(get_current_operator)):
     """Retrieve relevant memories via semantic search + optional graph expansion."""
     pool = await get_pool()

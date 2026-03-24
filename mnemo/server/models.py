@@ -59,6 +59,9 @@ class AtomResponse(BaseModel):
     last_accessed: Optional[datetime]
     access_count: int
     is_active: bool
+    # Confidence metadata — populated at verbosity=full only
+    confidence_alpha: Optional[float] = None
+    confidence_beta: Optional[float] = None
 
 # ── Retrieval ──
 
@@ -222,3 +225,7 @@ class AgentStats(BaseModel):
     granted_capabilities: int
     received_capabilities: int
     address: Optional[str] = None
+    # Cold-start enrichment fields
+    topics: list[str] = []
+    date_range: Optional[dict] = None
+    most_accessed: list[dict] = []
