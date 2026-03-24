@@ -27,6 +27,7 @@ from uuid import UUID
 import asyncpg
 
 from ..embeddings import encode
+from .atom_service import _row_to_atom_response, composite_score
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +247,7 @@ async def export_skill(
     # Load agent name for attribution
     agent_name = await conn.fetchval("SELECT name FROM agents WHERE id = $1", agent_id)
 
-    from ..services.atom_service import _row_to_atom_response, composite_score
+    # _row_to_atom_response and composite_score imported at module level
 
     all_atoms = [_row_to_atom_response(r) for r in atom_rows]
     snapshot_ids = {a["id"] for a in all_atoms}
@@ -464,7 +465,7 @@ async def recall_shared(
             allowed_ids=allowed_ids,
         )
 
-    from ..services.atom_service import _row_to_atom_response, composite_score
+    # _row_to_atom_response and composite_score imported at module level
     primary_responses = [
         _row_to_atom_response(r, composite_score(r["similarity"], r["confidence_effective"], r["source_type"]))
         for r in primary
@@ -551,7 +552,7 @@ async def recall_all_shared(
             atom_ids,
         )
 
-    from ..services.atom_service import _row_to_atom_response, composite_score
+    # _row_to_atom_response and composite_score imported at module level
     atoms = []
     for r in filtered:
         atom = _row_to_atom_response(r, relevance_score=composite_score(r["similarity"], r["confidence_effective"], r["source_type"]))

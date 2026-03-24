@@ -33,6 +33,14 @@ class RememberResponse(BaseModel):
     status: str = "queued"
     store_id: UUID
 
+class StoreJobResponse(BaseModel):
+    store_id: UUID
+    status: str
+    atoms_created: int = 0
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    error: Optional[str] = None
+
 # ── Atoms (power-user interface) ──
 
 class AtomCreate(BaseModel):

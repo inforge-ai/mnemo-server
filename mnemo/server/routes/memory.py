@@ -9,7 +9,7 @@ from ..auth import get_current_operator, verify_agent_ownership
 from ..config import settings
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
-from ..models import RememberRequest, RememberResponse, RetrieveRequest, RetrieveResponse
+from ..models import RememberRequest, RememberResponse, RetrieveRequest, RetrieveResponse, StoreJobResponse
 from ..services import atom_service
 from ..services.ops_service import log_operation
 
@@ -49,6 +49,13 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
     store_id = uuid4()
     async with get_conn() as conn:
         await log_operation(conn, "remember", operator["id"], target_id=agent_uuid)
+        await conn.execute(
+            """
+            INSERT INTO store_jobs (store_id, agent_id, operator_id)
+            VALUES ($1, $2, $3)
+            """,
+            store_id, agent_uuid, operator_id,
+        )
     coro = atom_service.store_background(
         pool=pool,
         store_id=store_id,
@@ -96,6 +103,26 @@ async def recall(agent_id: str, body: RetrieveRequest, operator=Depends(get_curr
             metadata={"results_returned": result["total_retrieved"]},
         )
     return result
+
+
+@router.get("/stores/{store_id}/status", response_model=StoreJobResponse)
+async def store_status(store_id: UUID, operator=Depends(get_current_operator)):
+    """Check the status of an async store operation."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT sj.store_id, sj.status, sj.atoms_created,
+                   sj.created_at, sj.completed_at, sj.error
+            FROM store_jobs sj
+            JOIN agents a ON a.id = sj.agent_id
+            WHERE sj.store_id = $1
+              AND ($2::uuid IS NULL OR a.operator_id = $2)
+            """,
+            store_id, operator["id"],
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Store job not found")
+    return dict(row)
 
 
 async def _require_active_agent(conn, agent_id: UUID):

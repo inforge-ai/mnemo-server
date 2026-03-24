@@ -541,16 +541,37 @@ async def store_background(
     """
     try:
         async with pool.acquire() as conn:
-            await store_from_text(
+            await conn.execute(
+                "UPDATE store_jobs SET status = 'decomposing' WHERE store_id = $1",
+                store_id,
+            )
+            result = await store_from_text(
                 conn, agent_id, text, domain_tags,
                 store_id=store_id, operator_id=operator_id,
                 remembered_on=remembered_on,
+            )
+            await conn.execute(
+                """
+                UPDATE store_jobs
+                SET status = 'complete', atoms_created = $1, completed_at = now()
+                WHERE store_id = $2
+                """,
+                result["atoms_created"],
+                store_id,
             )
     except Exception:
         error_msg = traceback.format_exc()
         logger.error("Background store %s failed: %s", store_id, error_msg)
         try:
             async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE store_jobs
+                    SET status = 'failed', error = $1, completed_at = now()
+                    WHERE store_id = $2
+                    """,
+                    error_msg, store_id,
+                )
                 await conn.execute(
                     """
                     INSERT INTO store_failures (id, agent_id, original_text, error)
