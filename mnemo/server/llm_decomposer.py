@@ -40,6 +40,7 @@ Rules:
 - Every episodic atom MUST include when it happened. If the text says "I went camping" and the memory is from July 17, 2023, the atom should say "Went camping approximately early July 2023" at minimum.
 - If a future plan is mentioned ("I'm going camping next month"), create a separate atom for the plan with the projected date, distinct from any later atom about the actual event.
 - Preserve specific details exactly: names, dates, quantities, places, identity terms, breeds, titles. Do NOT generalise — "transgender woman" stays "transgender woman", not "LGBTQ+ individual"; "golden retriever puppy" stays "golden retriever puppy", not "dog".
+- ALWAYS preserve proper nouns exactly as stated: brand names (Under Armour, Nike), product names (Exploding Kittens, Xenoblade 2), book titles (Charlotte's Web), shop names (House of MinaLima), organization names (Good Sports), place names (Fort Wayne, Voyageurs National Park), nicknames (Jo), and any other named entity. Never generalise a proper noun into a description.
 - Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0}
 - Confidence should reflect how certain/well-supported the claim is in the source text
 
