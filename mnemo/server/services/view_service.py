@@ -111,7 +111,7 @@ async def create_snapshot(
 
     # Collect matching atom IDs at this moment
     if query:
-        embedding = await encode(query)
+        embedding = await encode(query, prompt_name="query")
         atom_rows = await conn.fetch(
             """
             SELECT id, 1 - (embedding <=> $1::vector) AS similarity
@@ -377,7 +377,7 @@ async def recall_shared(
     Future: Add a `frozen` flag to views. When frozen=True, bypass is_active and
     effective_confidence filters to provide true point-in-time snapshots.
     """
-    embedding = await encode(query)
+    embedding = await encode(query, prompt_name="query")
 
     # Trust check: grantee must trust the grantor of this capability
     trust_row = await conn.fetchrow(
@@ -501,7 +501,7 @@ async def recall_all_shared(
     max_results: int = 5,
 ) -> dict:
     """Search across ALL views shared with this agent in a single query."""
-    embedding = await encode(query)
+    embedding = await encode(query, prompt_name="query")
 
     rows = await conn.fetch(
         """

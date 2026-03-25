@@ -42,7 +42,10 @@ async def main(apply: bool) -> None:
 
     updated = 0
     for row in rows:
-        embedding = model.encode(row["text_content"]).tolist()
+        kwargs = {"normalize_embeddings": True}
+        if model.prompts:
+            kwargs["prompt_name"] = "document"
+        embedding = model.encode(row["text_content"], **kwargs).tolist()
         await conn.execute(
             "UPDATE atoms SET embedding = $1::vector WHERE id = $2",
             embedding,

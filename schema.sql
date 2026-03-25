@@ -77,7 +77,7 @@ CREATE TABLE atoms (
     -- Content
     text_content    TEXT NOT NULL,
     structured      JSONB DEFAULT '{}',
-    embedding       vector(384),             -- all-MiniLM-L6-v2 for v0.1
+    embedding       vector(768),             -- google/embeddinggemma-300m
 
     -- Confidence (inferred by server, stored as Beta distribution)
     confidence_alpha FLOAT NOT NULL DEFAULT 2.0,

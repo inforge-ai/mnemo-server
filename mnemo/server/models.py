@@ -78,17 +78,17 @@ class RetrieveRequest(BaseModel):
     domain_tags: Optional[list[str]] = None
     min_confidence: float = 0.1
     min_similarity: float = Field(
-        default=0.2,
+        default=0.25,
         ge=0.0,
         le=1.0,
-        description="Minimum cosine similarity floor. Consider raising to 0.3 after LLM decomposer ships and similarity distribution shifts upward.",
+        description="Minimum cosine similarity floor (calibrated for EmbeddingGemma-300M).",
     )
     max_results: int = 10
     expand_graph: bool = True
     expansion_depth: int = 2
     include_superseded: bool = False
     similarity_drop_threshold: Optional[float] = Field(
-        default=0.3,
+        default=0.15,
         ge=0.0,
         le=1.0,
         description="Stop returning results when score drops by this fraction from previous",

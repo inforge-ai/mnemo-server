@@ -648,7 +648,7 @@ async def retrieve(
     expand_graph: bool,
     expansion_depth: int,
     include_superseded: bool,
-    similarity_drop_threshold: float | None = 0.3,
+    similarity_drop_threshold: float | None = 0.15,
     verbosity: str = "full",
     max_content_chars: int = 200,
     max_total_tokens: int | None = None,
@@ -661,7 +661,7 @@ async def retrieve(
     Similarity floor: atoms below min_similarity are excluded from primary results.
     Expansion floor: expanded atoms below min_similarity * 0.6 are excluded.
     """
-    embedding = await encode(query)
+    embedding = await encode(query, prompt_name="query")
     over_fetch = max_results * 2
 
     # Fetch top candidates using the ivfflat index (ORDER BY distance ASC).

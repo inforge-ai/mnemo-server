@@ -32,15 +32,19 @@ def warmup() -> None:
     _get_model()
 
 
-def _encode_sync(text: str) -> list[float]:
-    vector = _get_model().encode(text, normalize_embeddings=True, show_progress_bar=False)
+def _encode_sync(text: str, prompt_name: str = "document") -> list[float]:
+    model = _get_model()
+    kwargs: dict = {"normalize_embeddings": True, "show_progress_bar": False}
+    if model.prompts:
+        kwargs["prompt_name"] = prompt_name
+    vector = model.encode(text, **kwargs)
     return vector.tolist()
 
 
-async def encode(text: str) -> list[float]:
+async def encode(text: str, prompt_name: str = "document") -> list[float]:
     # In test mode, run encoding synchronously to avoid yielding the event
     # loop to pytest-asyncio fixture setup (clean_db) mid-request.
     if settings.sync_store_for_tests:
-        return _encode_sync(text)
+        return _encode_sync(text, prompt_name)
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_executor, _encode_sync, text)
+    return await loop.run_in_executor(_executor, _encode_sync, text, prompt_name)

@@ -4,15 +4,15 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str  # required — set MNEMO_DATABASE_URL in env or .env file
     test_database_url: str = ""  # set MNEMO_TEST_DATABASE_URL for test suite
-    embedding_model: str = "thenlper/gte-small"
-    embedding_dim: int = 384
+    embedding_model: str = "google/embeddinggemma-300m"
+    embedding_dim: int = 768
     max_retrieval_results: int = 50
     default_retrieval_limit: int = 10
     graph_expansion_max_depth: int = 3
     consolidation_interval_minutes: int = 60
     min_effective_confidence: float = 0.05
-    duplicate_similarity_threshold: float = 0.97
-    cross_call_edge_threshold: float = 0.78
+    duplicate_similarity_threshold: float = 0.90
+    cross_call_edge_threshold: float = 0.55
 
     # Default decay half-lives (days) by atom type
     decay_episodic: float = 14.0
