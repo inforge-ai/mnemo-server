@@ -43,18 +43,18 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="Mnemo", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Mnemo", version="0.4.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://admin.mnemo-ai.com"],
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["X-Admin-Token", "Content-Type", "Authorization"],
+    allow_headers=["X-Admin-Key", "X-Admin-Token", "X-Agent-Key", "X-Operator-Key", "Content-Type", "Authorization"],
 )
 
 
 def _register_routers():
-    from .routes import admin, admin_agents, admin_operators, admin_trust, agents, atoms, auth, capabilities, health, memory, views
+    from .routes import admin, admin_agents, admin_operators, admin_trust, agents, atoms, auth, capabilities, health, memory, shares, views
     app.include_router(health.router, prefix="/v1")
     app.include_router(auth.router, prefix="/v1")
     app.include_router(agents.router, prefix="/v1")
@@ -62,6 +62,7 @@ def _register_routers():
     app.include_router(atoms.router, prefix="/v1")
     app.include_router(views.router, prefix="/v1")
     app.include_router(capabilities.router, prefix="/v1")
+    app.include_router(shares.router, prefix="/v1")
     app.include_router(admin.router, prefix="/v1")
     app.include_router(admin_operators.router, prefix="/v1")
     app.include_router(admin_agents.router, prefix="/v1")

@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -32,16 +33,16 @@ class Settings(BaseSettings):
     # Auth
     auth_enabled: bool = True
 
-    # Admin
-    admin_token: str = ""  # set MNEMO_ADMIN_TOKEN; empty = admin disabled
+    # Admin key (formerly admin_token) — accepts both MNEMO_ADMIN_KEY and MNEMO_ADMIN_TOKEN
+    admin_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MNEMO_ADMIN_KEY", "MNEMO_ADMIN_TOKEN"),
+    )
 
     # Testing
     sync_store_for_tests: bool = False  # if True, /remember awaits the store task inline
 
-    class Config:
-        env_prefix = "MNEMO_"
-        env_file = ".env"
-        extra = "ignore"
+    model_config = {"env_prefix": "MNEMO_", "env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

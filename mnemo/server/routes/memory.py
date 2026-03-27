@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import get_current_operator, verify_agent_ownership
+from ..auth import AuthContext, require_agent, require_agent_match, resolve_auth
 from ..config import settings
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
@@ -19,7 +19,7 @@ router = APIRouter(tags=["memory"])
 
 
 @router.post("/agents/{agent_id}/remember", response_model=RememberResponse, status_code=201)
-async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_current_operator)):
+async def remember(agent_id: str, body: RememberRequest, auth: AuthContext = Depends(require_agent)):
     """Store a free-text memory. Returns immediately; decomposition runs in background."""
     # ── Input validation ──
     stripped = body.text.strip()
@@ -37,7 +37,7 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
 
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         # Resolve operator_id for decomposer usage logging
@@ -48,7 +48,7 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
 
     store_id = uuid4()
     async with get_conn() as conn:
-        await log_operation(conn, "remember", operator["id"], target_id=agent_uuid)
+        await log_operation(conn, "remember", auth.agent_id, target_id=agent_uuid)
         await conn.execute(
             """
             INSERT INTO store_jobs (store_id, agent_id, operator_id)
@@ -73,11 +73,11 @@ async def remember(agent_id: str, body: RememberRequest, operator=Depends(get_cu
 
 
 @router.post("/agents/{agent_id}/recall", response_model=RetrieveResponse, response_model_exclude_none=True)
-async def recall(agent_id: str, body: RetrieveRequest, operator=Depends(get_current_operator)):
+async def recall(agent_id: str, body: RetrieveRequest, auth: AuthContext = Depends(require_agent)):
     """Retrieve relevant memories via semantic search + optional graph expansion."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         t0 = time.monotonic()
@@ -98,7 +98,7 @@ async def recall(agent_id: str, body: RetrieveRequest, operator=Depends(get_curr
             max_total_tokens=body.max_total_tokens,
         )
         await log_operation(
-            conn, "recall", operator["id"], target_id=agent_uuid,
+            conn, "recall", auth.agent_id, target_id=agent_uuid,
             duration_ms=int((time.monotonic() - t0) * 1000),
             metadata={"results_returned": result["total_retrieved"]},
         )
@@ -106,7 +106,7 @@ async def recall(agent_id: str, body: RetrieveRequest, operator=Depends(get_curr
 
 
 @router.get("/stores/{store_id}/status", response_model=StoreJobResponse)
-async def store_status(store_id: UUID, operator=Depends(get_current_operator)):
+async def store_status(store_id: UUID, auth: AuthContext = Depends(resolve_auth)):
     """Check the status of an async store operation."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
@@ -118,7 +118,7 @@ async def store_status(store_id: UUID, operator=Depends(get_current_operator)):
             WHERE sj.store_id = $1
               AND ($2::uuid IS NULL OR a.operator_id = $2)
             """,
-            store_id, operator["id"],
+            store_id, auth.operator_id,
         )
     if not row:
         raise HTTPException(status_code=404, detail="Store job not found")

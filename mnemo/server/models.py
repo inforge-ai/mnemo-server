@@ -21,6 +21,10 @@ class AgentResponse(BaseModel):
     status: str
     address: Optional[str] = None
 
+class AgentCreateResponse(AgentResponse):
+    """Returned only at agent registration — includes the one-time agent key."""
+    agent_key: Optional[str] = None
+
 # ── Remember (primary interface) ──
 
 class RememberRequest(BaseModel):

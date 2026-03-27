@@ -386,6 +386,7 @@ async def recall_shared(
         JOIN agent_trust at ON at.agent_uuid = c.grantee_id
                            AND at.trusted_sender_uuid = c.grantor_id
         WHERE c.id = $1 AND c.grantee_id = $2
+          AND c.blocked_by_recipient = FALSE
         """,
         capability_id,
         grantee_id,
@@ -527,6 +528,7 @@ async def recall_all_shared(
         LEFT JOIN agent_addresses aa ON aa.agent_id = c.grantor_id
         WHERE c.grantee_id = $2
           AND c.revoked = false
+          AND c.blocked_by_recipient = FALSE
           AND (c.expires_at IS NULL OR c.expires_at > now())
           AND a.is_active = true
           AND ($3::uuid IS NULL OR c.grantor_id = $3)

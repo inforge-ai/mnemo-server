@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import get_current_operator, verify_agent_ownership
+from ..auth import AuthContext, require_agent, require_agent_match
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..models import AtomCreate, AtomResponse, EdgeCreate, EdgeResponse
@@ -12,11 +12,11 @@ router = APIRouter(tags=["atoms"])
 
 
 @router.post("/agents/{agent_id}/atoms", response_model=AtomResponse, status_code=201)
-async def create_atom(agent_id: str, body: AtomCreate, operator=Depends(get_current_operator)):
+async def create_atom(agent_id: str, body: AtomCreate, auth: AuthContext = Depends(require_agent)):
     """Explicit typed atom creation (power-user interface)."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         result = await atom_service.store_explicit(
@@ -34,10 +34,10 @@ async def create_atom(agent_id: str, body: AtomCreate, operator=Depends(get_curr
 
 
 @router.get("/agents/{agent_id}/atoms/{atom_id}", response_model=AtomResponse)
-async def get_atom(agent_id: str, atom_id: UUID, operator=Depends(get_current_operator)):
+async def get_atom(agent_id: str, atom_id: UUID, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         result = await atom_service.get_atom(conn, agent_uuid, atom_id)
@@ -47,10 +47,10 @@ async def get_atom(agent_id: str, atom_id: UUID, operator=Depends(get_current_op
 
 
 @router.delete("/agents/{agent_id}/atoms/{atom_id}", status_code=204)
-async def delete_atom(agent_id: str, atom_id: UUID, operator=Depends(get_current_operator)):
+async def delete_atom(agent_id: str, atom_id: UUID, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         deleted = await atom_service.soft_delete_atom(conn, agent_uuid, atom_id)
@@ -59,11 +59,11 @@ async def delete_atom(agent_id: str, atom_id: UUID, operator=Depends(get_current
 
 
 @router.post("/agents/{agent_id}/atoms/link", response_model=EdgeResponse, status_code=201)
-async def link_atoms(agent_id: str, body: EdgeCreate, operator=Depends(get_current_operator)):
+async def link_atoms(agent_id: str, body: EdgeCreate, auth: AuthContext = Depends(require_agent)):
     """Create an edge between two atoms (both must belong to this agent)."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
 

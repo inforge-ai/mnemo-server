@@ -5,8 +5,23 @@ from uuid import UUID
 
 
 def generate_api_key() -> str:
-    """Generate a new mnemo_ prefixed API key."""
+    """Generate a new mnemo_ prefixed API key (legacy, use generate_operator_key)."""
     return "mnemo_" + secrets.token_urlsafe(32)
+
+
+def generate_operator_key() -> str:
+    """Generate a new operator key with mnemo_op_ prefix."""
+    return "mnemo_op_" + secrets.token_urlsafe(32)
+
+
+def generate_agent_key() -> str:
+    """Generate a new agent key with mnemo_ag_ prefix."""
+    return "mnemo_ag_" + secrets.token_urlsafe(32)
+
+
+def generate_admin_key() -> str:
+    """Generate a new admin key with mnemo_admin_ prefix."""
+    return "mnemo_admin_" + secrets.token_urlsafe(32)
 
 
 def hash_key(key: str) -> str:
@@ -115,6 +130,51 @@ async def create_operator_key(conn, operator_id: UUID, key_name: str = "default"
         key_name,
     )
     return key
+
+
+async def create_agent_key(conn, agent_id: UUID) -> str:
+    """Generate an agent key, store hash on agents row, return plaintext key."""
+    key = generate_agent_key()
+    key_hash_val = hash_key(key)
+    key_prefix = key[:16]
+
+    await conn.execute(
+        "UPDATE agents SET key_hash = $1, key_prefix = $2 WHERE id = $3",
+        key_hash_val,
+        key_prefix,
+        agent_id,
+    )
+    return key
+
+
+async def validate_agent_key(conn, key: str) -> dict | None:
+    """
+    Look up agent key by SHA-256 hash.
+    Returns agent dict if key is valid and agent is active, else None.
+    """
+    key_hash_val = hash_key(key)
+    row = await conn.fetchrow(
+        """
+        SELECT a.id AS agent_id, a.operator_id, a.name, a.status,
+               o.name AS operator_name, o.status AS operator_status
+        FROM agents a
+        JOIN operators o ON o.id = a.operator_id
+        WHERE a.key_hash = $1
+        """,
+        key_hash_val,
+    )
+    if row is None:
+        return None
+    if row["status"] != "active":
+        return None
+    if row["operator_status"] != "active":
+        return None
+    return {
+        "agent_id": row["agent_id"],
+        "operator_id": row["operator_id"],
+        "agent_name": row["name"],
+        "operator_name": row["operator_name"],
+    }
 
 
 async def get_or_create_local_operator(conn) -> UUID:

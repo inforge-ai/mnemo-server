@@ -10,6 +10,7 @@ Endpoints:
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
@@ -136,4 +137,91 @@ async def admin_reinstate_agent(agent_id: str):
         "address": addr_row["address"] if addr_row else None,
         "status": "active",
         "message": "Agent reinstated. Previously revoked capabilities must be re-granted.",
+    }
+
+
+class PurgeConfirmation(BaseModel):
+    confirm: str
+
+
+@router.post("/{agent_id}/purge", dependencies=[Depends(_require_admin)])
+async def admin_purge_agent(agent_id: str, body: PurgeConfirmation):
+    """Admin hard-purge: permanently delete all agent data and mark departed."""
+    if body.confirm != "purge":
+        raise HTTPException(status_code=422, detail='Request body must be {"confirm": "purge"}')
+
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+
+    async with get_conn() as conn:
+        async with conn.transaction():
+            # a) Revoke all outbound capabilities
+            revoked_tag = await conn.execute(
+                "UPDATE capabilities SET revoked = true, revoked_at = now() "
+                "WHERE grantor_id = $1 AND revoked = false",
+                agent_uuid,
+            )
+            shares_revoked = int(revoked_tag.split()[-1])
+
+            # b) Delete all inbound capabilities
+            await conn.execute(
+                "DELETE FROM capabilities WHERE grantee_id = $1",
+                agent_uuid,
+            )
+
+            # c) Get list of atom IDs for this agent
+            atom_rows = await conn.fetch(
+                "SELECT id FROM atoms WHERE agent_id = $1",
+                agent_uuid,
+            )
+            atom_ids = [r["id"] for r in atom_rows]
+
+            edges_deleted = 0
+            if atom_ids:
+                # d) Delete all edges where source_id or target_id is in atom_ids
+                edges_tag = await conn.execute(
+                    "DELETE FROM edges WHERE source_id = ANY($1) OR target_id = ANY($1)",
+                    atom_ids,
+                )
+                edges_deleted = int(edges_tag.split()[-1])
+
+                # e) Delete all snapshot_atoms where atom_id is in atom_ids
+                await conn.execute(
+                    "DELETE FROM snapshot_atoms WHERE atom_id = ANY($1)",
+                    atom_ids,
+                )
+
+            # f) Delete all views owned by this agent
+            await conn.execute(
+                "DELETE FROM views WHERE owner_agent_id = $1",
+                agent_uuid,
+            )
+
+            # g) Hard-delete all atoms
+            atoms_tag = await conn.execute(
+                "DELETE FROM atoms WHERE agent_id = $1",
+                agent_uuid,
+            )
+            atoms_deleted = int(atoms_tag.split()[-1])
+
+            # h) Set agent status to departed
+            await conn.execute(
+                "UPDATE agents SET status = 'departed', departed_at = now(), "
+                "data_expires_at = now() + interval '30 days' "
+                "WHERE id = $1",
+                agent_uuid,
+            )
+
+            addr_row = await conn.fetchrow(
+                "SELECT address FROM agent_addresses WHERE agent_id = $1",
+                agent_uuid,
+            )
+
+    return {
+        "agent_id": str(agent_uuid),
+        "address": addr_row["address"] if addr_row else None,
+        "atoms_deleted": atoms_deleted,
+        "edges_deleted": edges_deleted,
+        "shares_revoked": shares_revoked,
+        "status": "departed",
     }

@@ -46,12 +46,17 @@ CREATE TABLE agents (
     departed_at     TIMESTAMPTZ,             -- NULL = active, set on departure
     data_expires_at TIMESTAMPTZ,             -- departed_at + 30 days
 
+    -- RBAC-Lite: agent key (issued at registration, hashed with SHA-256)
+    key_hash        TEXT,                    -- SHA-256 hex digest of agent key
+    key_prefix      VARCHAR(20),             -- first 16 chars for display/lookup
+
     CONSTRAINT agents_operator_name_unique UNIQUE (operator_id, name)
 );
 
 CREATE INDEX idx_agents_operator ON agents(operator_id);
 CREATE INDEX idx_agents_domain_tags ON agents USING GIN (domain_tags);
 CREATE INDEX idx_agents_active ON agents (status) WHERE status = 'active';
+CREATE INDEX idx_agents_key_hash ON agents(key_hash) WHERE key_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_operators_org ON operators(org);
 CREATE INDEX IF NOT EXISTS idx_operators_status ON operators(status);
 
@@ -175,7 +180,10 @@ CREATE TABLE capabilities (
     revoked_at      TIMESTAMPTZ DEFAULT NULL,
     parent_cap_id   UUID REFERENCES capabilities(id),
     expires_at      TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- RBAC-Lite: operator can block inbound shares to their agents
+    blocked_by_recipient BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE INDEX idx_capabilities_grantee ON capabilities (grantee_id, revoked);

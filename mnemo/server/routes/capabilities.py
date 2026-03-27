@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import get_current_operator, verify_agent_ownership
+from ..auth import AuthContext, require_agent, require_agent_match
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..models import CapabilityResponse, GrantCreate, OutboundCapabilityResponse, RevokeResponse
@@ -15,14 +15,14 @@ router = APIRouter(tags=["capabilities"])
 
 
 @router.post("/agents/{agent_id}/grant", response_model=CapabilityResponse, status_code=201)
-async def grant_capability(agent_id: str, body: GrantCreate, operator=Depends(get_current_operator)):
+async def grant_capability(agent_id: str, body: GrantCreate, auth: AuthContext = Depends(require_agent)):
     """
     Grant another agent access to one of your views.
     grantor must own the view.
     """
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
 
@@ -99,7 +99,7 @@ async def grant_capability(agent_id: str, body: GrantCreate, operator=Depends(ge
 
 
 @router.post("/capabilities/{cap_id}/revoke")
-async def revoke_capability(cap_id: UUID, operator=Depends(get_current_operator)):
+async def revoke_capability(cap_id: UUID, auth: AuthContext = Depends(require_agent)):
     """
     Revoke a capability and all capabilities derived from it (cascade).
     The revoke cascades through the capability tree via a recursive CTE.
@@ -114,8 +114,8 @@ async def revoke_capability(cap_id: UUID, operator=Depends(get_current_operator)
         if cap["revoked"]:
             raise HTTPException(status_code=409, detail="Capability already revoked")
 
-        # Auth check: operator must own the grantor agent
-        await verify_agent_ownership(operator, cap["grantor_id"])
+        # Auth check: caller must own the grantor agent
+        require_agent_match(cap["grantor_id"], auth)
 
         # Cascade revoke via recursive CTE; fetch returns one row per revoked cap
         revoked_rows = await conn.fetch(
@@ -153,12 +153,12 @@ async def revoke_capability(cap_id: UUID, operator=Depends(get_current_operator)
     response_model=RevokeResponse,
 )
 async def revoke_shared_view(
-    agent_id: str, capability_id: UUID, operator=Depends(get_current_operator)
+    agent_id: str, capability_id: UUID, auth: AuthContext = Depends(require_agent)
 ):
     """Revoke a shared view capability. Idempotent — revoking already-revoked returns success."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         result = await view_service.revoke_shared_view(
@@ -178,12 +178,12 @@ async def revoke_shared_view(
 async def list_outbound_capabilities(
     agent_id: str,
     direction: str = "outbound",
-    operator=Depends(get_current_operator),
+    auth: AuthContext = Depends(require_agent),
 ):
     """List capabilities granted by this agent (outbound)."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         rows = await conn.fetch(

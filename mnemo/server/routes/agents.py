@@ -4,25 +4,25 @@ from uuid import UUID
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..auth import get_current_operator, verify_agent_ownership
+from ..auth import AuthContext, require_admin, require_agent, require_agent_match, require_operator, resolve_auth
 from ..database import get_conn, get_pool
 from ..services.address_service import create_address, resolve_address as resolve_address_fn, resolve_agent_identifier
-from ..models import AgentCreate, AgentResponse, AgentStats
+from ..models import AgentCreate, AgentCreateResponse, AgentResponse, AgentStats
 from ..services.agent_service import depart_agent as do_depart, reinstate_agent as do_reinstate
 from ..services.atom_service import get_agent_stats
-from ..services.auth_service import get_or_create_local_operator
+from ..services.auth_service import create_agent_key, get_or_create_local_operator
 
 router = APIRouter(tags=["agents"])
 
 
-@router.post("/agents", response_model=AgentResponse, status_code=201)
-async def register_agent(body: AgentCreate, operator=Depends(get_current_operator)):
+@router.post("/agents", response_model=AgentCreateResponse, status_code=201)
+async def register_agent(body: AgentCreate, auth: AuthContext = Depends(require_operator)):
     try:
         async with get_conn() as conn:
-            if operator["id"] is not None:
-                operator_id = UUID(operator["id"])
+            if auth.operator_id is not None:
+                operator_id = auth.operator_id
             else:
-                # Auth disabled — use the local operator
+                # Auth disabled or admin — use the local operator
                 operator_id = await get_or_create_local_operator(conn)
 
             row = await conn.fetchrow(
@@ -37,6 +37,9 @@ async def register_agent(body: AgentCreate, operator=Depends(get_current_operato
                 body.domain_tags,
                 json.dumps(body.metadata),
             )
+
+            # Generate agent key (returned once, stored as hash)
+            agent_key = await create_agent_key(conn, row["id"])
 
             # Populate agent address
             op_row = await conn.fetchrow(
@@ -65,19 +68,21 @@ async def register_agent(body: AgentCreate, operator=Depends(get_current_operato
                     )
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail=f"Agent name '{body.name}' already exists")
-    return _agent_row(row, address=address)
+    result = _agent_row(row, address=address)
+    result["agent_key"] = agent_key
+    return result
 
 
 @router.get("/agents", response_model=list[AgentResponse])
 async def list_agents(
     name: str | None = Query(None, description="Filter by exact agent name"),
-    operator=Depends(get_current_operator),
+    auth: AuthContext = Depends(require_operator),
 ):
-    """List agents. When auth is enabled, returns only the operator's agents.
+    """List agents. Returns only the operator's agents.
     Optional name filter for exact match lookup."""
     async with get_conn() as conn:
-        if operator["id"] is not None:
-            operator_id = UUID(operator["id"])
+        if auth.operator_id is not None:
+            operator_id = auth.operator_id
             if name is not None:
                 rows = await conn.fetch(
                     """
@@ -132,8 +137,8 @@ async def list_agents(
 
 
 @router.get("/agents/resolve/{address:path}")
-async def resolve_agent_address(address: str, operator=Depends(get_current_operator)):
-    """Resolve an agent address to agent info. Any authenticated operator can resolve."""
+async def resolve_agent_address(address: str, auth: AuthContext = Depends(resolve_auth)):
+    """Resolve an agent address to agent info. Any authenticated user can resolve."""
     pool = await get_pool()
     agent_id = await resolve_address_fn(pool, address)
     if not agent_id:
@@ -177,10 +182,10 @@ async def get_agent(agent_id: str):
 
 
 @router.get("/agents/{agent_id}/stats", response_model=AgentStats)
-async def agent_stats(agent_id: str, operator=Depends(get_current_operator)):
+async def agent_stats(agent_id: str, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         stats = await get_agent_stats(conn, agent_uuid)
@@ -192,16 +197,15 @@ async def agent_stats(agent_id: str, operator=Depends(get_current_operator)):
 
 
 @router.post("/agents/{agent_id}/depart")
-async def depart_agent(agent_id: str, operator=Depends(get_current_operator)):
+async def depart_agent(agent_id: str, auth: AuthContext = Depends(require_admin)):
     """
-    Agent departure:
+    Agent departure (admin only):
     1. Cascade-revoke all capabilities this agent granted.
     2. Mark agent inactive with departure + expiry timestamps.
     3. Return summary.
     """
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
         try:
             result = await do_depart(conn, agent_uuid)
@@ -213,9 +217,9 @@ async def depart_agent(agent_id: str, operator=Depends(get_current_operator)):
 
 
 @router.post("/agents/{agent_id}/reactivate")
-async def reactivate_agent(agent_id: str, operator=Depends(get_current_operator)):
+async def reactivate_agent(agent_id: str, auth: AuthContext = Depends(require_admin)):
     """
-    Reactivate a departed agent:
+    Reactivate a departed agent (admin only):
     1. Clear departure and expiry timestamps.
     2. Mark agent active.
     3. Log the reactivation.
@@ -224,7 +228,6 @@ async def reactivate_agent(agent_id: str, operator=Depends(get_current_operator)
     """
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
     async with get_conn() as conn:
         try:
             result = await do_reinstate(conn, agent_uuid)

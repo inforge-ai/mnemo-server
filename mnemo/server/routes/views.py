@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import get_current_operator, verify_agent_ownership
+from ..auth import AuthContext, require_agent, require_agent_match
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..models import RetrieveRequest, RetrieveResponse, SharedRecallRequest, SharedViewResponse, SkillExport, ViewCreate, ViewResponse
@@ -16,11 +16,11 @@ router = APIRouter(tags=["views"])
 
 
 @router.post("/agents/{agent_id}/views", response_model=ViewResponse, status_code=201)
-async def create_view(agent_id: str, body: ViewCreate, operator=Depends(get_current_operator)):
+async def create_view(agent_id: str, body: ViewCreate, auth: AuthContext = Depends(require_agent)):
     """Create a snapshot view — freezes matching atom IDs at this moment."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         result = await view_service.create_snapshot(
@@ -34,10 +34,10 @@ async def create_view(agent_id: str, body: ViewCreate, operator=Depends(get_curr
 
 
 @router.get("/agents/{agent_id}/views", response_model=list[ViewResponse])
-async def list_views(agent_id: str, operator=Depends(get_current_operator)):
+async def list_views(agent_id: str, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         results = await view_service.list_views(conn, agent_uuid)
@@ -45,11 +45,11 @@ async def list_views(agent_id: str, operator=Depends(get_current_operator)):
 
 
 @router.post("/agents/{agent_id}/shared_views/recall")
-async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, operator=Depends(get_current_operator)):
+async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, auth: AuthContext = Depends(require_agent)):
     """Search across all views shared with this agent."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
 
     from_agent_id = None
     if body.from_agent:
@@ -75,11 +75,11 @@ async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, o
 
 
 @router.get("/agents/{agent_id}/views/{view_id}/export_skill", response_model=SkillExport)
-async def export_skill(agent_id: str, view_id: UUID, operator=Depends(get_current_operator)):
+async def export_skill(agent_id: str, view_id: UUID, auth: AuthContext = Depends(require_agent)):
     """Export a snapshot view as an α=1 skill package with rendered markdown."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         await _require_view_owner(conn, agent_uuid, view_id)
@@ -87,7 +87,7 @@ async def export_skill(agent_id: str, view_id: UUID, operator=Depends(get_curren
         result = await view_service.export_skill(conn, agent_uuid, view_id)
         if result is not None:
             await log_operation(
-                conn, "export_skill", operator["id"], target_id=agent_uuid,
+                conn, "export_skill", auth.agent_id, target_id=agent_uuid,
                 duration_ms=int((time.monotonic() - t0) * 1000),
                 metadata={"view_id": str(view_id)},
             )
@@ -101,7 +101,7 @@ async def export_skill(agent_id: str, view_id: UUID, operator=Depends(get_curren
     response_model=RetrieveResponse,
 )
 async def recall_shared(
-    agent_id: str, view_id: UUID, body: RetrieveRequest, operator=Depends(get_current_operator)
+    agent_id: str, view_id: UUID, body: RetrieveRequest, auth: AuthContext = Depends(require_agent)
 ):
     """
     Recall through a shared view. Requires a valid, non-revoked capability.
@@ -109,7 +109,7 @@ async def recall_shared(
     """
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
 
@@ -130,7 +130,7 @@ async def recall_shared(
             expansion_depth=body.expansion_depth,
         )
         await log_operation(
-            conn, "recall_shared", operator["id"], target_id=agent_uuid,
+            conn, "recall_shared", auth.agent_id, target_id=agent_uuid,
             duration_ms=int((time.monotonic() - t0) * 1000),
             metadata={"view_id": str(view_id), "results_returned": result["total_retrieved"]},
         )
@@ -138,11 +138,11 @@ async def recall_shared(
 
 
 @router.get("/agents/{agent_id}/shared_views", response_model=list[SharedViewResponse])
-async def list_shared_views(agent_id: str, operator=Depends(get_current_operator)):
+async def list_shared_views(agent_id: str, auth: AuthContext = Depends(require_agent)):
     """List all views shared with this agent via active capabilities."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
-    await verify_agent_ownership(operator, agent_uuid)
+    require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
         rows = await conn.fetch(
@@ -161,6 +161,7 @@ async def list_shared_views(agent_id: str, operator=Depends(get_current_operator
             LEFT JOIN agent_trust at ON at.agent_uuid = c.grantee_id AND at.trusted_sender_uuid = c.grantor_id
             WHERE c.grantee_id = $1
               AND c.revoked = false
+              AND c.blocked_by_recipient = FALSE
               AND (c.expires_at IS NULL OR c.expires_at > now())
             GROUP BY v.id, c.grantor_id, c.created_at, aa.address
             ORDER BY v.created_at DESC

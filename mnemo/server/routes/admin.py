@@ -1,7 +1,5 @@
 """
-Admin router — protected by X-Admin-Token header.
-
-Set MNEMO_ADMIN_TOKEN to enable. Requests without a matching token get 403.
+Admin router — protected by X-Admin-Key header (RBAC-Lite).
 
 Endpoints:
   GET /v1/admin/agents      — all agents with atom/key counts
@@ -13,23 +11,11 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.security import APIKeyHeader
 
-from ..config import settings
+from ..auth import require_admin as _require_admin  # noqa: F401 — re-exported for other admin routes
 from ..database import get_conn
 
 router = APIRouter(tags=["admin"], prefix="/admin")
-
-_token_header = APIKeyHeader(name="X-Admin-Token", auto_error=False)
-
-
-def _require_admin(
-    header_token: str | None = Depends(_token_header),
-    token: str | None = Query(None),
-):
-    candidate = header_token or token
-    if not settings.admin_token or candidate != settings.admin_token:
-        raise HTTPException(status_code=403, detail="Invalid or missing admin token")
 
 
 # ── Agents ─────────────────────────────────────────────────────────────────────

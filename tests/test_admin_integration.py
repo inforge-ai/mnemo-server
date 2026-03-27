@@ -7,31 +7,22 @@ and sharing enforcement on grant/recall paths.
 
 import os
 
-os.environ.setdefault("MNEMO_ADMIN_TOKEN", "test-admin-token")
-
 import pytest
 from httpx import AsyncClient
 
+from tests.conftest import TEST_ADMIN_KEY, admin_headers
+
 from mnemo.server.config import settings
 
-ADMIN_TOKEN = "test-admin-token"
+ADMIN_TOKEN = TEST_ADMIN_KEY
 
-# Ensure settings has the admin token for all tests in this module.
-_original_admin_token = settings.admin_token
-settings.admin_token = ADMIN_TOKEN
-
-
-@pytest.fixture(autouse=True)
-def _enable_auth():
-    """Enable auth for all tests in this module so operator-agent binding works."""
-    original = settings.auth_enabled
-    settings.auth_enabled = True
-    yield
-    settings.auth_enabled = original
+# Ensure settings has the admin key for all tests in this module.
+_original_admin_key = settings.admin_key
+settings.admin_key = ADMIN_TOKEN
 
 
 def _admin(headers=None):
-    h = {"X-Admin-Token": ADMIN_TOKEN}
+    h = admin_headers()
     if headers:
         h.update(headers)
     return h
@@ -48,18 +39,18 @@ async def _create_operator(client, username="alice", org="testorg",
 
 
 async def _create_operator_and_agent(client, username="opadm", agent_name="managed"):
-    """Helper: create operator + agent, return (op_data, api_key, agent_id)."""
+    """Helper: create operator + agent, return (op_data, api_key, agent_data)."""
     op_data = await _create_operator(
         client, username=username, org="testorg",
         display_name=f"Op {username}", email=f"{username}@test.com",
     )
     api_key = op_data["api_key"]
-    auth = {"Authorization": f"Bearer {api_key}"}
+    auth = {"X-Operator-Key": api_key}
     agent_resp = await client.post(
         "/v1/agents", json={"name": agent_name, "domain_tags": ["test"]}, headers=auth,
     )
     assert agent_resp.status_code == 201, agent_resp.text
-    return op_data, api_key, agent_resp.json()["id"]
+    return op_data, api_key, agent_resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +70,7 @@ class TestHealthEndpoints:
 
     async def test_health_detailed_requires_admin(self, client):
         resp = await client.get("/v1/health/detailed")
-        assert resp.status_code == 403
+        assert resp.status_code in (401, 403)  # 401 for missing creds, 403 for wrong role
 
     async def test_health_detailed_with_admin(self, client):
         resp = await client.get("/v1/health/detailed", headers=_admin())
@@ -138,7 +129,7 @@ class TestOperatorCRUD:
         assert resp.json()["username"] == "gettest"
 
     async def test_suspend_operator(self, client):
-        op_data, api_key, agent_id = await _create_operator_and_agent(
+        op_data, api_key, agent_data = await _create_operator_and_agent(
             client, username="susptest", agent_name="agent-susp",
         )
         op_id = op_data["uuid"]
@@ -151,7 +142,7 @@ class TestOperatorCRUD:
         assert resp.json()["agents_departed"] >= 1
 
     async def test_reinstate_operator_agents_stay_departed(self, client):
-        op_data, api_key, agent_id = await _create_operator_and_agent(
+        op_data, api_key, agent_data = await _create_operator_and_agent(
             client, username="reintest", agent_name="agent-rein",
         )
         op_id = op_data["uuid"]
@@ -198,11 +189,11 @@ class TestAgentAdmin:
 
     async def test_depart_then_check_status(self, client):
         """Depart an agent, then verify status via operator detail endpoint."""
-        op_data, api_key, agent_id = await _create_operator_and_agent(
+        op_data, api_key, agent_data = await _create_operator_and_agent(
             client, username="agfilt",
         )
         await client.post(
-            f"/v1/admin/agents/{agent_id}/depart", headers=_admin(),
+            f"/v1/admin/agents/{agent_data['id']}/depart", headers=_admin(),
         )
 
         # Verify via operator detail endpoint (returns agents with status)
@@ -214,30 +205,30 @@ class TestAgentAdmin:
         assert len(departed) >= 1
 
     async def test_admin_depart_agent(self, client):
-        _, _, agent_id = await _create_operator_and_agent(
+        _, _, agent_data = await _create_operator_and_agent(
             client, username="agdep",
         )
         resp = await client.post(
-            f"/v1/admin/agents/{agent_id}/depart", headers=_admin(),
+            f"/v1/admin/agents/{agent_data['id']}/depart", headers=_admin(),
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "departed"
 
     async def test_admin_reinstate_agent(self, client):
-        _, _, agent_id = await _create_operator_and_agent(
+        _, _, agent_data = await _create_operator_and_agent(
             client, username="agrein",
         )
         await client.post(
-            f"/v1/admin/agents/{agent_id}/depart", headers=_admin(),
+            f"/v1/admin/agents/{agent_data['id']}/depart", headers=_admin(),
         )
         resp = await client.post(
-            f"/v1/admin/agents/{agent_id}/reinstate", headers=_admin(),
+            f"/v1/admin/agents/{agent_data['id']}/reinstate", headers=_admin(),
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "active"
 
     async def test_reinstate_fails_if_operator_suspended(self, client):
-        op_data, api_key, agent_id = await _create_operator_and_agent(
+        op_data, api_key, agent_data = await _create_operator_and_agent(
             client, username="agopsusp",
         )
         op_id = op_data["uuid"]
@@ -248,7 +239,7 @@ class TestAgentAdmin:
         )
         # Try reinstating agent while operator is suspended
         resp = await client.post(
-            f"/v1/admin/agents/{agent_id}/reinstate", headers=_admin(),
+            f"/v1/admin/agents/{agent_data['id']}/reinstate", headers=_admin(),
         )
         assert resp.status_code == 409
 
@@ -302,35 +293,36 @@ class TestSharingEnforcement:
             client, username="shareop", email="shareop@test.com",
         )
         api_key = op_data["api_key"]
-        auth = {"Authorization": f"Bearer {api_key}"}
+        op_auth = {"X-Operator-Key": api_key}
 
         a1 = await client.post(
             "/v1/agents",
             json={"name": "granter", "domain_tags": ["test"]},
-            headers=auth,
+            headers=op_auth,
         )
         a2 = await client.post(
             "/v1/agents",
             json={"name": "grantee", "domain_tags": ["test"]},
-            headers=auth,
+            headers=op_auth,
         )
         assert a1.status_code == 201
         assert a2.status_code == 201
         agent1_id = a1.json()["id"]
         agent2_id = a2.json()["id"]
+        ag1_auth = {"X-Agent-Key": a1.json()["agent_key"]}
 
         # Remember something to create atoms
         await client.post(
             f"/v1/agents/{agent1_id}/remember",
             json={"text": "Test memory for sharing enforcement."},
-            headers=auth,
+            headers=ag1_auth,
         )
 
         # Create a view
         view_resp = await client.post(
             f"/v1/agents/{agent1_id}/views",
             json={"name": "test-view", "atom_filter": {"domain_tags": ["test"]}},
-            headers=auth,
+            headers=ag1_auth,
         )
         assert view_resp.status_code == 201, view_resp.text
         view_id = view_resp.json()["id"]
@@ -342,7 +334,7 @@ class TestSharingEnforcement:
         grant_resp = await client.post(
             f"/v1/agents/{agent1_id}/grant",
             json={"view_id": view_id, "grantee_id": agent2_id},
-            headers=auth,
+            headers=ag1_auth,
         )
         assert grant_resp.status_code == 403
         assert "disabled" in grant_resp.json()["detail"].lower()
@@ -354,7 +346,7 @@ class TestSharingEnforcement:
         grant_resp2 = await client.post(
             f"/v1/agents/{agent1_id}/grant",
             json={"view_id": view_id, "grantee_id": agent2_id},
-            headers=auth,
+            headers=ag1_auth,
         )
         assert grant_resp2.status_code == 201
 
@@ -364,15 +356,16 @@ class TestSharingEnforcement:
             client, username="recallop", email="recallop@test.com",
         )
         api_key = op_data["api_key"]
-        auth = {"Authorization": f"Bearer {api_key}"}
+        op_auth = {"X-Operator-Key": api_key}
 
         a1 = await client.post(
             "/v1/agents",
             json={"name": "recaller", "domain_tags": ["test"]},
-            headers=auth,
+            headers=op_auth,
         )
         assert a1.status_code == 201
         agent1_id = a1.json()["id"]
+        ag1_auth = {"X-Agent-Key": a1.json()["agent_key"]}
 
         # Disable sharing
         await client.post("/v1/admin/trust/disable", headers=_admin())
@@ -381,7 +374,7 @@ class TestSharingEnforcement:
         recall_resp = await client.post(
             f"/v1/agents/{agent1_id}/shared_views/recall",
             json={"query": "anything"},
-            headers=auth,
+            headers=ag1_auth,
         )
         assert recall_resp.status_code == 200
         data = recall_resp.json()
@@ -397,27 +390,29 @@ class TestSharingEnforcement:
             client, username="pvrecall", email="pvrecall@test.com",
         )
         api_key = op_data["api_key"]
-        auth = {"Authorization": f"Bearer {api_key}"}
+        op_auth = {"X-Operator-Key": api_key}
 
         a1 = await client.post(
             "/v1/agents",
             json={"name": "pvgranter", "domain_tags": ["test"]},
-            headers=auth,
+            headers=op_auth,
         )
         a2 = await client.post(
             "/v1/agents",
             json={"name": "pvgrantee", "domain_tags": ["test"]},
-            headers=auth,
+            headers=op_auth,
         )
         assert a1.status_code == 201 and a2.status_code == 201
         agent1_id = a1.json()["id"]
         agent2_id = a2.json()["id"]
+        ag1_auth = {"X-Agent-Key": a1.json()["agent_key"]}
+        ag2_auth = {"X-Agent-Key": a2.json()["agent_key"]}
 
         # Remember + view + enable sharing + grant
         await client.post(
             f"/v1/agents/{agent1_id}/remember",
             json={"text": "Per-view recall test memory."},
-            headers=auth,
+            headers=ag1_auth,
         )
         # Enable sharing for grant
         await client.post("/v1/admin/trust/enable", headers=_admin())
@@ -425,7 +420,7 @@ class TestSharingEnforcement:
         view_resp = await client.post(
             f"/v1/agents/{agent1_id}/views",
             json={"name": "pvview", "atom_filter": {"domain_tags": ["test"]}},
-            headers=auth,
+            headers=ag1_auth,
         )
         assert view_resp.status_code == 201
         view_id = view_resp.json()["id"]
@@ -433,7 +428,7 @@ class TestSharingEnforcement:
         grant_resp = await client.post(
             f"/v1/agents/{agent1_id}/grant",
             json={"view_id": view_id, "grantee_id": agent2_id},
-            headers=auth,
+            headers=ag1_auth,
         )
         assert grant_resp.status_code == 201
 
@@ -444,7 +439,7 @@ class TestSharingEnforcement:
         recall_resp = await client.post(
             f"/v1/agents/{agent2_id}/shared_views/{view_id}/recall",
             json={"query": "test"},
-            headers=auth,
+            headers=ag2_auth,
         )
         assert recall_resp.status_code == 403
         assert "disabled" in recall_resp.json()["detail"].lower()
