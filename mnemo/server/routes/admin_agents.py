@@ -54,12 +54,19 @@ async def list_agents(
 
         rows = await conn.fetch(
             f"""
-            SELECT a.id, a.name, a.persona, a.status, a.created_at, a.departed_at,
-                   aa.address, o.username AS operator_username
+            SELECT a.id, a.name, a.persona, a.domain_tags,
+                   a.status, a.created_at, a.departed_at,
+                   aa.address, o.username AS operator_username,
+                   COUNT(DISTINCT at.id) FILTER (WHERE at.is_active)  AS active_atoms,
+                   COUNT(DISTINCT at.id)                               AS total_atoms,
+                   COUNT(DISTINCT k.id)  FILTER (WHERE k.is_active)   AS active_keys
             FROM agents a
             LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
             JOIN operators o ON o.id = a.operator_id
+            LEFT JOIN atoms at ON at.agent_id = a.id
+            LEFT JOIN api_keys k ON k.operator_id = a.operator_id
             {where}
+            GROUP BY a.id, aa.address, o.username
             ORDER BY a.created_at DESC
             """,
             *params,
@@ -69,12 +76,19 @@ async def list_agents(
         "agents": [
             {
                 "uuid": str(r["id"]),
+                "id": str(r["id"]),
                 "address": r["address"],
                 "display_name": r["name"],
+                "name": r["name"],
+                "persona": r["persona"],
+                "domain_tags": list(r["domain_tags"]) if r["domain_tags"] else [],
                 "status": r["status"],
                 "operator_username": r["operator_username"],
                 "created_at": r["created_at"],
                 "departed_at": r["departed_at"],
+                "active_atoms": r["active_atoms"],
+                "total_atoms": r["total_atoms"],
+                "active_keys": r["active_keys"],
             }
             for r in rows
         ]

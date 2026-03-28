@@ -2,9 +2,11 @@
 Admin router — protected by X-Admin-Key header (RBAC-Lite).
 
 Endpoints:
-  GET /v1/admin/agents      — all agents with atom/key counts
   GET /v1/admin/operations  — operation counts by type (optional ?agent_id=)
   GET /v1/admin/keys        — all API keys with status
+  GET /v1/admin/glance      — system overview dashboard
+
+Agent endpoints moved to admin_agents.py.
 """
 
 from datetime import datetime, timezone
@@ -16,49 +18,6 @@ from ..auth import require_admin as _require_admin  # noqa: F401 — re-exported
 from ..database import get_conn
 
 router = APIRouter(tags=["admin"], prefix="/admin")
-
-
-# ── Agents ─────────────────────────────────────────────────────────────────────
-
-@router.get("/agents", dependencies=[Depends(_require_admin)])
-async def list_agents():
-    """All agents with atom count and active key count."""
-    async with get_conn() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT
-                a.id,
-                a.name,
-                a.persona,
-                a.domain_tags,
-                a.status,
-                a.created_at,
-                a.departed_at,
-                COUNT(DISTINCT at.id) FILTER (WHERE at.is_active)  AS active_atoms,
-                COUNT(DISTINCT at.id)                               AS total_atoms,
-                COUNT(DISTINCT k.id)  FILTER (WHERE k.is_active)   AS active_keys
-            FROM agents a
-            LEFT JOIN atoms at ON at.agent_id = a.id
-            LEFT JOIN api_keys k ON k.operator_id = a.operator_id
-            GROUP BY a.id
-            ORDER BY a.created_at DESC
-            """
-        )
-    return [
-        {
-            "id": str(r["id"]),
-            "name": r["name"],
-            "persona": r["persona"],
-            "domain_tags": list(r["domain_tags"]) if r["domain_tags"] else [],
-            "status": r["status"],
-            "created_at": r["created_at"],
-            "departed_at": r["departed_at"],
-            "active_atoms": r["active_atoms"],
-            "total_atoms": r["total_atoms"],
-            "active_keys": r["active_keys"],
-        }
-        for r in rows
-    ]
 
 
 # ── Operations ─────────────────────────────────────────────────────────────────

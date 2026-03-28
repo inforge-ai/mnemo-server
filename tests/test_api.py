@@ -1123,7 +1123,7 @@ class TestAdmin:
         try:
             resp = await client.get("/v1/admin/agents", headers=self._headers())
             assert resp.status_code == 200
-            assert resp.json() == []
+            assert resp.json() == {"agents": []}
         finally:
             settings.admin_key = original
 
@@ -1136,7 +1136,7 @@ class TestAdmin:
             await remember(client, agent["id"], "connection pooling boosts throughput significantly.")
             resp = await client.get("/v1/admin/agents", headers=self._headers())
             assert resp.status_code == 200
-            agents = resp.json()
+            agents = resp.json()["agents"]
             assert len(agents) == 1
             a = agents[0]
             assert a["id"] == agent["id"]

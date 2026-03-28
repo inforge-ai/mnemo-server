@@ -21,7 +21,7 @@ All core phases are complete:
 | Background consolidation (decay, clustering, merge, purge) | Done |
 | Operator-scoped authentication (API keys, ownership) | Done |
 | Admin API (agents, operations, keys, glance) | Done |
-| CLI (register-operator, create-agent, list-agents, new-key, whoami, trust management) | Done |
+| CLI (operator/agent/trust management, admin subcommands) | Done |
 | MCP server (Claude tool interface) | Done |
 | Multi-agent MCP support | Done |
 
@@ -55,48 +55,91 @@ uv run uvicorn mnemo.server.main:app --reload
 
 ## Authentication
 
-Mnemo uses operator-scoped authentication. An **operator** owns one or more **agents** and authenticates with an API key.
+Mnemo uses RBAC with three credential types, passed as request headers:
 
-Auth is controlled by `MNEMO_AUTH_ENABLED` (default: `false`). When disabled, a "local" operator is auto-created and all agents are assigned to it.
+| Header | Role | Use |
+|--------|------|-----|
+| `X-Admin-Key` | admin | Full access (operator CRUD, trust management, all endpoints) |
+| `X-Operator-Key` | operator | Management-plane (register agents, inspect shares, rotate keys) |
+| `X-Agent-Key` | agent | Data-plane (remember, recall, stats, views, capabilities) |
+
+Auth is controlled by `MNEMO_AUTH_ENABLED` (default: `false`). When disabled, all requests get admin-level access.
 
 ### CLI quickstart
 
-```bash
-# Register a new operator (returns an API key)
-uv run python -m mnemo.cli register-operator "My Org"
+The `mnemo` CLI is installed as an entry point (see `pyproject.toml`). You can also invoke it via `uv run python -m mnemo.cli`.
 
-# Set the key for subsequent commands
-export MNEMO_API_KEY="mnemo_..."
+**Step 1: Create an operator (admin-only)**
+
+```bash
+export MNEMO_ADMIN_TOKEN="..."
+
+# Create operator — returns an operator API key (show-once)
+mnemo admin operator create --username jdoe --org acme --display-name "Jane Doe" --email jane@acme.com
+```
+
+**Step 2: Operator commands** (require `MNEMO_API_KEY`)
+
+```bash
+export MNEMO_API_KEY="mnemo_..."   # operator key from step 1
 
 # Check identity
-uv run python -m mnemo.cli whoami
+mnemo whoami
 
-# Create an agent under your operator
-uv run python -m mnemo.cli create-agent my-agent --persona "A Python developer" --tags python,backend
+# Create an agent — returns an agent key (show-once)
+mnemo create-agent my-agent --persona "A Python developer" --tags python,backend
 
 # List your agents
-uv run python -m mnemo.cli list-agents
+mnemo list-agents
 
-# Rotate your API key
-uv run python -m mnemo.cli new-key
+# Generate an additional operator API key
+mnemo new-key
+```
+
+### CLI admin commands
+
+Admin commands require `MNEMO_ADMIN_TOKEN` (via env var or `--admin-token`). All admin subcommands accept `--json` for raw JSON output.
+
+```bash
+export MNEMO_ADMIN_TOKEN="..."
+
+# ── Operator management ──
+mnemo admin operator create --username jdoe --org acme --display-name "Jane Doe" --email jane@acme.com
+mnemo admin operator list
+mnemo admin operator show <operator_id>
+mnemo admin operator suspend <operator_id>
+mnemo admin operator reinstate <operator_id>
+mnemo admin operator rotate-key <operator_id>
+
+# ── Agent management ──
+mnemo admin agent list [--operator <uuid>] [--status active|departed]
+mnemo admin agent depart <agent_id>
+mnemo admin agent reinstate <agent_id>
+
+# ── Trust / sharing management ──
+mnemo admin trust status           # show sharing enabled/disabled
+mnemo admin trust enable           # enable sharing globally
+mnemo admin trust disable          # disable sharing globally
+mnemo admin trust list [--operator <uuid>] [--agent <uuid>]   # list active shares
+mnemo admin trust revoke <capability_id>                      # revoke a capability (cascade)
 ```
 
 ### REST auth endpoints
+- `POST /auth/new-key` — generate additional operator API key (`X-Operator-Key` required)
+- `GET /auth/me` — return current operator/agent info
 
-- `POST /auth/register-operator` — register a new operator (returns API key)
-- `POST /auth/new-key` — rotate your API key (Bearer token required)
-- `GET /auth/me` — return current operator info
-
-When auth is enabled, all agent/memory endpoints require a `Bearer` token and enforce ownership (an operator can only access its own agents).
+When auth is enabled, endpoints enforce role-based access. Operators can only manage their own agents; agents can only access their own data.
 
 ## Working with Agents
 
 ### Register an agent
 
+Requires an operator key. The response includes a one-time `agent_key` — save it.
+
 ```bash
 curl -s -X POST http://localhost:8000/v1/agents \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $MNEMO_API_KEY" \
+  -H "X-Operator-Key: $MNEMO_API_KEY" \
   -d '{
     "name": "my-agent",
     "persona": "A Python backend developer",
@@ -105,18 +148,16 @@ curl -s -X POST http://localhost:8000/v1/agents \
   }'
 ```
 
-Save the `id` from the response — you need it for all subsequent calls.
+Save the `agent_key` from the response — it will not be shown again. Use it as `X-Agent-Key` for all data-plane calls.
 
 ### Store a memory
 
 Submit free text. The server decomposes it into typed atoms (episodic, semantic, procedural), generates embeddings, deduplicates, and links related atoms automatically.
 
 ```bash
-AGENT_ID="550e8400-e29b-41d4-a716-446655440000"
-
 curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/remember \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $MNEMO_API_KEY" \
+  -H "X-Agent-Key: $MNEMO_AGENT_KEY" \
   -d '{
     "text": "I learned that asyncpg is faster than psycopg2 for async workloads. I switched our connection pool to asyncpg today. Always use asyncpg for FastAPI projects.",
     "domain_tags": ["python", "databases"]
@@ -130,7 +171,7 @@ Retrieve relevant memories via semantic search, filtered by confidence and simil
 ```bash
 curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/recall \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $MNEMO_API_KEY" \
+  -H "X-Agent-Key: $MNEMO_AGENT_KEY" \
   -d '{
     "query": "which database library should I use with FastAPI?",
     "max_results": 5,
@@ -144,42 +185,38 @@ curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/recall \
 
 ```bash
 curl -s http://localhost:8000/v1/agents/$AGENT_ID/stats \
-  -H "Authorization: Bearer $MNEMO_API_KEY"
+  -H "X-Agent-Key: $MNEMO_AGENT_KEY"
 ```
 
 ### Agent departure
 
-Marks an agent as departed, cascade-revokes all capabilities it granted, and schedules its data for deletion after 30 days.
+Marks an agent as departed, cascade-revokes all capabilities it granted, and schedules its data for deletion after 30 days. Requires admin access.
 
 ```bash
-curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/depart \
-  -H "Authorization: Bearer $MNEMO_API_KEY"
+curl -s -X POST http://localhost:8000/v1/admin/agents/$AGENT_ID/depart \
+  -H "X-Admin-Key: $MNEMO_ADMIN_TOKEN"
 ```
 
 ## Sharing Trust Auth
 
 Mnemo uses directional trust to gate memory sharing. When agent B holds a capability granted by agent A, B can only recall shared memories if a trust row exists (`agent_trust`) from B toward A. Without trust, `recall_shared` and `recall_all_shared` return empty results silently.
 
-Trust is managed via the CLI (operator-only, never exposed as MCP tools):
+Trust and sharing are managed via the admin CLI (requires `MNEMO_ADMIN_TOKEN`, never exposed as MCP tools):
 
 ```bash
-# List trust relationships for an agent
-uv run python -m mnemo.cli admin trust list <agent>
+# Check if sharing is enabled globally
+mnemo admin trust status
 
-# Add trust (agent trusts sender)
-uv run python -m mnemo.cli admin trust add <agent> <sender>
+# Enable/disable sharing
+mnemo admin trust enable
+mnemo admin trust disable
 
-# Remove trust
-uv run python -m mnemo.cli admin trust remove <agent> <sender>
+# List active shares/capabilities (filterable by operator or agent)
+mnemo admin trust list [--operator <uuid>] [--agent <uuid>]
 
-# Revoke: remove trust + revoke all capabilities from that sender
-uv run python -m mnemo.cli admin trust revoke <agent> <sender>
-
-# Inbox: show pending untrusted shares
-uv run python -m mnemo.cli admin trust inbox <agent>
+# Revoke a capability with cascade
+mnemo admin trust revoke <capability_id>
 ```
-
-Agents can be specified by UUID or address (`agent:operator.org`).
 
 **Auto-seeding:** When an agent is created under an operator with an `org` field, symmetric trust rows are automatically created between the new agent and all existing agents in the same org.
 
@@ -229,7 +266,7 @@ mnemo/
 │   ├── decomposer.py     # rule-based free-text -> typed atoms + arc synthesis
 │   └── routes/           # agents, memory, atoms, views, capabilities, auth, admin
 │   └── services/         # atom_service, graph_service, view_service, consolidation
-├── cli.py                  # operator CLI (trust, agents, keys)
+├── cli.py                  # CLI entry point (operator, agent, trust, admin)
 ├── client/mnemo_client.py  # async httpx client
 ├── mcp/mcp_server.py       # MCP wrapper for Claude
 └── tests/
@@ -245,6 +282,6 @@ mnemo/
 
 **Confidence** is stored as Beta(alpha, beta) parameters. The API exposes only `confidence_expected` and `confidence_effective` (after decay). Atoms below 0.05 effective confidence are deactivated by the background consolidation job.
 
-**Auth model:** API key -> operator -> [agents]. Each operator has one API key and owns zero or more agents. Agent names are unique per operator.
+**Auth model (RBAC-Lite):** Three key types — `X-Admin-Key` (platform admin), `X-Operator-Key` (management-plane: register agents, rotate keys), `X-Agent-Key` (data-plane: remember, recall, share). Operators own agents; agent names are unique per operator.
 
 **Trust model:** Directional trust rows gate sharing. Agent B can only recall memories shared by agent A if `agent_trust(agent_uuid=B, trusted_sender_uuid=A)` exists. Same-org agents get auto-seeded trust on creation.

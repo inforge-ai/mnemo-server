@@ -182,8 +182,8 @@ class TestAgentAdmin:
         await _create_operator_and_agent(client, username="aglist")
         resp = await client.get("/v1/admin/agents", headers=_admin())
         assert resp.status_code == 200
-        # admin.py returns a flat list of agents
-        agents = resp.json()
+        data = resp.json()
+        agents = data["agents"]
         assert isinstance(agents, list)
         assert len(agents) >= 1
 
