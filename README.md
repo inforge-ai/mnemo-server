@@ -1,7 +1,7 @@
 # Mnemo
 [![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
-[![LoCoMo](https://img.shields.io/badge/LoCoMo-81.6%25-brightgreen.svg)](https://github.com/snap-research/locomo)
+[![LoCoMo](https://img.shields.io/badge/LoCoMo-81.6%25-brightgreen.svg)](https://github.com/inforge-ai/locomo_bench)
 
 **Mnemo** is a persistent, permissioned, portable memory server for AI agents. It stores typed memory atoms with semantic retrieval, knowledge graph relationships, decay dynamics, and view sharing/skill export.
 
