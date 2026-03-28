@@ -196,6 +196,41 @@ async def agent_stats(agent_id: str, auth: AuthContext = Depends(require_agent))
     return stats
 
 
+@router.post("/agents/{agent_id}/rotate-key")
+async def rotate_agent_key(agent_id: str, auth: AuthContext = Depends(require_operator)):
+    """
+    Rotate an agent's key (operator or admin).
+    Overwrites the existing key hash and returns the new plaintext key once.
+    """
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+
+    async with get_conn() as conn:
+        # Verify agent exists and is active
+        row = await conn.fetchrow(
+            "SELECT id, name, operator_id FROM agents WHERE id = $1",
+            agent_uuid,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if row["operator_id"] != auth.operator_id and auth.role != "admin":
+            raise HTTPException(status_code=403, detail="Agent not owned by this operator")
+
+        new_key = await create_agent_key(conn, agent_uuid)
+
+        addr_row = await conn.fetchrow(
+            "SELECT address FROM agent_addresses WHERE agent_id = $1", agent_uuid
+        )
+
+    return {
+        "agent_id": str(agent_uuid),
+        "name": row["name"],
+        "address": addr_row["address"] if addr_row else None,
+        "agent_key": new_key,
+        "message": "Save this key — it will not be shown again. The previous key is now invalid.",
+    }
+
+
 @router.post("/agents/{agent_id}/depart")
 async def depart_agent(agent_id: str, auth: AuthContext = Depends(require_admin)):
     """

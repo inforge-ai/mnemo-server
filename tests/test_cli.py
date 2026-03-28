@@ -74,6 +74,58 @@ class TestCreateAgent:
         assert "MNEMO_API_KEY" in result.output
 
 
+class TestRotateAgentKey:
+    @respx.mock
+    def test_success(self, runner):
+        respx.post(f"{BASE}/v1/agents/ag-1/rotate-key").mock(
+            return_value=Response(200, json={
+                "agent_id": "ag-1", "name": "bot", "address": "bot:op.org",
+                "agent_key": "mnemo_ag_newkey",
+                "message": "Save this key",
+            })
+        )
+        result = runner.invoke(
+            cli, ["rotate-agent-key", "ag-1"], env=OPERATOR_ENV,
+        )
+        assert result.exit_code == 0
+        assert "mnemo_ag_newkey" in result.output
+        assert "previous key is now invalid" in result.output
+
+    @respx.mock
+    def test_sends_x_operator_key_header(self, runner):
+        route = respx.post(f"{BASE}/v1/agents/ag-1/rotate-key").mock(
+            return_value=Response(200, json={
+                "agent_id": "ag-1", "name": "bot",
+                "agent_key": "mnemo_ag_k",
+            })
+        )
+        runner.invoke(cli, ["rotate-agent-key", "ag-1"], env=OPERATOR_ENV)
+        req = route.calls.last.request
+        assert req.headers.get("x-operator-key") == "mnemo_opkey"
+
+    @respx.mock
+    def test_not_found(self, runner):
+        respx.post(f"{BASE}/v1/agents/bad/rotate-key").mock(
+            return_value=Response(404, text="not found")
+        )
+        result = runner.invoke(
+            cli, ["rotate-agent-key", "bad"], env=OPERATOR_ENV,
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    @respx.mock
+    def test_not_owned(self, runner):
+        respx.post(f"{BASE}/v1/agents/ag-1/rotate-key").mock(
+            return_value=Response(403, text="not owned")
+        )
+        result = runner.invoke(
+            cli, ["rotate-agent-key", "ag-1"], env=OPERATOR_ENV,
+        )
+        assert result.exit_code != 0
+        assert "not owned" in result.output
+
+
 class TestListAgents:
     @respx.mock
     def test_success(self, runner):
@@ -346,6 +398,34 @@ class TestAdminAgent:
         result = runner.invoke(cli, ["admin", "agent", "reinstate", "ag-1"], env=ADMIN_ENV)
         assert result.exit_code == 0
         assert "Reinstated" in result.output
+
+
+    @respx.mock
+    def test_rotate_key(self, runner):
+        respx.post(f"{BASE}/v1/admin/agents/ag-1/rotate-key").mock(
+            return_value=Response(200, json={
+                "agent_id": "ag-1", "name": "bot", "address": "bot:jdoe.acme",
+                "agent_key": "mnemo_ag_rotated",
+                "message": "Save this key",
+            })
+        )
+        result = runner.invoke(cli, ["admin", "agent", "rotate-key", "ag-1"], env=ADMIN_ENV)
+        assert result.exit_code == 0
+        assert "mnemo_ag_rotated" in result.output
+        assert "previous key is now invalid" in result.output
+
+    @respx.mock
+    def test_rotate_key_json(self, runner):
+        respx.post(f"{BASE}/v1/admin/agents/ag-1/rotate-key").mock(
+            return_value=Response(200, json={
+                "agent_id": "ag-1", "name": "bot",
+                "agent_key": "mnemo_ag_k",
+            })
+        )
+        result = runner.invoke(cli, ["admin", "--json", "agent", "rotate-key", "ag-1"], env=ADMIN_ENV)
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["agent_key"] == "mnemo_ag_k"
 
 
 # ── Admin: trust commands ────────────────────────────────────────────────────

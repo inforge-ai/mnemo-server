@@ -244,6 +244,79 @@ class TestAgentAdmin:
         assert resp.status_code == 409
 
 
+    async def test_admin_rotate_agent_key(self, client):
+        """Admin can rotate an agent's key; new key works, old one doesn't."""
+        _, _, agent_data = await _create_operator_and_agent(client, username="agrotate")
+        agent_id = agent_data["id"]
+        old_key = agent_data["agent_key"]
+
+        # Verify old key works
+        resp = await client.get(
+            f"/v1/agents/{agent_id}/stats",
+            headers={"X-Agent-Key": old_key},
+        )
+        assert resp.status_code == 200
+
+        # Rotate via admin endpoint
+        resp = await client.post(
+            f"/v1/admin/agents/{agent_id}/rotate-key", headers=_admin(),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "agent_key" in data
+        new_key = data["agent_key"]
+        assert new_key != old_key
+
+        # New key works
+        resp = await client.get(
+            f"/v1/agents/{agent_id}/stats",
+            headers={"X-Agent-Key": new_key},
+        )
+        assert resp.status_code == 200
+
+        # Old key is invalid
+        resp = await client.get(
+            f"/v1/agents/{agent_id}/stats",
+            headers={"X-Agent-Key": old_key},
+        )
+        assert resp.status_code == 401
+
+    async def test_operator_rotate_agent_key(self, client):
+        """Operator can rotate their own agent's key."""
+        _, api_key, agent_data = await _create_operator_and_agent(client, username="oprotate")
+        agent_id = agent_data["id"]
+        old_key = agent_data["agent_key"]
+
+        # Rotate via operator endpoint
+        resp = await client.post(
+            f"/v1/agents/{agent_id}/rotate-key",
+            headers={"X-Operator-Key": api_key},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        new_key = data["agent_key"]
+        assert new_key != old_key
+
+        # New key works
+        resp = await client.get(
+            f"/v1/agents/{agent_id}/stats",
+            headers={"X-Agent-Key": new_key},
+        )
+        assert resp.status_code == 200
+
+    async def test_operator_cannot_rotate_other_operators_agent(self, client):
+        """Operator A cannot rotate operator B's agent key."""
+        _, _, agent_data = await _create_operator_and_agent(client, username="oprotowner")
+        other_op = await _create_operator(client, username="oprotother")
+        other_key = other_op["api_key"]
+
+        resp = await client.post(
+            f"/v1/agents/{agent_data['id']}/rotate-key",
+            headers={"X-Operator-Key": other_key},
+        )
+        assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------------------
 # Trust admin
 # ---------------------------------------------------------------------------

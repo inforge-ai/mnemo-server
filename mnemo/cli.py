@@ -150,6 +150,42 @@ async def _list_agents(base_url, api_key):
     click.echo()
 
 
+@cli.command("rotate-agent-key")
+@click.argument("agent_id")
+@click.pass_context
+def rotate_agent_key(ctx, agent_id):
+    """Rotate an agent's key. Returns the new key once."""
+    api_key = _operator_key_from_env()
+    _run(_rotate_agent_key(ctx.obj["base_url"], api_key, agent_id))
+
+
+async def _rotate_agent_key(base_url, api_key, agent_id):
+    async with httpx.AsyncClient(
+        base_url=base_url, timeout=30.0,
+        headers=_operator_headers(api_key),
+    ) as client:
+        resp = await client.post(f"/v1/agents/{agent_id}/rotate-key")
+    if resp.status_code == 404:
+        click.echo("Agent not found.", err=True)
+        sys.exit(1)
+    if resp.status_code == 403:
+        click.echo("Agent not owned by this operator.", err=True)
+        sys.exit(1)
+    if resp.status_code not in (200, 201):
+        click.echo(f"Error {resp.status_code}: {resp.text}", err=True)
+        sys.exit(1)
+    data = resp.json()
+    click.echo(f"\nAgent    : {data.get('name', '')}")
+    click.echo(f"ID       : {data['agent_id']}")
+    if data.get("address"):
+        click.echo(f"Address  : {data['address']}")
+    click.echo(f"Agent Key: {data['agent_key']}")
+    click.echo()
+    click.echo("Save this key — it will not be shown again. The previous key is now invalid.")
+    click.echo(f"  export MNEMO_AGENT_KEY={data['agent_key']}")
+    click.echo()
+
+
 @cli.command("new-key")
 @click.pass_context
 def new_key(ctx):
@@ -482,6 +518,32 @@ async def _agent_reinstate(base_url, token, agent_id, output_json):
     click.echo(f"  Status : {data.get('status', 'active')}")
     if data.get("message"):
         click.echo(f"  Note   : {data['message']}")
+    click.echo()
+
+
+@agent.command("rotate-key")
+@click.argument("agent_id")
+@click.pass_context
+def agent_rotate_key(ctx, agent_id):
+    """Rotate an agent's key (returns new key once)."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_agent_rotate_key(base_url, token, agent_id, ctx.obj["json"]))
+
+
+async def _agent_rotate_key(base_url, token, agent_id, output_json):
+    resp = await _admin_request(base_url, token, "post", f"/v1/admin/agents/{agent_id}/rotate-key")
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nRotated key for agent: {data.get('name', agent_id)}")
+    click.echo(f"  ID       : {data['agent_id']}")
+    if data.get("address"):
+        click.echo(f"  Address  : {data['address']}")
+    click.echo(f"  Agent Key: {data['agent_key']}")
+    click.echo()
+    click.echo("Save this key — it will not be shown again. The previous key is now invalid.")
     click.echo()
 
 
