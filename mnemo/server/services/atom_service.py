@@ -562,6 +562,8 @@ async def store_background(
     except Exception:
         error_msg = traceback.format_exc()
         logger.error("Background store %s failed: %s", store_id, error_msg)
+        # Store generic message in DB (visible via API); full trace stays in logs only
+        safe_error = "Memory processing failed. Check server logs for details."
         try:
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -570,7 +572,7 @@ async def store_background(
                     SET status = 'failed', error = $1, completed_at = now()
                     WHERE store_id = $2
                     """,
-                    error_msg, store_id,
+                    safe_error, store_id,
                 )
                 await conn.execute(
                     """
@@ -580,7 +582,7 @@ async def store_background(
                     store_id,
                     agent_id,
                     text,
-                    error_msg,
+                    error_msg,  # full trace in store_failures (admin-only table)
                 )
         except Exception:
             logger.error("Failed to log store failure %s", store_id)

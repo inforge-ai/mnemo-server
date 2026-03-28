@@ -39,12 +39,14 @@ class TestAgents:
         assert "id" in data
 
     async def test_get_agent(self, client, agent):
-        resp = await client.get(f"/v1/agents/{agent['id']}")
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
+        resp = await client.get(f"/v1/agents/{agent['id']}", headers=ag_headers)
         assert resp.status_code == 200
         assert resp.json()["id"] == agent["id"]
 
-    async def test_get_agent_not_found(self, client):
-        resp = await client.get("/v1/agents/00000000-0000-0000-0000-000000000000")
+    async def test_get_agent_not_found(self, client, agent):
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
+        resp = await client.get("/v1/agents/00000000-0000-0000-0000-000000000000", headers=ag_headers)
         assert resp.status_code == 404
 
     async def test_agent_stats_empty(self, client, agent):

@@ -48,7 +48,7 @@ async def test_reject_text_exceeding_max_length(client, agent):
         json={"text": "x" * 50_001},
         headers=ag_headers,
     )
-    assert resp.status_code == 413
+    assert resp.status_code in (413, 422)  # Pydantic max_length (422) or route check (413)
 
 
 async def test_accept_text_at_max_length(client, agent):

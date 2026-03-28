@@ -49,7 +49,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://admin.mnemo-ai.com"],
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["X-Admin-Key", "X-Admin-Token", "X-Agent-Key", "X-Operator-Key", "Content-Type", "Authorization"],
+    allow_headers=["X-Admin-Key", "X-Admin-Token", "X-Agent-Key", "X-Operator-Key", "Content-Type"],
+    max_age=86400,
 )
 
 

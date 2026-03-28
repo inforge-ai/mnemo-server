@@ -77,25 +77,6 @@ async def resolve_auth(request: Request) -> AuthContext:
             operator_name=operator["name"],
         )
 
-    # 4. Legacy Bearer token (transition support)
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        async with get_conn() as conn:
-            operator = await validate_api_key(conn, token)
-        if operator is None:
-            raise HTTPException(status_code=401, detail="Invalid or inactive API key")
-        if operator.get("status") != "active":
-            raise HTTPException(
-                status_code=403,
-                detail=f"Operator account is {operator.get('status', 'unknown')}",
-            )
-        return AuthContext(
-            role="operator",
-            operator_id=UUID(operator["id"]),
-            operator_name=operator["name"],
-        )
-
     raise HTTPException(status_code=401, detail="Missing credentials. Provide X-Admin-Key, X-Agent-Key, or X-Operator-Key header.")
 
 

@@ -118,7 +118,7 @@ class TestAddressEndpoints:
         assert resp.status_code == 201
         agent_id = resp.json()["id"]
 
-        resp2 = await client.get(f"/v1/agents/{agent_id}")
+        resp2 = await client.get(f"/v1/agents/{agent_id}", headers=op_headers)
         assert resp2.status_code == 200
         assert resp2.json().get("address") is not None
 
@@ -160,7 +160,7 @@ class TestAddressEndpoints:
         assert resp.status_code == 201
         address = resp.json()["address"]
 
-        resp2 = await client.get(f"/v1/agents/{address}")
+        resp2 = await client.get(f"/v1/agents/{address}", headers=op_headers)
         assert resp2.status_code == 200
         assert resp2.json()["name"] == "path-test"
 
@@ -171,7 +171,7 @@ class TestAddressEndpoints:
         assert resp.status_code == 201
         agent_id = resp.json()["id"]
 
-        resp2 = await client.get(f"/v1/agents/{agent_id}")
+        resp2 = await client.get(f"/v1/agents/{agent_id}", headers=op_headers)
         assert resp2.status_code == 200
         assert resp2.json()["name"] == "uuid-test"
 
