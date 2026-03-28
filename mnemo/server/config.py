@@ -30,9 +30,6 @@ class Settings(BaseSettings):
     # Agent departure
     departure_retention_days: int = 30
 
-    # Auth
-    auth_enabled: bool = True
-
     # Admin key (formerly admin_token) — accepts both MNEMO_ADMIN_KEY and MNEMO_ADMIN_TOKEN
     admin_key: str = Field(
         default="",

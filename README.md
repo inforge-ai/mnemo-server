@@ -63,8 +63,6 @@ Mnemo uses RBAC with three credential types, passed as request headers:
 | `X-Operator-Key` | operator | Management-plane (register agents, inspect shares, rotate keys) |
 | `X-Agent-Key` | agent | Data-plane (remember, recall, stats, views, capabilities) |
 
-Auth is controlled by `MNEMO_AUTH_ENABLED` (default: `false`). When disabled, all requests get admin-level access.
-
 ### CLI quickstart
 
 The `mnemo` CLI is installed as an entry point (see `pyproject.toml`). You can also invoke it via `uv run python -m mnemo.cli`.

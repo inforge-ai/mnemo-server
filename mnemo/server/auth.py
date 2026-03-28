@@ -5,8 +5,6 @@ Three credential types resolved in order:
   1. X-Admin-Key  → role="admin"
   2. X-Agent-Key  → role="agent"  (data-plane: remember, recall, share, stats)
   3. X-Operator-Key → role="operator" (management-plane: register agent, inspect shares)
-
-When MNEMO_AUTH_ENABLED=false, returns an admin-level sentinel (dev/test mode).
 """
 
 import secrets
@@ -40,9 +38,6 @@ async def resolve_auth(request: Request) -> AuthContext:
     Priority: X-Admin-Key > X-Agent-Key > X-Operator-Key.
     No fallback between key types — wrong key type returns 401.
     """
-    if not settings.auth_enabled:
-        return _AUTH_DISABLED_SENTINEL
-
     # 1. Admin key (accepts X-Admin-Key or legacy X-Admin-Token)
     admin_key = request.headers.get("X-Admin-Key") or request.headers.get("X-Admin-Token")
     if admin_key:
@@ -147,9 +142,6 @@ async def get_current_operator(auth: AuthContext = Depends(resolve_auth)) -> dic
     Legacy wrapper: returns the old-style operator dict.
     Used by routes that haven't been migrated to AuthContext yet.
     """
-    if not settings.auth_enabled:
-        return {"id": None, "name": "anonymous"}
-
     if auth.role == "admin":
         return {"id": None, "name": "admin"}
 
@@ -170,7 +162,7 @@ async def verify_agent_ownership(operator: dict, agent_id: UUID | str) -> None:
     if isinstance(agent_id, str):
         agent_id = UUID(agent_id)
     if operator["id"] is None:
-        return  # auth disabled or admin — skip ownership check
+        return  # admin — skip ownership check
 
     async with get_conn() as conn:
         row = await conn.fetchrow(

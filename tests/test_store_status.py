@@ -53,6 +53,5 @@ async def test_store_status_failed(client, agent, pool):
     assert "error" in data
 
 
-# Cross-operator isolation test skipped: requires MNEMO_AUTH_ENABLED=true.
-# When auth is disabled, operator["id"] is None and the operator filter is
-# bypassed. The query correctly scopes by operator_id when auth is active.
+# Cross-operator isolation test skipped: requires multi-operator test fixtures.
+# The query correctly scopes by operator_id when multiple operators are present.
