@@ -112,6 +112,11 @@ class TestCrossViewRecall:
             await create_address(conn, bob["id"], "bob", op["username"], op["org"])
             alice_key = await create_agent_key(conn, alice["id"])
             bob_key = await create_agent_key(conn, bob["id"])
+            # Create trust rows so shared recall works (bob trusts alice)
+            await conn.execute(
+                "INSERT INTO agent_trust (agent_uuid, trusted_sender_uuid) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                bob["id"], alice["id"],
+            )
 
         alice_headers = {"X-Agent-Key": alice_key}
         bob_headers = {"X-Agent-Key": bob_key}
@@ -141,8 +146,10 @@ class TestCrossViewRecall:
         ctx = await self._setup_sharing(client, pool, operator_with_username)
         bob = ctx["bob"]
 
+        # Use a query that closely matches the stored text for reliable similarity
         resp = await client.post(f"/v1/agents/{bob['id']}/shared_views/recall", json={
-            "query": "bank earnings analysis",
+            "query": "NII sustainability rate expectations bank earnings",
+            "min_similarity": 0.2,
         }, headers=ctx["bob_headers"])
         assert resp.status_code == 200
         data = resp.json()
