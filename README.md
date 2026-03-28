@@ -45,7 +45,7 @@ sudo -u postgres psql mnemo -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
 sudo -u postgres psql mnemo -f schema.sql
 ```
 
-Default connection: `postgresql://mnemo:mnemo@localhost:5432/mnemo`. Override via `MNEMO_DATABASE_URL`.
+Connection: `postgresql://USER:PASSWORD@HOST:PORT/DB_NAME`. Override via `MNEMO_DATABASE_URL`.
 
 ### Install and run
 
@@ -140,7 +140,7 @@ When auth is enabled, endpoints enforce role-based access. Operators can only ma
 Requires an operator key. The response includes a one-time `agent_key` — save it.
 
 ```bash
-curl -s -X POST http://localhost:8000/v1/agents \
+curl -s -X POST http://api.example.com/v1/agents \
   -H "Content-Type: application/json" \
   -H "X-Operator-Key: $MNEMO_API_KEY" \
   -d '{
@@ -158,7 +158,7 @@ Save the `agent_key` from the response — it will not be shown again. Use it as
 Submit free text. The server decomposes it into typed atoms (episodic, semantic, procedural), generates embeddings, deduplicates, and links related atoms automatically.
 
 ```bash
-curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/remember \
+curl -s -X POST http://api.example.com/v1/agents/$AGENT_ID/remember \
   -H "Content-Type: application/json" \
   -H "X-Agent-Key: $MNEMO_AGENT_KEY" \
   -d '{
@@ -172,7 +172,7 @@ curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/remember \
 Retrieve relevant memories via semantic search, filtered by confidence and similarity, with optional knowledge graph expansion.
 
 ```bash
-curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/recall \
+curl -s -X POST http://api.example.com/v1/agents/$AGENT_ID/recall \
   -H "Content-Type: application/json" \
   -H "X-Agent-Key: $MNEMO_AGENT_KEY" \
   -d '{
@@ -187,7 +187,7 @@ curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/recall \
 ### Get agent stats
 
 ```bash
-curl -s http://localhost:8000/v1/agents/$AGENT_ID/stats \
+curl -s http://api.example.com/v1/agents/$AGENT_ID/stats \
   -H "X-Agent-Key: $MNEMO_AGENT_KEY"
 ```
 
@@ -196,7 +196,7 @@ curl -s http://localhost:8000/v1/agents/$AGENT_ID/stats \
 Marks an agent as departed, cascade-revokes all capabilities it granted, and schedules its data for deletion after 30 days. Requires admin access.
 
 ```bash
-curl -s -X POST http://localhost:8000/v1/admin/agents/$AGENT_ID/depart \
+curl -s -X POST http://api.example.com/v1/admin/agents/$AGENT_ID/depart \
   -H "X-Admin-Key: $MNEMO_ADMIN_TOKEN"
 ```
 
@@ -250,7 +250,7 @@ mnemo admin trust revoke <capability_id>
 Mnemo ships an MCP server so Claude can use it as a memory tool directly. Agent identity is resolved by name (unique per operator).
 
 ```bash
-export MNEMO_BASE_URL="http://localhost:8000"
+export MNEMO_BASE_URL="http://api.example.com"
 export MNEMO_API_KEY="mnemo_..."
 export MNEMO_AGENT_NAME="my-agent"
 export MNEMO_AGENT_PERSONA="A Python backend developer"

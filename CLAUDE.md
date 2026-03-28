@@ -34,7 +34,7 @@ sudo -u postgres psql mnemo -c "CREATE EXTENSION IF NOT EXISTS vector;"
 sudo -u postgres psql mnemo -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
 ```
 
-Connection default: `postgresql://mnemo:mnemo@localhost:5432/mnemo`. Override via `MNEMO_DATABASE_URL` env var.
+Connection: `postgresql://USER:PASSWORD@HOST:PORT/DB_NAME`. Override via `MNEMO_DATABASE_URL` env var.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ mnemo/
 ├── server/
 │   ├── main.py           # FastAPI app, lifespan, consolidation scheduling
 │   ├── config.py         # pydantic-settings (MNEMO_ env prefix)
-│   ├── database.py       # asyncpg connection pool
+DB_NAME   ├── database.py       # asyncpg connection pool
 │   ├── models.py         # Pydantic request/response models
 │   ├── embeddings.py     # sentence-transformers (all-MiniLM-L6-v2, 384-dim)
 │   ├── decomposer.py     # rule-based free-text → typed atoms
@@ -90,4 +90,4 @@ All settings via `MNEMO_` env prefix (see `server/config.py`):
 - Duplicate threshold: cosine similarity > 0.90
 - Consolidation interval: 60 minutes
 - Departure data retention: 30 days
-- Decay half-lives: episodic=14d, semantic=90d, procedural=180d, relational=90d
+- Decay half-lives: episodic=14d, semantic=90d, procedural=180d
