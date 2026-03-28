@@ -12,14 +12,15 @@ class TestCompositeRanking:
     async def test_all_results_have_relevance_score(self, client, agent):
         """Every recalled atom should have a non-None relevance_score."""
         aid = agent["id"]
-        await remember(client, aid, "The PostgreSQL cosine distance operator is <=> and it is confirmed working correctly.")
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
+        await remember(client, aid, "The PostgreSQL cosine distance operator is <=> and it is confirmed working correctly.", headers=ag_headers)
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "PostgreSQL distance operator",
             "max_results": 10,
             "expand_graph": False,
             "similarity_drop_threshold": None,
-        })
+        }, headers=ag_headers)
         assert resp.status_code == 200
         atoms = resp.json()["atoms"]
         assert len(atoms) >= 1
@@ -31,14 +32,15 @@ class TestCompositeRanking:
     async def test_results_sorted_by_relevance_score(self, client, agent):
         """Results should be sorted by relevance_score descending."""
         aid = agent["id"]
-        await remember(client, aid, "Python is a programming language. PostgreSQL is a database. Redis is a cache.")
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
+        await remember(client, aid, "Python is a programming language. PostgreSQL is a database. Redis is a cache.", headers=ag_headers)
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "database systems",
             "max_results": 10,
             "expand_graph": False,
             "similarity_drop_threshold": None,
-        })
+        }, headers=ag_headers)
         assert resp.status_code == 200
         atoms = resp.json()["atoms"]
         if len(atoms) >= 2:
@@ -53,23 +55,24 @@ class TestPostRetrievalDedup:
     async def test_dedup_collapses_near_identical_atoms(self, client, agent):
         """Two atoms with >0.95 cosine similarity should be collapsed to one."""
         aid = agent["id"]
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
 
         # Store two near-identical texts via direct atom creation to bypass decomposer
         await client.post(f"/v1/agents/{aid}/atoms", json={
             "atom_type": "episodic",
             "text_content": "The deployment process requires running database migrations first",
-        })
+        }, headers=ag_headers)
         await client.post(f"/v1/agents/{aid}/atoms", json={
             "atom_type": "semantic",
             "text_content": "The deployment process requires running database migrations first",
-        })
+        }, headers=ag_headers)
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "deployment database migrations",
             "max_results": 10,
             "expand_graph": False,
             "similarity_drop_threshold": None,
-        })
+        }, headers=ag_headers)
         assert resp.status_code == 200
         atoms = resp.json()["atoms"]
 
@@ -81,14 +84,15 @@ class TestPostRetrievalDedup:
     async def test_dedup_keeps_distinct_atoms(self, client, agent):
         """Atoms with distinct content should not be collapsed."""
         aid = agent["id"]
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
         await client.post(f"/v1/agents/{aid}/atoms", json={
             "atom_type": "semantic",
             "text_content": "PostgreSQL uses B-tree indexes by default",
-        })
+        }, headers=ag_headers)
         await client.post(f"/v1/agents/{aid}/atoms", json={
             "atom_type": "semantic",
             "text_content": "Redis stores data in memory for fast access",
-        })
+        }, headers=ag_headers)
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "database storage",
@@ -96,7 +100,7 @@ class TestPostRetrievalDedup:
             "min_similarity": 0.0,
             "expand_graph": False,
             "similarity_drop_threshold": None,
-        })
+        }, headers=ag_headers)
         assert resp.status_code == 200
         atoms = resp.json()["atoms"]
         assert len(atoms) == 2
@@ -109,21 +113,22 @@ class TestNoTypeFiltering:
     async def test_recall_returns_all_types(self, client, agent):
         """Recall should return atoms regardless of type."""
         aid = agent["id"]
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
         await client.post(f"/v1/agents/{aid}/atoms", json={
             "atom_type": "episodic",
             "text_content": "I observed the sky is blue today",
-        })
+        }, headers=ag_headers)
         await client.post(f"/v1/agents/{aid}/atoms", json={
             "atom_type": "procedural",
             "text_content": "Always check the sky color before going outside",
-        })
+        }, headers=ag_headers)
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "sky color",
             "max_results": 10,
             "expand_graph": False,
             "similarity_drop_threshold": None,
-        })
+        }, headers=ag_headers)
         assert resp.status_code == 200
         atoms = resp.json()["atoms"]
         assert len(atoms) == 2

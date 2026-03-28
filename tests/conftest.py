@@ -224,10 +224,13 @@ async def agent_with_address(client, pool, operator_with_username):
             RETURNING id, name, operator_id, persona, domain_tags, metadata, created_at, status
         """, op["id"])
         from mnemo.server.services.address_service import create_address
+        from mnemo.server.services.auth_service import create_agent_key
         address = await create_address(conn, row["id"], row["name"], op["username"], op["org"])
+        agent_key = await create_agent_key(conn, row["id"])
     agent = dict(row)
     agent["address"] = address
     agent["operator"] = op
+    agent["agent_key"] = agent_key
     return agent
 
 

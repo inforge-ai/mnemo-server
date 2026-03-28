@@ -4,14 +4,17 @@ import pytest
 async def test_recall_full_verbosity_includes_confidence_metadata(client, agent):
     """At verbosity=full, recall output should include alpha, beta."""
     agent_id = agent["id"]
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     await client.post(
         f"/v1/agents/{agent_id}/remember",
         json={"text": "The project deadline is June 15."},
+        headers=ag_headers,
     )
 
     resp = await client.post(
         f"/v1/agents/{agent_id}/recall",
         json={"query": "project deadline", "verbosity": "full"},
+        headers=ag_headers,
     )
     assert resp.status_code == 200
     atoms = resp.json()["atoms"]
@@ -26,14 +29,17 @@ async def test_recall_full_verbosity_includes_confidence_metadata(client, agent)
 async def test_recall_summary_verbosity_excludes_confidence_metadata(client, agent):
     """At verbosity=summary, alpha/beta should NOT be in the response."""
     agent_id = agent["id"]
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     await client.post(
         f"/v1/agents/{agent_id}/remember",
         json={"text": "The project deadline is June 15."},
+        headers=ag_headers,
     )
 
     resp = await client.post(
         f"/v1/agents/{agent_id}/recall",
         json={"query": "project deadline", "verbosity": "summary"},
+        headers=ag_headers,
     )
     assert resp.status_code == 200
     atoms = resp.json()["atoms"]
