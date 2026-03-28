@@ -90,6 +90,9 @@ mnemo create-agent my-agent --persona "A Python developer" --tags python,backend
 # List your agents
 mnemo list-agents
 
+# Rotate an agent's key (returns new key once, invalidates old)
+mnemo rotate-agent-key <agent_id>
+
 # Generate an additional operator API key
 mnemo new-key
 ```
@@ -113,6 +116,7 @@ mnemo admin operator rotate-key <operator_id>
 mnemo admin agent list [--operator <uuid>] [--status active|departed]
 mnemo admin agent depart <agent_id>
 mnemo admin agent reinstate <agent_id>
+mnemo admin agent rotate-key <agent_id>
 
 # ── Trust / sharing management ──
 mnemo admin trust status           # show sharing enabled/disabled
