@@ -6,9 +6,9 @@ from datetime import datetime
 # ── Agents ──
 
 class AgentCreate(BaseModel):
-    name: str
-    persona: Optional[str] = None
-    domain_tags: list[str] = []
+    name: str = Field(..., min_length=1, max_length=255)
+    persona: Optional[str] = Field(default=None, max_length=2000)
+    domain_tags: list[str] = Field(default=[], max_length=20)
     metadata: dict = {}
 
 class AgentResponse(BaseModel):
@@ -29,8 +29,8 @@ class AgentCreateResponse(AgentResponse):
 
 class RememberRequest(BaseModel):
     """The simple interface. Agent just says what happened."""
-    text: str
-    domain_tags: list[str] = []
+    text: str = Field(..., min_length=1, max_length=50_000)
+    domain_tags: list[str] = Field(default=[], max_length=20)
     remembered_on: Optional[datetime] = None
 
 class RememberResponse(BaseModel):
@@ -49,12 +49,12 @@ class StoreJobResponse(BaseModel):
 
 class AtomCreate(BaseModel):
     atom_type: Literal["episodic", "semantic", "procedural", "relational"]
-    text_content: str
+    text_content: str = Field(..., min_length=1, max_length=10_000)
     structured: dict = {}
     confidence: Optional[Literal["high", "medium", "low", "uncertain"]] = None
-    source_type: str = "direct_experience"
+    source_type: str = Field(default="direct_experience", max_length=50)
     source_ref: Optional[UUID] = None
-    domain_tags: list[str] = []
+    domain_tags: list[str] = Field(default=[], max_length=20)
 
 class AtomResponse(BaseModel):
     id: UUID
@@ -78,7 +78,7 @@ class AtomResponse(BaseModel):
 # ── Retrieval ──
 
 class RetrieveRequest(BaseModel):
-    query: str
+    query: str = Field(..., min_length=1, max_length=2000)
     domain_tags: Optional[list[str]] = None
     min_confidence: float = 0.1
     min_similarity: float = Field(
@@ -140,8 +140,8 @@ class EdgeResponse(BaseModel):
 # ── Views ──
 
 class ViewCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=2000)
     atom_filter: dict  # {"atom_types": [...], "domain_tags": [...]}
 
 class ViewResponse(BaseModel):
@@ -169,7 +169,7 @@ class SharedViewResponse(BaseModel):
     trusted: bool = False
 
 class SharedRecallRequest(BaseModel):
-    query: str
+    query: str = Field(..., min_length=1, max_length=2000)
     from_agent: Optional[str] = None
     min_similarity: float = Field(default=0.15, ge=0.0, le=1.0)
     max_results: int = Field(default=5, ge=1, le=100)

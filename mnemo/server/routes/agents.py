@@ -162,7 +162,8 @@ async def resolve_agent_address(address: str, auth: AuthContext = Depends(resolv
 
 
 @router.get("/agents/{agent_id}", response_model=AgentResponse)
-async def get_agent(agent_id: str):
+async def get_agent(agent_id: str, auth: AuthContext = Depends(resolve_auth)):
+    """Get agent by ID. Operator sees own agents only; admin sees all."""
     pool = await get_pool()
     agent_uuid = await resolve_agent_identifier(pool, agent_id)
     async with get_conn() as conn:
@@ -177,6 +178,9 @@ async def get_agent(agent_id: str):
             agent_uuid,
         )
     if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    # Enforce ownership: operator/agent can only see agents under their operator
+    if auth.role != "admin" and auth.operator_id is not None and row["operator_id"] != auth.operator_id:
         raise HTTPException(status_code=404, detail="Agent not found")
     return _agent_row(row)
 

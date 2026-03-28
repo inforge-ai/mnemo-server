@@ -13,6 +13,7 @@ async def create_pool() -> asyncpg.Pool:
         settings.database_url,
         min_size=2,
         max_size=10,
+        command_timeout=30,
         init=_init_connection,
     )
     return pool
