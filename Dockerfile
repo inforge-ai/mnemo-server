@@ -18,4 +18,8 @@ EXPOSE 8000
 ENV HF_HOME=/app/.cache
 ENV TRANSFORMERS_CACHE=/app/.cache
 
+# Run as non-root user
+RUN useradd -r -s /bin/false mnemo && chown -R mnemo:mnemo /app
+USER mnemo
+
 CMD ["uv", "run", "uvicorn", "mnemo.server.main:app", "--host", "0.0.0.0", "--port", "8000"]

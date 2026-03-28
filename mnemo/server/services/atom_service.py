@@ -341,7 +341,7 @@ async def _create_similarity_edges(
                     )
                     edges_created += 1
                 except Exception:
-                    pass
+                    pass  # best-effort: skip duplicate/constraint violations
     return edges_created
 
 
@@ -504,7 +504,7 @@ async def store_from_text(
                 )
                 edges_created += 1
             except Exception:
-                pass
+                pass  # best-effort: skip duplicate/constraint violations
 
     # Cross-call edge inference: link NEW atoms to existing similar atoms
     # from previous /remember calls. Edges only — no merging.
