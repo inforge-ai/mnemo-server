@@ -90,7 +90,8 @@ async def list_operators():
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
-            SELECT o.id, o.name, o.username, o.org, o.email, o.status, o.created_at,
+            SELECT o.id, o.name, o.username, o.org, o.email, o.status,
+                   o.sharing_scope, o.created_at,
                    COUNT(a.id) AS agent_count
             FROM operators o
             LEFT JOIN agents a ON a.operator_id = o.id
@@ -107,6 +108,7 @@ async def list_operators():
                 "display_name": r["name"],
                 "email": r["email"],
                 "status": r["status"],
+                "sharing_scope": r["sharing_scope"],
                 "agent_count": r["agent_count"],
                 "created_at": r["created_at"],
             }
@@ -123,7 +125,7 @@ async def get_operator(operator_id: UUID):
     async with get_conn() as conn:
         op = await conn.fetchrow(
             """
-            SELECT id, name, username, org, email, status,
+            SELECT id, name, username, org, email, status, sharing_scope,
                    stripe_customer_id, stripe_subscription_id,
                    created_at, updated_at
             FROM operators WHERE id = $1
@@ -152,6 +154,7 @@ async def get_operator(operator_id: UUID):
         "display_name": op["name"],
         "email": op["email"],
         "status": op["status"],
+        "sharing_scope": op["sharing_scope"],
         "stripe_customer_id": op["stripe_customer_id"],
         "stripe_subscription_id": op["stripe_subscription_id"],
         "created_at": op["created_at"],
@@ -272,4 +275,44 @@ async def rotate_key(operator_id: UUID):
         "uuid": str(op["id"]),
         "username": op["username"],
         "api_key": plaintext_key,
+    }
+
+
+# ── Set sharing scope ───────────────────────────────────────────────────────
+
+_VALID_SCOPES = ("none", "intra", "full")
+
+
+class SharingScopeRequest(BaseModel):
+    sharing_scope: str
+
+
+@router.patch("/{operator_id}/sharing-scope", dependencies=[Depends(_require_admin)])
+async def set_sharing_scope(operator_id: UUID, body: SharingScopeRequest):
+    """Set the sharing scope for an operator."""
+    if body.sharing_scope not in _VALID_SCOPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid sharing_scope '{body.sharing_scope}'. Must be one of: {', '.join(_VALID_SCOPES)}",
+        )
+
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE operators SET sharing_scope = $1, updated_at = now()
+            WHERE id = $2
+            RETURNING id, username, org, name, sharing_scope
+            """,
+            body.sharing_scope,
+            operator_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Operator not found")
+
+    return {
+        "uuid": str(row["id"]),
+        "username": row["username"],
+        "org": row["org"],
+        "display_name": row["name"],
+        "sharing_scope": row["sharing_scope"],
     }

@@ -344,6 +344,46 @@ class TestAdminOperator:
         assert "MNEMO_ADMIN_TOKEN" in result.output
 
 
+class TestAdminOperatorSetSharingScope:
+    @respx.mock
+    def test_set_scope(self, runner):
+        respx.patch(f"{BASE}/v1/admin/operators/op-1/sharing-scope").mock(
+            return_value=Response(200, json={
+                "uuid": "op-1", "username": "jdoe", "org": "acme",
+                "display_name": "Jane", "sharing_scope": "intra",
+            })
+        )
+        result = runner.invoke(
+            cli, ["admin", "operator", "set-sharing-scope", "op-1", "intra"],
+            env=ADMIN_ENV,
+        )
+        assert result.exit_code == 0
+        assert "intra" in result.output
+
+    @respx.mock
+    def test_set_scope_json(self, runner):
+        respx.patch(f"{BASE}/v1/admin/operators/op-1/sharing-scope").mock(
+            return_value=Response(200, json={
+                "uuid": "op-1", "username": "jdoe", "org": "acme",
+                "display_name": "Jane", "sharing_scope": "full",
+            })
+        )
+        result = runner.invoke(
+            cli, ["admin", "--json", "operator", "set-sharing-scope", "op-1", "full"],
+            env=ADMIN_ENV,
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["sharing_scope"] == "full"
+
+    def test_invalid_scope_rejected_by_click(self, runner):
+        result = runner.invoke(
+            cli, ["admin", "operator", "set-sharing-scope", "op-1", "bogus"],
+            env=ADMIN_ENV,
+        )
+        assert result.exit_code != 0
+
+
 # ── Admin: agent commands ────────────────────────────────────────────────────
 
 

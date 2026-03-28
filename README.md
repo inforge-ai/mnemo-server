@@ -111,6 +111,7 @@ mnemo admin operator show <operator_id>
 mnemo admin operator suspend <operator_id>
 mnemo admin operator reinstate <operator_id>
 mnemo admin operator rotate-key <operator_id>
+mnemo admin operator set-sharing-scope <operator_id> none|intra|full
 
 # ── Agent management ──
 mnemo admin agent list [--operator <uuid>] [--status active|departed]
@@ -199,7 +200,27 @@ curl -s -X POST http://localhost:8000/v1/admin/agents/$AGENT_ID/depart \
   -H "X-Admin-Key: $MNEMO_ADMIN_TOKEN"
 ```
 
-## Sharing Trust Auth
+## Sharing
+
+### Sharing scope
+
+Each operator has a `sharing_scope` that controls what sharing operations are allowed:
+
+| Scope | Behaviour | Tier |
+|-------|-----------|------|
+| `none` | No sharing. All share/recall_shared/list_shared operations return 403. | Free / Individual |
+| `intra` | Sharing only between agents with the same operator. Cross-operator attempts return 403. | Team |
+| `full` | Unrestricted sharing (existing capability model). | Enterprise |
+
+New operators default to `none`. Set the scope via admin CLI:
+
+```bash
+mnemo admin operator set-sharing-scope <operator_id> intra
+```
+
+There is also a global sharing kill-switch (`admin trust enable/disable`) that overrides per-operator scope when disabled.
+
+### Trust auth
 
 Mnemo uses directional trust to gate memory sharing. When agent B holds a capability granted by agent A, B can only recall shared memories if a trust row exists (`agent_trust`) from B toward A. Without trust, `recall_shared` and `recall_all_shared` return empty results silently.
 
