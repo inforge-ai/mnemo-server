@@ -1,10 +1,12 @@
 """
-Admin agent endpoints — protected by X-Admin-Token header.
+Admin agent endpoints — protected by X-Admin-Key header.
 
 Endpoints:
-  GET    /v1/admin/agents                        — list all agents
-  POST   /v1/admin/agents/{agent_id}/depart      — admin force-depart
-  POST   /v1/admin/agents/{agent_id}/reinstate   — admin reinstate
+  GET    /v1/admin/agents                           — list all agents
+  POST   /v1/admin/agents/{agent_id}/depart         — admin force-depart
+  POST   /v1/admin/agents/{agent_id}/reinstate      — admin reinstate
+  POST   /v1/admin/agents/{agent_id}/rotate-key     — admin rotate agent key
+  POST   /v1/admin/agents/{agent_id}/purge          — admin hard-purge
 """
 
 from uuid import UUID
@@ -15,6 +17,7 @@ from pydantic import BaseModel
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..services.agent_service import depart_agent as do_depart, reinstate_agent as do_reinstate
+from ..services.auth_service import create_agent_key
 from .admin import _require_admin
 
 router = APIRouter(tags=["admin"], prefix="/admin/agents")
@@ -151,6 +154,34 @@ async def admin_reinstate_agent(agent_id: str):
         "address": addr_row["address"] if addr_row else None,
         "status": "active",
         "message": "Agent reinstated. Previously revoked capabilities must be re-granted.",
+    }
+
+
+@router.post("/{agent_id}/rotate-key", dependencies=[Depends(_require_admin)])
+async def admin_rotate_agent_key(agent_id: str):
+    """Admin rotate an agent's key (no ownership check)."""
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, name FROM agents WHERE id = $1", agent_uuid
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        new_key = await create_agent_key(conn, agent_uuid)
+
+        addr_row = await conn.fetchrow(
+            "SELECT address FROM agent_addresses WHERE agent_id = $1", agent_uuid
+        )
+
+    return {
+        "agent_id": str(agent_uuid),
+        "name": row["name"],
+        "address": addr_row["address"] if addr_row else None,
+        "agent_key": new_key,
+        "message": "Save this key — it will not be shown again. The previous key is now invalid.",
     }
 
 
