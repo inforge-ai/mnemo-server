@@ -62,8 +62,9 @@ async def _insert_atom_sql(
 
 async def test_decay_deactivates_old_atoms(client, agent, pool):
     """Atoms whose effective_confidence drops below 0.05 are deactivated."""
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     # Store an atom via the API (normal path, gets episodic half-life 14d)
-    await remember(client, agent["id"], "I found a memory leak in the authentication service.", domain_tags=["bugs"])
+    await remember(client, agent["id"], "I found a memory leak in the authentication service.", domain_tags=["bugs"], headers=ag_headers)
 
     agent_id = UUID(agent["id"])
 
@@ -86,19 +87,20 @@ async def test_decay_deactivates_old_atoms(client, agent, pool):
     assert result["decayed"] >= 1
 
     # Verify via stats endpoint
-    stats_r = await client.get(f"/v1/agents/{agent['id']}/stats")
+    stats_r = await client.get(f"/v1/agents/{agent['id']}/stats", headers=ag_headers)
     assert stats_r.status_code == 200
     assert stats_r.json()["active_atoms"] == 0
 
 
 async def test_decay_does_not_touch_fresh_atoms(client, agent, pool):
     """Freshly created atoms should not be deactivated by consolidation."""
-    await remember(client, agent["id"], "Python dict comprehensions are very efficient.")
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
+    await remember(client, agent["id"], "Python dict comprehensions are very efficient.", headers=ag_headers)
 
     result = await run_consolidation(pool)
 
     # None of the fresh atoms should have been deactivated
-    stats_r = await client.get(f"/v1/agents/{agent['id']}/stats")
+    stats_r = await client.get(f"/v1/agents/{agent['id']}/stats", headers=ag_headers)
     assert stats_r.json()["active_atoms"] > 0
 
 
@@ -322,11 +324,13 @@ async def test_merge_does_not_merge_different_types(client, agent, pool):
 
 # ── Departed agent cleanup tests ───────────────────────────────────────────────
 
-async def test_purge_deletes_expired_departed_agents(client, pool):
+async def test_purge_deletes_expired_departed_agents(client, operator_with_key, pool):
     """Agents with data_expires_at in the past should be fully deleted."""
+    _, _, op_headers = operator_with_key
     r = await client.post(
         "/v1/agents",
         json={"name": "departed-agent", "domain_tags": ["test"]},
+        headers=op_headers,
     )
     assert r.status_code == 201
     dep_id = UUID(r.json()["id"])
@@ -353,11 +357,13 @@ async def test_purge_deletes_expired_departed_agents(client, pool):
     assert row is None
 
 
-async def test_purge_keeps_agents_with_future_expiry(client, pool):
+async def test_purge_keeps_agents_with_future_expiry(client, operator_with_key, pool):
     """Agents whose data_expires_at is in the future must not be deleted."""
+    _, _, op_headers = operator_with_key
     r = await client.post(
         "/v1/agents",
         json={"name": "recent-departure", "domain_tags": ["test"]},
+        headers=op_headers,
     )
     assert r.status_code == 201
     dep_id = UUID(r.json()["id"])
@@ -387,12 +393,15 @@ async def test_purge_removes_capability_references(client, two_agents, pool):
     appears as grantee (FK constraint has no CASCADE).
     """
     alice, bob = two_agents
+    alice_headers = {"X-Agent-Key": alice["agent_key"]}
+    bob_headers = {"X-Agent-Key": bob["agent_key"]}
 
     # Alice stores something and creates a view
-    await remember(client, alice["id"], "pandas handles missing values automatically.", domain_tags=["data"])
+    await remember(client, alice["id"], "pandas handles missing values automatically.", domain_tags=["data"], headers=alice_headers)
     view_r = await client.post(
         f"/v1/agents/{alice['id']}/views",
         json={"name": "alice-view", "atom_filter": {"atom_types": ["semantic"]}},
+        headers=alice_headers,
     )
     assert view_r.status_code == 201
     view_id = view_r.json()["id"]
@@ -401,6 +410,7 @@ async def test_purge_removes_capability_references(client, two_agents, pool):
     grant_r = await client.post(
         f"/v1/agents/{alice['id']}/grant",
         json={"view_id": view_id, "grantee_id": bob["id"], "permissions": ["read"]},
+        headers=alice_headers,
     )
     assert grant_r.status_code == 201
 
@@ -469,8 +479,9 @@ async def test_consolidation_step_rollback(client, agent, pool):
     """
     agent_id = UUID(agent["id"])
 
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     # Store an atom and age it so it gets decayed
-    await remember(client, str(agent_id), "The connection pool is exhausted under high load.", domain_tags=["ops"])
+    await remember(client, str(agent_id), "The connection pool is exhausted under high load.", domain_tags=["ops"], headers=ag_headers)
 
     async with pool.acquire() as conn:
         await conn.execute(

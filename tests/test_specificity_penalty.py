@@ -4,11 +4,13 @@ import pytest
 async def test_consolidated_atom_ranks_below_specific_atom(client, agent, pool):
     """A consolidated atom should rank below a decomposer atom due to specificity penalty."""
     agent_id = agent["id"]
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
 
     # Store a specific fact
     await client.post(
         f"/v1/agents/{agent_id}/remember",
         json={"text": "The Hetzner server runs PostgreSQL 16 with pgvector."},
+        headers=ag_headers,
     )
 
     # Manually insert a consolidated atom (broad semantics)
@@ -37,6 +39,7 @@ async def test_consolidated_atom_ranks_below_specific_atom(client, agent, pool):
     resp = await client.post(
         f"/v1/agents/{agent_id}/recall",
         json={"query": "PostgreSQL database server", "max_results": 10},
+        headers=ag_headers,
     )
     assert resp.status_code == 200
     atoms = resp.json()["atoms"]

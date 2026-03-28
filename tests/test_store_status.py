@@ -6,15 +6,17 @@ import pytest
 async def test_store_status_complete(client, agent):
     """After storing, the status endpoint should return 'complete'."""
     agent_id = agent["id"]
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     resp = await client.post(
         f"/v1/agents/{agent_id}/remember",
         json={"text": "The deployment runs on Hetzner cloud infrastructure."},
+        headers=ag_headers,
     )
     assert resp.status_code == 201
     store_id = resp.json()["store_id"]
 
     # In test mode (sync_store_for_tests=True), store is already complete
-    status_resp = await client.get(f"/v1/stores/{store_id}/status")
+    status_resp = await client.get(f"/v1/stores/{store_id}/status", headers=ag_headers)
     assert status_resp.status_code == 200
     data = status_resp.json()
     assert data["store_id"] == store_id
@@ -22,16 +24,18 @@ async def test_store_status_complete(client, agent):
     assert data["atoms_created"] >= 1
 
 
-async def test_store_status_not_found(client):
+async def test_store_status_not_found(client, agent):
     """Querying a non-existent store_id should return 404."""
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     fake_id = str(uuid.uuid4())
-    resp = await client.get(f"/v1/stores/{fake_id}/status")
+    resp = await client.get(f"/v1/stores/{fake_id}/status", headers=ag_headers)
     assert resp.status_code == 404
 
 
 async def test_store_status_failed(client, agent, pool):
     """A failed store should report status='failed'."""
     agent_id = agent["id"]
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     store_id = uuid.uuid4()
 
     async with pool.acquire() as conn:
@@ -46,7 +50,7 @@ async def test_store_status_failed(client, agent, pool):
             store_id, agent_id, op_row["operator_id"],
         )
 
-    resp = await client.get(f"/v1/stores/{store_id}/status")
+    resp = await client.get(f"/v1/stores/{store_id}/status", headers=ag_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "failed"

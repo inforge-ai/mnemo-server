@@ -4,6 +4,7 @@ import pytest
 async def test_bayesian_alpha_increments_on_duplicate_store(client, agent, pool):
     """Storing the same fact multiple times should increment alpha via Bayesian update."""
     agent_id = agent["id"]
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     text = "The sky is blue."
 
     # Store the fact 3 times
@@ -11,6 +12,7 @@ async def test_bayesian_alpha_increments_on_duplicate_store(client, agent, pool)
         resp = await client.post(
             f"/v1/agents/{agent_id}/remember",
             json={"text": text},
+            headers=ag_headers,
         )
         assert resp.status_code == 201
 
@@ -36,11 +38,12 @@ async def test_bayesian_alpha_increments_on_duplicate_store(client, agent, pool)
 async def test_bayesian_update_persists_to_database(client, agent, pool):
     """Verify the Bayesian update is persisted, not just in-memory."""
     agent_id = agent["id"]
+    ag_headers = {"X-Agent-Key": agent["agent_key"]}
     text = "Water boils at 100 degrees Celsius."
 
     # Store twice
-    await client.post(f"/v1/agents/{agent_id}/remember", json={"text": text})
-    await client.post(f"/v1/agents/{agent_id}/remember", json={"text": text})
+    await client.post(f"/v1/agents/{agent_id}/remember", json={"text": text}, headers=ag_headers)
+    await client.post(f"/v1/agents/{agent_id}/remember", json={"text": text}, headers=ag_headers)
 
     # Read directly from DB
     async with pool.acquire() as conn:
@@ -60,7 +63,7 @@ async def test_bayesian_update_persists_to_database(client, agent, pool):
     initial_alpha = row["confidence_alpha"]
 
     # Store a third time
-    await client.post(f"/v1/agents/{agent_id}/remember", json={"text": text})
+    await client.post(f"/v1/agents/{agent_id}/remember", json={"text": text}, headers=ag_headers)
 
     async with pool.acquire() as conn:
         row2 = await conn.fetchrow(

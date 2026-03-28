@@ -85,6 +85,7 @@ class TestDecomposerUsageLogging:
 
     async def test_llm_decomposer_logs_usage_to_db(self, client, agent, pool):
         """When LLM decomposer is active, a decomposer_usage row is created."""
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=json.dumps([
             {"text": "PostgreSQL supports JSONB", "type": "semantic", "confidence": 0.9},
@@ -102,7 +103,7 @@ class TestDecomposerUsageLogging:
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client), \
              patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
-            await remember(client, agent["id"], "PostgreSQL supports JSONB")
+            await remember(client, agent["id"], "PostgreSQL supports JSONB", headers=ag_headers)
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -121,10 +122,11 @@ class TestDecomposerUsageLogging:
 
     async def test_regex_decomposer_does_not_log_usage(self, client, agent, pool):
         """When regex decomposer is used (no API key), no usage row is created."""
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
         import os
         key = os.environ.pop("ANTHROPIC_API_KEY", None)
         try:
-            await remember(client, agent["id"], "Regex decomposer test sentence.")
+            await remember(client, agent["id"], "Regex decomposer test sentence.", headers=ag_headers)
         finally:
             if key:
                 os.environ["ANTHROPIC_API_KEY"] = key
