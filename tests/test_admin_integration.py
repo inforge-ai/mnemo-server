@@ -29,13 +29,22 @@ def _admin(headers=None):
 
 
 async def _create_operator(client, username="alice", org="testorg",
-                           display_name="Alice Smith", email="alice@test.com"):
+                           display_name="Alice Smith", email="alice@test.com",
+                           sharing_scope=None):
     """Helper: create operator via admin API, return response data."""
     resp = await client.post("/v1/admin/operators", headers=_admin(), json={
         "username": username, "org": org, "display_name": display_name, "email": email,
     })
     assert resp.status_code == 201, resp.text
-    return resp.json()
+    data = resp.json()
+    if sharing_scope:
+        resp = await client.patch(
+            f"/v1/admin/operators/{data['uuid']}/sharing-scope",
+            headers=_admin(),
+            json={"sharing_scope": sharing_scope},
+        )
+        assert resp.status_code == 200, resp.text
+    return data
 
 
 async def _create_operator_and_agent(client, username="opadm", agent_name="managed"):
@@ -361,9 +370,10 @@ class TestSharingEnforcement:
 
     async def test_grant_blocked_when_sharing_disabled(self, client, pool):
         """When sharing is disabled, granting a capability should fail with 403."""
-        # Create operator + 2 agents
+        # Create operator + 2 agents (scope=full so we're testing the global toggle, not scope)
         op_data = await _create_operator(
             client, username="shareop", email="shareop@test.com",
+            sharing_scope="full",
         )
         api_key = op_data["api_key"]
         op_auth = {"X-Operator-Key": api_key}
@@ -427,6 +437,7 @@ class TestSharingEnforcement:
         """When sharing is disabled, shared recall should return empty results."""
         op_data = await _create_operator(
             client, username="recallop", email="recallop@test.com",
+            sharing_scope="full",
         )
         api_key = op_data["api_key"]
         op_auth = {"X-Operator-Key": api_key}
@@ -461,6 +472,7 @@ class TestSharingEnforcement:
         """When sharing is disabled, per-view shared recall should return 403."""
         op_data = await _create_operator(
             client, username="pvrecall", email="pvrecall@test.com",
+            sharing_scope="full",
         )
         api_key = op_data["api_key"]
         op_auth = {"X-Operator-Key": api_key}

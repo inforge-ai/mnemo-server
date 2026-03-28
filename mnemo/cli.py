@@ -426,6 +426,32 @@ async def _operator_rotate_key(base_url, token, operator_id, output_json):
     click.echo()
 
 
+@operator.command("set-sharing-scope")
+@click.argument("operator_id")
+@click.argument("scope", type=click.Choice(["none", "intra", "full"]))
+@click.pass_context
+def operator_set_sharing_scope(ctx, operator_id, scope):
+    """Set the sharing scope for an operator (none/intra/full)."""
+    token = _admin_token(ctx)
+    base_url = ctx.obj["base_url"]
+    _run(_operator_set_sharing_scope(base_url, token, operator_id, scope, ctx.obj["json"]))
+
+
+async def _operator_set_sharing_scope(base_url, token, operator_id, scope, output_json):
+    resp = await _admin_request(
+        base_url, token, "patch",
+        f"/v1/admin/operators/{operator_id}/sharing-scope",
+        json={"sharing_scope": scope},
+    )
+    data = resp.json()
+    if output_json:
+        click.echo(json_mod.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"\nUpdated sharing scope for {data['username']}:")
+    click.echo(f"  Scope: {data['sharing_scope']}")
+    click.echo()
+
+
 # ── Admin: agent subgroup ─────────────────────────────────────────────────────
 
 @admin.group()

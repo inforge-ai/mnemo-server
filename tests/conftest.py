@@ -144,6 +144,15 @@ async def operator_with_key(client):
     })
     assert resp.status_code == 201, resp.text
     data = resp.json()
+
+    # Enable full sharing for test operator so sharing tests work
+    resp = await client.patch(
+        f"/v1/admin/operators/{data['uuid']}/sharing-scope",
+        headers=admin_headers(),
+        json={"sharing_scope": "full"},
+    )
+    assert resp.status_code == 200, resp.text
+
     op_key = data["api_key"]
     headers = {"X-Operator-Key": op_key}
     return data, op_key, headers
@@ -198,8 +207,8 @@ async def two_agents(client, operator_with_key):
 async def operator_with_username(pool, clean_db):
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            INSERT INTO operators (name, username, org)
-            VALUES ('Test Operator', 'testuser', 'testorg')
+            INSERT INTO operators (name, username, org, sharing_scope)
+            VALUES ('Test Operator', 'testuser', 'testorg', 'full')
             RETURNING id, name, username, org
         """)
     return dict(row)

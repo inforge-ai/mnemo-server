@@ -27,6 +27,8 @@ CREATE TABLE operators (
                             CHECK (status IN ('active', 'suspended', 'cancelled')),
     stripe_customer_id      VARCHAR(64),
     stripe_subscription_id  VARCHAR(64),
+    sharing_scope           VARCHAR(5) NOT NULL DEFAULT 'none'
+                            CHECK (sharing_scope IN ('none', 'intra', 'full')),
     updated_at              TIMESTAMPTZ DEFAULT now()
 );
 

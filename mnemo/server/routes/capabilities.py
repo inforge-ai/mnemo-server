@@ -9,7 +9,7 @@ from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..models import CapabilityResponse, GrantCreate, OutboundCapabilityResponse, RevokeResponse
 from ..services import view_service
-from ..services.platform_service import is_sharing_enabled
+from ..services.platform_service import check_sharing_allowed, is_sharing_enabled
 
 router = APIRouter(tags=["capabilities"])
 
@@ -26,9 +26,12 @@ async def grant_capability(agent_id: str, body: GrantCreate, auth: AuthContext =
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
 
-        # Global sharing toggle
+        # Global sharing toggle (platform-level kill-switch)
         if not await is_sharing_enabled(conn):
             raise HTTPException(status_code=403, detail="Sharing is currently disabled")
+
+        # Per-operator sharing scope (checks scope + intra cross-operator)
+        await check_sharing_allowed(conn, auth.operator_id, target_agent_id=body.grantee_id)
 
         # Verify the grantor owns the view
         view_owner = await conn.fetchval(

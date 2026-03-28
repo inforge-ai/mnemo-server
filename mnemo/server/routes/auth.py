@@ -44,8 +44,14 @@ async def me(auth: AuthContext = Depends(require_operator)):
         return {"role": auth.role, "message": "Admin account (no operator context)"}
 
     async with get_conn() as conn:
-        agent_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM agents WHERE operator_id = $1 AND status = 'active'",
+        row = await conn.fetchrow(
+            """
+            SELECT COUNT(a.id) AS agent_count, o.sharing_scope
+            FROM operators o
+            LEFT JOIN agents a ON a.operator_id = o.id AND a.status = 'active'
+            WHERE o.id = $1
+            GROUP BY o.id
+            """,
             auth.operator_id,
         )
 
@@ -53,5 +59,6 @@ async def me(auth: AuthContext = Depends(require_operator)):
         "id": str(auth.operator_id),
         "name": auth.operator_name,
         "role": auth.role,
-        "agent_count": agent_count,
+        "agent_count": row["agent_count"] if row else 0,
+        "sharing_scope": row["sharing_scope"] if row else "none",
     }

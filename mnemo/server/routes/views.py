@@ -10,7 +10,7 @@ from ..services.address_service import resolve_agent_identifier
 from ..models import RetrieveRequest, RetrieveResponse, SharedRecallRequest, SharedViewResponse, SkillExport, ViewCreate, ViewResponse
 from ..services import view_service
 from ..services.ops_service import log_operation
-from ..services.platform_service import is_sharing_enabled
+from ..services.platform_service import check_sharing_allowed, is_sharing_enabled
 
 router = APIRouter(tags=["views"])
 
@@ -62,6 +62,9 @@ async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, a
         # Global sharing toggle
         if not await is_sharing_enabled(conn):
             return {"atoms": [], "note": "Sharing is currently disabled"}
+
+        # Per-operator sharing scope
+        await check_sharing_allowed(conn, auth.operator_id)
 
         result = await view_service.recall_all_shared(
             conn=conn,
@@ -117,6 +120,9 @@ async def recall_shared(
         if not await is_sharing_enabled(conn):
             raise HTTPException(status_code=403, detail="Sharing is currently disabled")
 
+        # Per-operator sharing scope
+        await check_sharing_allowed(conn, auth.operator_id)
+
         cap = await _require_capability(conn, agent_uuid, view_id)
         t0 = time.monotonic()
         result = await view_service.recall_shared(
@@ -145,6 +151,10 @@ async def list_shared_views(agent_id: str, auth: AuthContext = Depends(require_a
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
+
+        # Per-operator sharing scope
+        await check_sharing_allowed(conn, auth.operator_id)
+
         rows = await conn.fetch(
             """
             SELECT v.id, v.owner_agent_id, v.name, v.description, v.alpha,
