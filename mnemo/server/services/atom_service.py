@@ -80,7 +80,7 @@ async def _check_duplicate(
         WHERE agent_id = $2
           AND is_active = true
           AND 1 - (embedding <=> $1::vector) > $3
-        ORDER BY similarity DESC
+        ORDER BY embedding <=> $1::vector ASC
         LIMIT 1
         """,
         embedding,
@@ -686,7 +686,7 @@ async def retrieve(
         WHERE agent_id = $2
           AND is_active = true
           AND ($3::text[] IS NULL OR domain_tags && $3)
-        ORDER BY cosine_sim DESC
+        ORDER BY embedding <=> $1::vector ASC
         LIMIT $4
         """,
         embedding,
