@@ -54,7 +54,7 @@ async def _decompose(
     Returns DecomposerResult (atoms + optional usage metadata)."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         from ..llm_decomposer import llm_decompose
-        return await llm_decompose(text, remembered_on=remembered_on)
+        return await llm_decompose(text, remembered_on=remembered_on, domain_tags=domain_tags)
     from ..llm_decomposer import DecomposerResult
     return DecomposerResult(atoms=regex_decompose(text, domain_tags))
 
