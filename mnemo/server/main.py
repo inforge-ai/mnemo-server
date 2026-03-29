@@ -22,6 +22,10 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("ANTHROPIC_API_KEY not set — falling back to regex decomposer")
 
+    from .config import settings
+    if not settings.admin_key:
+        logger.warning("MNEMO_ADMIN_KEY not set — admin endpoints will be inaccessible")
+
     pool = await create_pool()
     set_pool(pool)
 

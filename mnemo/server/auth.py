@@ -27,9 +27,6 @@ class AuthContext:
     operator_name: str | None = None
 
 
-# Sentinel for auth-disabled mode (full admin access)
-_AUTH_DISABLED_SENTINEL = AuthContext(role="admin")
-
 
 async def resolve_auth(request: Request) -> AuthContext:
     """
