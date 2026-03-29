@@ -548,11 +548,12 @@ async def store_background(
                 "UPDATE store_jobs SET status = 'decomposing' WHERE store_id = $1",
                 store_id,
             )
-            result = await store_from_text(
-                conn, agent_id, text, domain_tags,
-                store_id=store_id, operator_id=operator_id,
-                remembered_on=remembered_on,
-            )
+            async with conn.transaction():
+                result = await store_from_text(
+                    conn, agent_id, text, domain_tags,
+                    store_id=store_id, operator_id=operator_id,
+                    remembered_on=remembered_on,
+                )
             await conn.execute(
                 """
                 UPDATE store_jobs
