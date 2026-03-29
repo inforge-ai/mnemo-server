@@ -48,7 +48,9 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="Mnemo", version="0.4.0", lifespan=lifespan)
+from .version import get_version
+
+app = FastAPI(title="Mnemo", version=get_version(), lifespan=lifespan)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):

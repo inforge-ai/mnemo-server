@@ -507,20 +507,8 @@ wheels = [
 ]
 
 [[package]]
-name = "mnemo-ai"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7e/12/f92e9c9d29889b1531aa94846e3495f2759083970b94f9b1a2f3eb6ef117/mnemo_ai-0.3.1.tar.gz", hash = "sha256:43cb9fa7e44492e3e27292925ba62f8f9b9f411a6bae4e968b03d2684a70b91e", size = 55498, upload-time = "2026-03-15T13:42:54.839Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/99/c12e3256f471ae458463990f267e52e5b92e9e29d4e90bda24261a9841c4/mnemo_ai-0.3.1-py3-none-any.whl", hash = "sha256:f249cb9d1c47234033c13d6bd5f586539c3a47aefb698eee20c952047cccae5c", size = 16646, upload-time = "2026-03-15T13:42:55.717Z" },
-]
-
-[[package]]
 name = "mnemodb"
-version = "0.4.0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -528,7 +516,6 @@ dependencies = [
     { name = "click" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "mnemo-ai" },
     { name = "numpy" },
     { name = "pgvector" },
     { name = "pydantic" },
@@ -560,7 +547,6 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.109.0" },
     { name = "httpx", specifier = ">=0.26.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.26.0" },
-    { name = "mnemo-ai", specifier = ">=0.2.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "pgvector", specifier = ">=0.2.4" },
     { name = "pydantic", specifier = ">=2.5.0" },

@@ -12,6 +12,10 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN uv sync --frozen --no-dev
 
+# Bake build metadata (pass via: docker build --build-arg BUILD_COMMIT=$(git rev-parse HEAD) .)
+ARG BUILD_COMMIT=unknown
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+
 EXPOSE 8000
 
 # HF model cache lives on a volume mount at /app/.cache
