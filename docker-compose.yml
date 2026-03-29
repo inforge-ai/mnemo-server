@@ -1,6 +1,9 @@
 services:
   mnemo-server:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
     ports:
       - "127.0.0.1:8000:8000"
     env_file: .env
