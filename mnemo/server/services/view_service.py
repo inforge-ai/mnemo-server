@@ -103,7 +103,22 @@ async def create_snapshot(
     description: str | None,
     atom_filter: dict,
 ) -> dict:
-    """Create a snapshot view, freezing matching atom IDs."""
+    """Create a snapshot view, freezing matching atom IDs.
+
+    Runs in a transaction: either the view + all snapshot_atoms are created,
+    or nothing is committed.
+    """
+    async with conn.transaction():
+        return await _create_snapshot_inner(conn, owner_agent_id, name, description, atom_filter)
+
+
+async def _create_snapshot_inner(
+    conn: asyncpg.Connection,
+    owner_agent_id: UUID,
+    name: str,
+    description: str | None,
+    atom_filter: dict,
+) -> dict:
     atom_types: list[str] | None = atom_filter.get("atom_types") or None
     domain_tags: list[str] | None = atom_filter.get("domain_tags") or None
     query = atom_filter.get("query") or None
