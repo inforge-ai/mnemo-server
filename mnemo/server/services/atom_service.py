@@ -54,7 +54,7 @@ async def _decompose(
     Returns DecomposerResult (atoms + optional usage metadata)."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         from ..llm_decomposer import llm_decompose
-        return await llm_decompose(text, remembered_on=remembered_on)
+        return await llm_decompose(text, remembered_on=remembered_on, domain_tags=domain_tags)
     from ..llm_decomposer import DecomposerResult
     return DecomposerResult(atoms=regex_decompose(text, domain_tags))
 
@@ -69,8 +69,9 @@ async def _check_duplicate(
     conn: asyncpg.Connection,
     agent_id: UUID,
     embedding: list[float],
+    atom_type: str = "semantic",
 ) -> asyncpg.Record | None:
-    """Return the most similar existing active atom if similarity > threshold."""
+    """Return the most similar existing active atom of the same type if similarity > threshold."""
     threshold = settings.duplicate_similarity_threshold
     row = await conn.fetchrow(
         """
@@ -79,13 +80,15 @@ async def _check_duplicate(
         FROM atoms
         WHERE agent_id = $2
           AND is_active = true
+          AND atom_type = $4
           AND 1 - (embedding <=> $1::vector) > $3
-        ORDER BY similarity DESC
+        ORDER BY embedding <=> $1::vector ASC
         LIMIT 1
         """,
         embedding,
         agent_id,
         threshold,
+        atom_type,
     )
     return row
 
@@ -453,7 +456,7 @@ async def store_from_text(
         embedding = await encode(atom.text)
         # Arc atoms are synthetic summaries — never deduplicate them against
         # their component sentences (their embeddings overlap by design).
-        duplicate = None if atom.source_type == "arc" else await _check_duplicate(conn, agent_id, embedding)
+        duplicate = None if atom.source_type == "arc" else await _check_duplicate(conn, agent_id, embedding, atom.atom_type)
 
         if duplicate:
             await _merge_duplicate(
@@ -545,11 +548,12 @@ async def store_background(
                 "UPDATE store_jobs SET status = 'decomposing' WHERE store_id = $1",
                 store_id,
             )
-            result = await store_from_text(
-                conn, agent_id, text, domain_tags,
-                store_id=store_id, operator_id=operator_id,
-                remembered_on=remembered_on,
-            )
+            async with conn.transaction():
+                result = await store_from_text(
+                    conn, agent_id, text, domain_tags,
+                    store_id=store_id, operator_id=operator_id,
+                    remembered_on=remembered_on,
+                )
             await conn.execute(
                 """
                 UPDATE store_jobs
@@ -686,7 +690,7 @@ async def retrieve(
         WHERE agent_id = $2
           AND is_active = true
           AND ($3::text[] IS NULL OR domain_tags && $3)
-        ORDER BY cosine_sim DESC
+        ORDER BY embedding <=> $1::vector ASC
         LIMIT $4
         """,
         embedding,

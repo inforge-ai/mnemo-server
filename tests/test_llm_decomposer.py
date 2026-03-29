@@ -111,14 +111,17 @@ class TestLLMDecomposer:
         mock_client.messages.create.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_api_error_raises(self):
-        """API errors propagate — caller handles them."""
+    async def test_api_error_falls_back_to_regex(self):
+        """API errors trigger regex fallback instead of raising."""
         mock_client = AsyncMock()
         mock_client.messages.create = AsyncMock(side_effect=Exception("API error"))
 
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
-            with pytest.raises(Exception, match="API error"):
-                await llm_decompose("Some text")
+            result = await llm_decompose("I learned that asyncpg is fast. Always use connection pools.")
+
+        # Should return atoms from regex fallback, not raise
+        assert len(result.atoms) >= 1
+        assert result.usage is None  # No LLM usage since it fell back
 
     @pytest.mark.asyncio
     async def test_uses_prompt_caching(self):

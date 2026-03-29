@@ -100,55 +100,65 @@ def _build_system_prompt(remembered_on: datetime | None) -> str:
 async def llm_decompose(
     text: str,
     remembered_on: datetime | None = None,
+    domain_tags: list[str] | None = None,
 ) -> DecomposerResult:
     """Decompose text into atoms using Haiku with prompt caching.
 
     Returns DecomposerResult containing atoms + token usage metadata.
     The LLM classifies each atom as episodic, semantic, or procedural.
+    On any API or parsing error, falls back to the regex decomposer.
     """
     if not text or not text.strip():
         return DecomposerResult(atoms=[])
 
-    client = _get_client()
-    system_prompt = _build_system_prompt(remembered_on)
-    response = await client.messages.create(
-        model=MODEL,
-        max_tokens=4096,
-        system=[{
-            "type": "text",
-            "text": system_prompt,
-            "cache_control": {"type": "ephemeral"},
-        }],
-        messages=[{"role": "user", "content": text}],
-    )
+    try:
+        client = _get_client()
+        system_prompt = _build_system_prompt(remembered_on)
+        response = await client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": text}],
+        )
 
-    # Extract usage metadata for cost tracking
-    usage = {
-        "model": response.model,
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
-        "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", None),
-        "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", None),
-    }
+        # Extract usage metadata for cost tracking
+        usage = {
+            "model": response.model,
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", None),
+            "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", None),
+        }
 
-    raw_text = response.content[0].text
-    # Strip markdown code fences if the model wraps JSON in ```
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("\n", 1)[1]
-        raw_text = raw_text.rsplit("```", 1)[0]
-    raw = json.loads(raw_text.strip())
-    atoms = []
-    for item in raw:
-        alpha, beta = _confidence_to_beta(item.get("confidence", 0.5))
-        atom_type = item.get("type", "semantic")
-        if atom_type not in ("episodic", "semantic", "procedural"):
-            atom_type = "semantic"
-        atoms.append(DecomposedAtom(
-            text=item["text"],
-            atom_type=atom_type,
-            confidence_alpha=alpha,
-            confidence_beta=beta,
-            source_type="direct_experience",
-        ))
+        raw_text = response.content[0].text
+        # Strip markdown code fences if the model wraps JSON in ```
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("\n", 1)[1]
+            raw_text = raw_text.rsplit("```", 1)[0]
+        raw = json.loads(raw_text.strip())
+        if not isinstance(raw, list):
+            raise ValueError(f"Expected JSON array from LLM, got {type(raw).__name__}")
+        atoms = []
+        for item in raw:
+            alpha, beta = _confidence_to_beta(item.get("confidence", 0.5))
+            atom_type = item.get("type", "semantic")
+            if atom_type not in ("episodic", "semantic", "procedural"):
+                atom_type = "semantic"
+            atoms.append(DecomposedAtom(
+                text=item["text"],
+                atom_type=atom_type,
+                confidence_alpha=alpha,
+                confidence_beta=beta,
+                source_type="direct_experience",
+            ))
 
-    return DecomposerResult(atoms=atoms, usage=usage)
+        return DecomposerResult(atoms=atoms, usage=usage)
+
+    except Exception:
+        logger.warning("LLM decomposer failed, falling back to regex", exc_info=True)
+        from .decomposer import decompose as regex_decompose
+        return DecomposerResult(atoms=regex_decompose(text, domain_tags))
