@@ -69,8 +69,9 @@ async def _check_duplicate(
     conn: asyncpg.Connection,
     agent_id: UUID,
     embedding: list[float],
+    atom_type: str = "semantic",
 ) -> asyncpg.Record | None:
-    """Return the most similar existing active atom if similarity > threshold."""
+    """Return the most similar existing active atom of the same type if similarity > threshold."""
     threshold = settings.duplicate_similarity_threshold
     row = await conn.fetchrow(
         """
@@ -79,6 +80,7 @@ async def _check_duplicate(
         FROM atoms
         WHERE agent_id = $2
           AND is_active = true
+          AND atom_type = $4
           AND 1 - (embedding <=> $1::vector) > $3
         ORDER BY embedding <=> $1::vector ASC
         LIMIT 1
@@ -86,6 +88,7 @@ async def _check_duplicate(
         embedding,
         agent_id,
         threshold,
+        atom_type,
     )
     return row
 
@@ -453,7 +456,7 @@ async def store_from_text(
         embedding = await encode(atom.text)
         # Arc atoms are synthetic summaries — never deduplicate them against
         # their component sentences (their embeddings overlap by design).
-        duplicate = None if atom.source_type == "arc" else await _check_duplicate(conn, agent_id, embedding)
+        duplicate = None if atom.source_type == "arc" else await _check_duplicate(conn, agent_id, embedding, atom.atom_type)
 
         if duplicate:
             await _merge_duplicate(
