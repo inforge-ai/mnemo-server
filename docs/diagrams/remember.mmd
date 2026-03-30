@@ -1,0 +1,64 @@
+flowchart TD
+    A["Agent POST /remember\n{text, domain_tags, remembered_on}"] --> B["Validate auth\n+ agent active"]
+    B --> C["Create store_job\nstatus: pending"]
+    C --> D["Return 201\n{store_id}"]
+    C --> E["Background task\nstatus: decomposing"]
+
+    E --> F{ANTHROPIC_API_KEY\nset?}
+    F -->|Yes| G["LLM Decomposer\nClaude Haiku 4.5"]
+    F -->|No| H["Regex Decomposer\nfallback"]
+
+    G --> I["Typed atoms\n{text, type, confidence}"]
+    H --> I
+
+    subgraph decomposer ["Decomposition"]
+        G
+        H
+        I
+    end
+
+    I --> J["For each atom"]
+
+    J --> K["Embed with\nEmbeddingGemma-300M\nprompt: document"]
+
+    K --> L{"Duplicate?\ncosine > 0.90\nsame agent + type"}
+
+    L -->|Yes| M["Bayesian merge\nalpha += incoming - 1\nbeta += incoming - 1"]
+    L -->|No| N["Insert new atom\ndecay_type: exponential\nhalf_life by type"]
+
+    M --> O["Update existing\nlast_accessed = now\naccess_count += 1"]
+    N --> P["Atom stored\nwith embedding"]
+
+    O --> Q{More atoms?}
+    P --> Q
+
+    Q -->|Yes| J
+    Q -->|No| R["Create within-call edges\npairwise cosine > 0.70\nedge_type: related"]
+
+    R --> S["Create cross-call edges\nANN search existing atoms\ncosine > 0.55\nedge_type: related"]
+
+    S --> T{"Arc atoms\npresent?"}
+    T -->|Yes| U["Create arc edges\nedge_type: summarises\nweight: 1.0"]
+    T -->|No| V["Store job complete\nstatus: complete\natoms_created: N"]
+
+    U --> V
+
+    subgraph edges ["Edge Creation"]
+        R
+        S
+        T
+        U
+    end
+
+    subgraph per_atom ["Per-Atom Processing"]
+        K
+        L
+        M
+        N
+        O
+        P
+    end
+
+    style decomposer fill:#f0f4ff,stroke:#4a6fa5
+    style per_atom fill:#fff4f0,stroke:#a56a4a
+    style edges fill:#f0fff4,stroke:#4aa56a

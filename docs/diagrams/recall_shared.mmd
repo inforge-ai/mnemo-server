@@ -1,0 +1,54 @@
+flowchart TD
+    subgraph setup ["View & Capability Setup (prior to recall)"]
+        direction TB
+        A1["Grantor creates view\natom_filter: {query, types, tags}"] --> A2["Evaluate filter\nagainst grantor's atoms"]
+        A2 --> A3["Freeze atom IDs\ninto snapshot_atoms\n(immutable scope boundary)"]
+        A3 --> A4["Grant capability\nto grantee agent"]
+        A4 --> A5{"Validate:\nsharing enabled?\noperator scope?\ngrantee active?"}
+        A5 -->|Pass| A6["Capability created\n{view_id, grantor, grantee}"]
+    end
+
+    B["Grantee POST\n/agents/{id}/shared_views/{view_id}/recall\n{query, max_results}"] --> C{"Capability\nvalid?"}
+
+    C -->|"revoked / expired\n/ blocked"| D["403 Forbidden"]
+    C -->|Valid| E{"Bidirectional\ntrust?"}
+
+    E -->|"No trust\nrelationship"| F["Empty results\n(silent, no error)"]
+    E -->|Trusted| G["Embed query\nprompt: query"]
+
+    G --> H["Query atoms via\nsnapshot_atoms JOIN\n(scope-bounded)"]
+
+    H --> I["Filter by:\nsimilarity floor\nconfidence floor\nis_active = true"]
+
+    I --> J["Composite scoring\nS = sim * (0.7 + 0.3 * c_eff)"]
+
+    J --> K["Take top max_results"]
+
+    K --> L{"expand_graph?"}
+
+    subgraph scope_boundary ["Scope-Bounded Expansion"]
+        direction TB
+        M["Load allowed_ids\n= snapshot_atoms\nfor this view"]
+        N["Recursive CTE\nfrom seed atoms"]
+        O{"Each hop:\natom in\nallowed_ids?"}
+        O -->|Yes| P["Include in\nexpansion"]
+        O -->|No| Q["Blocked\n(scope boundary)"]
+        P --> R{"depth <\nmax_depth?"}
+        R -->|Yes| N
+        R -->|No| S["Expansion\ncomplete"]
+    end
+
+    L -->|Yes| M
+    M --> N
+    L -->|No| S
+
+    S --> T["Score expanded atoms\nagainst query"]
+
+    T --> U["Log access\nwith capability_id\n(audit trail)"]
+
+    U --> V["Update access metadata\nlast_accessed = now()\naccess_count += 1"]
+
+    V --> W["Return\n{atoms, expanded_atoms,\ntotal_retrieved}"]
+
+    style setup fill:#f4f0ff,stroke:#6a4aa5
+    style scope_boundary fill:#fff0f0,stroke:#a54a4a

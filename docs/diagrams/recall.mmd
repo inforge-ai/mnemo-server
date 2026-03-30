@@ -1,0 +1,61 @@
+flowchart TD
+    A["Agent POST /recall\n{query, max_results, expand_graph, ...}"] --> B["Validate auth\n+ agent active"]
+    B --> C["Embed query\nEmbeddingGemma-300M\nprompt: query"]
+
+    C --> D["Vector similarity search\nivfflat index\nORDER BY distance ASC\nLIMIT max_results * 2"]
+
+    D --> E["effective_confidence\ncomputed inline in SQL\n(decay at query time)"]
+
+    subgraph filtering ["Python-side Filtering"]
+        F["Similarity floor\ncosine >= min_similarity"]
+        G["Confidence floor\nc_eff >= min_confidence"]
+        H{"include_superseded\n= false?"}
+        H -->|Yes| I["Remove atoms with\nincoming supersedes edges"]
+        H -->|No| J["Keep all"]
+        I --> K["Dedup results\ncosine > 0.95 collapsed"]
+        J --> K
+    end
+
+    E --> F
+    F --> G
+    G --> H
+
+    K --> L["Composite scoring\nS = sim * (0.7 + 0.3 * c_eff)"]
+
+    L --> M{"source_type =\nconsolidation?"}
+    M -->|Yes| N["Apply 15% penalty\nS *= 0.85"]
+    M -->|No| O["Score unchanged"]
+
+    N --> P["Sort by composite\nscore DESC"]
+    O --> P
+
+    P --> Q["Take top max_results"]
+
+    Q --> R["Gap threshold\ncut if score drops\n> 15% between atoms"]
+
+    R --> S{"expand_graph\n= true?"}
+
+    subgraph expansion ["Graph Expansion"]
+        T["Recursive CTE\nfrom seed atoms\ndepth-bounded"]
+        U["Scope filter\nagent_id only\n(private recall)"]
+        V["Relevance decay\nper hop: weight * 0.7"]
+        W["Score expanded atoms\nfloor: min_sim * 0.6\ncomposite score"]
+    end
+
+    S -->|Yes| T
+    T --> U
+    U --> V
+    V --> W
+    S -->|No| X["No expansion"]
+
+    W --> Y["Update access metadata\nlast_accessed = now()\naccess_count += 1\n(primary + expanded)"]
+    X --> Y
+
+    Y --> Z["Apply verbosity\nfull / summary / truncated"]
+
+    Z --> AA["Apply token budget\nif max_total_tokens set"]
+
+    AA --> AB["Return\n{atoms, expanded_atoms,\ntotal_retrieved}"]
+
+    style filtering fill:#fff4f0,stroke:#a56a4a
+    style expansion fill:#f0f4ff,stroke:#4a6fa5
