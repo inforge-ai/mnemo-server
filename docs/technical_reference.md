@@ -137,7 +137,7 @@ If no recognized header is present, the request receives `401 Unauthorized`.
 | id | UUID PK | |
 | source_id | UUID FK atoms | CASCADE |
 | target_id | UUID FK atoms | CASCADE |
-| edge_type | TEXT | related / causal / temporal_sequence / supports / contradicts / depends_on / generalises / specialises / motivated_by / evidence_for / supersedes / summarises |
+| edge_type | TEXT | related / supports / contradicts / depends_on / generalises / specialises / motivated_by / evidence_for / supersedes / summarises |
 | weight | FLOAT | 0.0-1.0, default 1.0 |
 | created_at | TIMESTAMPTZ | |
 

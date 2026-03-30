@@ -68,7 +68,7 @@ The knowledge graph is stored in the `edges` table and represents typed relation
 
 **Structural edges** -- Arc atoms (multi-sentence structural summaries created by the decomposer) get `summarises` edges to their component atoms.
 
-Edge types in the schema: `related`, `causal`, `temporal_sequence`, `supports`, `contradicts`, `depends_on`, `generalises`, `specialises`, `motivated_by`, `evidence_for`, `supersedes`, `summarises`.
+Edge types in the schema: `related`, `supports`, `contradicts`, `depends_on`, `generalises`, `specialises`, `motivated_by`, `evidence_for`, `supersedes`, `summarises`.
 
 ### Recall DAG (Transient)
 
