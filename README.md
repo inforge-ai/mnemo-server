@@ -16,7 +16,7 @@ Mnemo scores **81.6% overall** on the [LoCoMo benchmark](https://github.com/snap
 | Single-hop | 222 | 282 | 78.7% |
 | Open-domain | 66 | 96 | 68.8% |
 
-Evaluated with Claude Sonnet 4.6 as both answer model and judge. Multi-hop performance (80.7%) surpasses all published baselines including Backboard (75.0%), Zep/Graphiti (66.0%), Mem0 (51.2%), and OpenAI Memory (42.9%).
+Evaluated with Claude Sonnet 4.6 as both answer model and judge. Multi-hop performance (80.7%) surpasses all published baselines.
 
 ---
 
