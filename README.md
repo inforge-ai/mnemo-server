@@ -139,19 +139,7 @@ curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/recall \
 
 ## MCP Integration
 
-Mnemo ships an MCP server for use with Claude Desktop and other MCP-compatible clients:
-
-```bash
-export MNEMO_BASE_URL="http://your-server:8000"
-export MNEMO_API_KEY="mnemo_..."
-export MNEMO_DEFAULT_AGENT_ID="<agent-uuid>"
-
-# stdio transport (for Claude Desktop)
-mnemo-mcp
-
-# SSE transport (for network clients)
-MNEMO_MCP_TRANSPORT=sse mnemo-mcp
-```
+Mnemo ships an MCP server for use with Claude Desktop and other MCP-compatible clients, through the Mnemo client found in the mnemo-ai repository, available on PyPI.
 
 Tools exposed: `mnemo_remember`, `mnemo_recall`, `mnemo_recall_shared`, `mnemo_share`, `mnemo_list_shared`, `mnemo_revoke_share`, `mnemo_stats`.
 
