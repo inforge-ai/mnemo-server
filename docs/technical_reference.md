@@ -54,7 +54,7 @@ Three tiers, resolved by header priority:
 |------|--------|-------|
 | Admin | `X-Admin-Key` | Platform management: operator CRUD, agent management, trust toggle |
 | Agent | `X-Agent-Key` | Memory operations: remember, recall, share, stats |
-| Operator | `Authorization: Bearer <key>` | Agent registration, key rotation, share inspection |
+| Operator | `X-Operator-Key` | Agent registration, key rotation, share inspection |
 
 Keys are SHA-256 hashed at rest. Agent keys are stored on the `agents` table; operator keys in the `api_keys` table. Admin key is compared directly from `MNEMO_ADMIN_KEY` configuration.
 
