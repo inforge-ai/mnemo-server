@@ -5,3 +5,6 @@
 ALTER TABLE operators
   ADD COLUMN sharing_scope VARCHAR(5) NOT NULL DEFAULT 'none'
   CHECK (sharing_scope IN ('none', 'intra', 'full'));
+
+-- Track migration
+INSERT INTO schema_migrations (version) VALUES ('003') ON CONFLICT DO NOTHING;

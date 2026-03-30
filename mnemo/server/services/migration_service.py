@@ -82,14 +82,23 @@ async def run_migrations(pool: asyncpg.Pool) -> list[str]:
             if version in applied:
                 continue
 
-            # For 001_admin_schema, check if the status column exists on agents
+            # Heuristic checks: detect migrations that were applied manually
+            # but not recorded in schema_migrations.
+            check_col = None
             if version == "001_admin_schema":
+                check_col = ("agents", "status")
+            elif version == "002_rbac_lite":
+                check_col = ("agents", "key_hash")
+            elif version == "003_sharing_scope":
+                check_col = ("operators", "sharing_scope")
+
+            if check_col:
                 col_exists = await conn.fetchval("""
                     SELECT EXISTS (
                         SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'agents' AND column_name = 'status'
+                        WHERE table_name = $1 AND column_name = $2
                     )
-                """)
+                """, check_col[0], check_col[1])
                 if col_exists:
                     await conn.execute(
                         "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",

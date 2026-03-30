@@ -21,9 +21,12 @@ EXPOSE 8000
 # HF model cache lives on a volume mount at /app/.cache
 ENV HF_HOME=/app/.cache
 ENV TRANSFORMERS_CACHE=/app/.cache
+ENV UV_CACHE_DIR=/app/.cache/uv
 
 # Run as non-root user
-RUN useradd -r -s /bin/false mnemo && chown -R mnemo:mnemo /app
+RUN useradd -r -s /bin/false mnemo \
+    && mkdir -p /app/.cache/uv \
+    && chown -R mnemo:mnemo /app
 USER mnemo
 
 CMD ["uv", "run", "uvicorn", "mnemo.server.main:app", "--host", "0.0.0.0", "--port", "8000"]
