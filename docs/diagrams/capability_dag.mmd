@@ -1,0 +1,38 @@
+flowchart TD
+    subgraph view ["View (immutable snapshot)"]
+        V1["snapshot_atoms\n{atom_1, atom_2, ..., atom_n}"]
+    end
+
+    subgraph capability_tree ["Capability Tree"]
+        C1["cap_1\ngrantor: Agent A\ngrantee: Agent B\nparent: NULL"]
+        C2["cap_2\ngrantor: Agent B\ngrantee: Agent C\nparent: cap_1"]
+        C3["cap_3\ngrantor: Agent C\ngrantee: Agent D\nparent: cap_2"]
+        C4["cap_4\ngrantor: Agent B\ngrantee: Agent E\nparent: cap_1"]
+
+        C1 --> C2
+        C1 --> C4
+        C2 --> C3
+    end
+
+    V1 -.->|"all capabilities\nreference same view"| C1
+    V1 -.-> C2
+    V1 -.-> C3
+    V1 -.-> C4
+
+    subgraph revocation ["Cascade Revocation"]
+        direction TB
+        R1["Revoke cap_1"] --> R2["cap_2 revoked\n(child of cap_1)"]
+        R1 --> R4["cap_4 revoked\n(child of cap_1)"]
+        R2 --> R3["cap_3 revoked\n(child of cap_2)"]
+    end
+
+    subgraph departure ["Agent Departure"]
+        direction TB
+        D1["Agent A departs"] --> D2["revoke_agent_capabilities(A)\nrecursive CTE"]
+        D2 --> D3["All capabilities granted\nby A are revoked\n+ all descendants"]
+    end
+
+    style view fill:#f0f4ff,stroke:#4a6fa5
+    style capability_tree fill:#f0fff4,stroke:#4aa56a
+    style revocation fill:#fff0f0,stroke:#a54a4a
+    style departure fill:#fff4f0,stroke:#a56a4a

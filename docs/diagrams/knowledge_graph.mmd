@@ -1,0 +1,34 @@
+flowchart TD
+    subgraph call_1 ["Remember Call 1"]
+        A1["episodic\nUser made pour-over\ncoffee on Monday"]
+        A2["semantic\nUser prefers\nfreshly ground beans"]
+        A1 ---|"related\nw=0.82"| A2
+    end
+
+    subgraph call_2 ["Remember Call 2"]
+        A3["episodic\nUser switched\nto decaf Tuesday"]
+        A4["episodic\nUser brewed coffee\nbefore standup"]
+    end
+
+    subgraph call_3 ["Remember Call 3"]
+        A5["procedural\nAlways grind beans\nimmediately before brewing"]
+    end
+
+    A3 ---|"related\nw=0.73"| A4
+
+    %% Cross-call edges
+    A1 -.-|"related\nw=0.61\n(cross-call)"| A3
+    A1 -.-|"related\nw=0.58\n(cross-call)"| A4
+    A2 -.-|"related\nw=0.67\n(cross-call)"| A5
+
+    subgraph consolidation ["After Consolidation"]
+        G1["semantic\nGeneralised from 3:\nUser has consistent\ncoffee routine\n(source: consolidation)"]
+        G1 -->|"generalises"| A1
+        G1 -->|"generalises"| A3
+        G1 -->|"generalises"| A4
+    end
+
+    style call_1 fill:#fff4f0,stroke:#a56a4a
+    style call_2 fill:#f0f4ff,stroke:#4a6fa5
+    style call_3 fill:#f0fff4,stroke:#4aa56a
+    style consolidation fill:#f4f0ff,stroke:#6a4aa5
