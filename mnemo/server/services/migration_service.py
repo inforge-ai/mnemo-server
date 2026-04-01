@@ -66,10 +66,17 @@ async def run_migrations(pool: asyncpg.Pool) -> list[str]:
             WHERE table_name = 'schema_migrations' AND column_name = 'version'
         """)
         if col_len is not None and col_len < 128:
-            await conn.execute(
-                "ALTER TABLE schema_migrations ALTER COLUMN version TYPE VARCHAR(128)"
-            )
-            logger.info("Widened schema_migrations.version to VARCHAR(128)")
+            try:
+                await conn.execute(
+                    "ALTER TABLE schema_migrations ALTER COLUMN version TYPE VARCHAR(128)"
+                )
+                logger.info("Widened schema_migrations.version to VARCHAR(128)")
+            except asyncpg.exceptions.InsufficientPrivilegeError:
+                logger.warning(
+                    "Cannot widen schema_migrations.version (not table owner). "
+                    "Run as postgres: ALTER TABLE schema_migrations "
+                    "ALTER COLUMN version TYPE VARCHAR(128);"
+                )
 
         # Fetch already-applied versions
         applied_rows = await conn.fetch("SELECT version FROM schema_migrations")
