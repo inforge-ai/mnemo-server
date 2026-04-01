@@ -59,6 +59,18 @@ async def run_migrations(pool: asyncpg.Pool) -> list[str]:
             logger.info("No migration files found")
             return []
 
+        # Widen version column if needed (was VARCHAR(16), now VARCHAR(128))
+        col_len = await conn.fetchval("""
+            SELECT character_maximum_length
+            FROM information_schema.columns
+            WHERE table_name = 'schema_migrations' AND column_name = 'version'
+        """)
+        if col_len is not None and col_len < 128:
+            await conn.execute(
+                "ALTER TABLE schema_migrations ALTER COLUMN version TYPE VARCHAR(128)"
+            )
+            logger.info("Widened schema_migrations.version to VARCHAR(128)")
+
         # Fetch already-applied versions
         applied_rows = await conn.fetch("SELECT version FROM schema_migrations")
         applied = {r["version"] for r in applied_rows}
@@ -91,6 +103,24 @@ async def run_migrations(pool: asyncpg.Pool) -> list[str]:
                 check_col = ("agents", "key_hash")
             elif version == "003_sharing_scope":
                 check_col = ("operators", "sharing_scope")
+            elif version == "004_fix_effective_confidence_volatility":
+                # Check if effective_confidence is already STABLE
+                vol = await conn.fetchval("""
+                    SELECT p.provolatile
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE p.proname = 'effective_confidence'
+                      AND n.nspname = 'public'
+                    LIMIT 1
+                """)
+                if vol == "s":  # 's' = STABLE
+                    await conn.execute(
+                        "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",
+                        version,
+                    )
+                    applied_now.append(version)
+                    logger.info("Migration already applied (detected), recorded: %s", version)
+                continue
 
             if check_col:
                 col_exists = await conn.fetchval("""

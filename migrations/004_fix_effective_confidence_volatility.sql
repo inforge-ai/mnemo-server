@@ -45,5 +45,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
+-- Widen version column for longer migration names
+ALTER TABLE schema_migrations ALTER COLUMN version TYPE VARCHAR(128);
+
 -- Track migration
-INSERT INTO schema_migrations (version) VALUES ('004') ON CONFLICT DO NOTHING;
+INSERT INTO schema_migrations (version) VALUES ('004_fix_effective_confidence_volatility') ON CONFLICT DO NOTHING;
