@@ -1148,6 +1148,88 @@ class TestAuth:
         resp = await client.get("/v1/auth/me")
         assert resp.status_code == 401
 
+    async def test_list_keys_returns_operator_keys(self, client):
+        """GET /auth/keys lists all keys for the authenticated operator."""
+        r1 = await client.post("/v1/admin/operators", headers=admin_headers(), json={
+            "username": "listkeyop", "org": "testorg",
+            "display_name": "ListKey Op", "email": "lk@test.com",
+        })
+        assert r1.status_code == 201
+        key1 = r1.json()["api_key"]
+        op_headers = {"X-Operator-Key": key1}
+
+        # Mint a second key
+        r2 = await client.post("/v1/auth/new-key", headers=op_headers)
+        assert r2.status_code == 200
+
+        resp = await client.get("/v1/auth/keys", headers=op_headers)
+        assert resp.status_code == 200
+        keys = resp.json()
+        assert len(keys) == 2
+        assert all(k["is_active"] for k in keys)
+        assert all("key_prefix" in k for k in keys)
+
+    async def test_revoke_key(self, client):
+        """DELETE /auth/keys/{id} revokes a key; the revoked key no longer authenticates."""
+        r1 = await client.post("/v1/admin/operators", headers=admin_headers(), json={
+            "username": "revokekeyop", "org": "testorg",
+            "display_name": "Revoke Op", "email": "rk@test.com",
+        })
+        key1 = r1.json()["api_key"]
+        op_headers = {"X-Operator-Key": key1}
+
+        # Create a second key
+        r2 = await client.post("/v1/auth/new-key", headers=op_headers)
+        key2 = r2.json()["api_key"]
+
+        # List keys to get the second key's ID
+        keys = (await client.get("/v1/auth/keys", headers=op_headers)).json()
+        key2_prefix = key2[:16]
+        key2_id = next(k["id"] for k in keys if k["key_prefix"] == key2_prefix)
+
+        # Revoke it
+        resp = await client.delete(f"/v1/auth/keys/{key2_id}", headers=op_headers)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "revoked"
+
+        # Revoked key should fail auth
+        resp = await client.get("/v1/auth/me", headers={"X-Operator-Key": key2})
+        assert resp.status_code == 401
+
+        # Original key still works
+        resp = await client.get("/v1/auth/me", headers=op_headers)
+        assert resp.status_code == 200
+
+    async def test_cannot_revoke_last_active_key(self, client):
+        """Cannot revoke the only remaining active key."""
+        r1 = await client.post("/v1/admin/operators", headers=admin_headers(), json={
+            "username": "lastkeyop", "org": "testorg",
+            "display_name": "LastKey Op", "email": "lastk@test.com",
+        })
+        key1 = r1.json()["api_key"]
+        op_headers = {"X-Operator-Key": key1}
+
+        # Get the single key's ID
+        keys = (await client.get("/v1/auth/keys", headers=op_headers)).json()
+        assert len(keys) == 1
+
+        resp = await client.delete(f"/v1/auth/keys/{keys[0]['id']}", headers=op_headers)
+        assert resp.status_code == 409
+        assert "only active key" in resp.json()["detail"]
+
+    async def test_revoke_nonexistent_key_returns_404(self, client):
+        """Revoking a key that doesn't exist or belongs to another operator returns 404."""
+        r1 = await client.post("/v1/admin/operators", headers=admin_headers(), json={
+            "username": "nokey404op", "org": "testorg",
+            "display_name": "NoKey Op", "email": "nk404@test.com",
+        })
+        key1 = r1.json()["api_key"]
+        from uuid import uuid4
+        resp = await client.delete(
+            f"/v1/auth/keys/{uuid4()}", headers={"X-Operator-Key": key1},
+        )
+        assert resp.status_code == 404
+
 
 # ── Admin endpoints ───────────────────────────────────────────────────────────
 
