@@ -68,6 +68,10 @@ async def remember(agent_id: str, body: RememberRequest, auth: AuthContext = Dep
     if settings.sync_store_for_tests:
         await coro
     else:
+        # TODO: concurrent create_task calls for the same content race on
+        # _check_duplicate (TOCTOU across separate connections). Fix options:
+        # (a) pg_advisory_xact_lock on (agent_id, embedding_hash),
+        # (b) unique partial index + ON CONFLICT, or (c) per-agent serial queue.
         asyncio.create_task(coro)
     return {"status": "queued", "store_id": store_id}
 

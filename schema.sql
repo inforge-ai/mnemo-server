@@ -320,7 +320,7 @@ BEGIN
 
     RETURN base_confidence * decay_factor;
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+$$ LANGUAGE plpgsql STABLE;
 
 -- Cascade revoke all capabilities granted by a departing agent
 CREATE OR REPLACE FUNCTION revoke_agent_capabilities(departing_agent_id UUID)
