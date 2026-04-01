@@ -875,7 +875,6 @@ async def get_agent_stats(
             COUNT(*) FILTER (WHERE atom_type='episodic'  AND is_active=true) AS episodic,
             COUNT(*) FILTER (WHERE atom_type='semantic'  AND is_active=true) AS semantic,
             COUNT(*) FILTER (WHERE atom_type='procedural' AND is_active=true) AS procedural,
-            COUNT(*) FILTER (WHERE atom_type='relational' AND is_active=true) AS relational,
             COUNT(*) FILTER (WHERE source_type='arc' AND is_active=true)      AS arc_atoms,
             COALESCE(AVG(
                 CASE WHEN is_active THEN
@@ -973,7 +972,6 @@ async def get_agent_stats(
             "episodic": row["episodic"],
             "semantic": row["semantic"],
             "procedural": row["procedural"],
-            "relational": row["relational"],
         },
         "arc_atoms": row["arc_atoms"],
         "total_edges": edge_count,

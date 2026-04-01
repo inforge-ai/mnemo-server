@@ -48,7 +48,7 @@ class StoreJobResponse(BaseModel):
 # ── Atoms (power-user interface) ──
 
 class AtomCreate(BaseModel):
-    atom_type: Literal["episodic", "semantic", "procedural", "relational"]
+    atom_type: Literal["episodic", "semantic", "procedural"]
     text_content: str = Field(..., min_length=1, max_length=10_000)
     structured: dict = {}
     confidence: Optional[Literal["high", "medium", "low", "uncertain"]] = None
