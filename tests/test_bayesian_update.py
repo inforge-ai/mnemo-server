@@ -31,7 +31,7 @@ async def test_bayesian_alpha_increments_on_duplicate_store(client, agent, pool)
         )
 
     assert row is not None, "Atom not found"
-    assert row["confidence_alpha"] > 2.0, f"Alpha not incremented: {row['confidence_alpha']}"
+    assert row["confidence_alpha"] > 4.0, f"Alpha not incremented beyond initial 4.0: {row['confidence_alpha']}"
     assert row["access_count"] >= 1, f"Access count not incremented: {row['access_count']}"
 
 
@@ -78,4 +78,4 @@ async def test_bayesian_update_persists_to_database(client, agent, pool):
             agent_id,
         )
 
-    assert row2["confidence_alpha"] >= initial_alpha
+    assert row2["confidence_alpha"] > initial_alpha
