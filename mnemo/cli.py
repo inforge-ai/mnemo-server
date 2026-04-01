@@ -463,7 +463,7 @@ def agent(ctx):
 
 @agent.command("list")
 @click.option("--operator", "operator_id", default=None, help="Filter by operator UUID.")
-@click.option("--status", default=None, type=click.Choice(["active", "departed"]), help="Filter by status.")
+@click.option("--status", default="active", type=click.Choice(["active", "departed", "all"]), help="Filter by status (default: active).")
 @click.pass_context
 def agent_list(ctx, operator_id, status):
     """List all agents."""
@@ -476,7 +476,7 @@ async def _agent_list(base_url, token, operator_id, status, output_json):
     params = {}
     if operator_id:
         params["operator"] = operator_id
-    if status:
+    if status and status != "all":
         params["status"] = status
     resp = await _admin_request(base_url, token, "get", "/v1/admin/agents", params=params or None)
     data = resp.json()
