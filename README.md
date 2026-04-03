@@ -2,11 +2,11 @@
 
 [![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org)
-[![LoCoMo](https://img.shields.io/badge/LoCoMo-82.1%25-brightgreen.svg)](https://github.com/snap-stanford/locomo)
+[![LoCoMo](https://img.shields.io/badge/LoCoMo-82.1%25-brightgreen.svg)](https://github.com/snap-research/locomo)
 
 ## Benchmark: LoCoMo Long-Term Conversational Memory
 
-Mnemo scores **82.1% overall** on the [LoCoMo benchmark](https://github.com/snap-stanford/locomo) (1,540 questions across 10 long-running conversations), placing **#2 overall** and **#1 in multi-hop reasoning** — the category that requires synthesizing information across separate conversation sessions.
+Mnemo scores **82.1% overall** on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (1,540 questions across 10 long-running conversations), placing **#2 overall** and **#1 in multi-hop reasoning** — the category that requires synthesizing information across separate conversation sessions.
 
 | Category | Correct | Total | Accuracy |
 |----------|---------|-------|----------|
