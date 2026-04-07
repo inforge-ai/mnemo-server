@@ -35,9 +35,19 @@ Most agent memory solutions treat memory as flat document storage or simple key-
 - **Typed atoms** — Memories are decomposed into semantic (facts), episodic (experiences), and procedural (how-to) atoms, each with distinct decay characteristics and retrieval behavior.
 - **Bayesian confidence** — Every atom carries a Beta-distribution confidence score that updates with reinforcement and decays over time, so agents can reason about how much to trust a memory.
 - **Agent-to-agent sharing** — Agents can share scoped memory views with other agents through a capability-based trust model. The trust gate is enforced at the database level — untrusted content never leaves Postgres.
-- **Async decomposition** — Conversations are acknowledged immediately and decomposed into atoms in the background by an LLM decomposer (Claude Haiku 4.5), so writes never block.
+- - **Async decomposition** — The remember endpoint acknowledges in milliseconds.  Decomposition into atoms happens in the background via Claude Haiku 4.5, so agents in tight loops can write to memory without blocking on LLM latency.
 - **Composite retrieval** — Vector similarity search blended with confidence scoring, configurable deduplication, knowledge graph expansion, domain filtering, and verbosity controls.
 - **Knowledge graph** — Atoms are linked through typed edges (supports, contradicts, generalises, supersedes, etc.) within and across memory sessions, enabling multi-hop reasoning that pure vector search misses.
+
+## Who Mnemo is for
+
+Mnemo is infrastructure for multi-agent systems and developers building agents
+that need typed knowledge representation, Bayesian belief revision, and
+capability-controlled cross-agent sharing. If you're looking for a personal
+memory layer for a single-user Claude Code workflow, lighter-weight tools that
+manage markdown files in your repo may fit better. Mnemo shines 
+when memory needs to be queried, shared between agents, or reasoned about
+under uncertainty.
 
 ## Quick Start
 
@@ -139,7 +149,7 @@ curl -s -X POST http://localhost:8000/v1/agents/$AGENT_ID/recall \
 
 ## MCP Integration
 
-Mnemo ships an MCP server for use with Claude Desktop and other MCP-compatible clients, through the Mnemo client found in the mnemo-ai repository, available on PyPI.
+Mnemo ships an MCP server, enabling persistent memory for Claude Desktop and other MCP-compatible clients with a single config change. The companion `mnemo-ai` Python client is available on PyPI.
 
 Tools exposed: `mnemo_remember`, `mnemo_recall`, `mnemo_recall_shared`, `mnemo_share`, `mnemo_list_shared`, `mnemo_revoke_share`, `mnemo_stats`.
 
@@ -175,7 +185,7 @@ Mnemo Server is licensed under the [Business Source License 1.1](LICENSE). See t
 ## Links
 
 - [Mnemo](https://mnemo-ai.com) — product website
-- [LoCoMo Benchmark](https://github.com/snap-stanford/locomo) — long-term conversational memory benchmark
+- [LoCoMo Benchmark](https://github.com/snap-research/locomo) — long-term conversational memory benchmark
 - [Architecture](docs/architecture.md) — system design documentation
 - [Python Client](https://pypi.org/project/mnemo-ai/) — `pip install mnemo-ai`
 - [Inforge](https://inforge-ai.com) — the team behind Mnemo
