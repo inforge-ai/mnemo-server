@@ -22,6 +22,7 @@ RETRIEVE FLOW (via /recall):
 
 import json
 import logging
+import math
 import os
 import traceback
 from datetime import datetime
@@ -93,6 +94,35 @@ async def _check_duplicate(
     return row
 
 
+MERGE_CEILING = 1000.0
+
+
+def bayesian_merge_damped(
+    existing_alpha: float,
+    existing_beta: float,
+    incoming_alpha: float,
+    incoming_beta: float,
+    ceiling: float = MERGE_CEILING,
+) -> tuple[float, float]:
+    """Combine two Beta posteriors with diminishing returns on accumulated evidence.
+
+    The classical conjugate update is α_new = α_old + α_inc − 1 (symmetric for β).
+    In production that compounded without bound on dedup magnets — α reached
+    198,429 on a single atom — so each update is damped by 1/(1+ln(α+β)) of the
+    existing total. Later merges therefore contribute progressively less than
+    earlier ones, preserving "seen a few times" vs "seen many times" while
+    bounding the head of the distribution. A hard ceiling is a backstop against
+    edge cases; it should almost never bind under the damped law.
+    """
+    total = existing_alpha + existing_beta
+    damping = 1.0 / (1.0 + math.log(total)) if total > 1.0 else 1.0
+    new_alpha = existing_alpha + (incoming_alpha - 1.0) * damping
+    new_beta = existing_beta + (incoming_beta - 1.0) * damping
+    new_alpha = min(ceiling, max(1.0, new_alpha))
+    new_beta = min(ceiling, max(1.0, new_beta))
+    return new_alpha, new_beta
+
+
 async def _merge_duplicate(
     conn: asyncpg.Connection,
     existing_id: UUID,
@@ -101,18 +131,14 @@ async def _merge_duplicate(
     incoming_alpha: float,
     incoming_beta: float,
 ) -> None:
-    """Bayesian update: add evidence from the incoming atom into the existing one.
+    """Damped Bayesian update: add evidence from the incoming atom into the existing one.
 
-    Reinforcement increments alpha by (incoming_alpha - 1), the new evidence minus
-    the shared prior. For a typical high-confidence duplicate with incoming
-    Beta(8,1), this adds 7 to alpha per repetition. The update is persisted
-    immediately and reflected in the next recall via effective_confidence().
+    See bayesian_merge_damped for the math. The update is persisted immediately
+    and reflected in the next recall via effective_confidence().
     """
-    new_alpha = existing_alpha + incoming_alpha - 1.0
-    new_beta = existing_beta + incoming_beta - 1.0
-    # Clamp to sane minimums
-    new_alpha = max(new_alpha, 1.0)
-    new_beta = max(new_beta, 1.0)
+    new_alpha, new_beta = bayesian_merge_damped(
+        existing_alpha, existing_beta, incoming_alpha, incoming_beta,
+    )
     await conn.execute(
         """
         UPDATE atoms

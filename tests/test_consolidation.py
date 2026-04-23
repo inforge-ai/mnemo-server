@@ -272,7 +272,7 @@ async def test_merge_duplicates_combines_atoms(client, agent, pool):
             "SELECT is_active, confidence_alpha FROM atoms WHERE id = $1", id_old
         )
         assert old_row["is_active"] is True
-        # Confidence should have grown (Bayesian merge: α = 4+4-1 = 7)
+        # Confidence should have grown (damped Bayesian merge: (4,2) + (4,2) → α ≈ 5.07)
         assert old_row["confidence_alpha"] > 4.0
 
         # Newer atom should be deactivated
