@@ -20,6 +20,7 @@ import asyncpg
 import numpy as np
 
 from ..config import settings
+from .atom_service import bayesian_merge_damped
 
 logger = logging.getLogger(__name__)
 
@@ -326,16 +327,15 @@ async def _merge_duplicates(conn: asyncpg.Connection) -> int:
         if pair["created1"] <= pair["created2"]:
             older_id, newer_id = id1, id2
             older_alpha = pair["alpha1"]
-            new_alpha = pair["alpha1"] + pair["alpha2"] - 1.0
-            new_beta = pair["beta1"] + pair["beta2"] - 1.0
+            new_alpha, new_beta = bayesian_merge_damped(
+                pair["alpha1"], pair["beta1"], pair["alpha2"], pair["beta2"],
+            )
         else:
             older_id, newer_id = id2, id1
             older_alpha = pair["alpha2"]
-            new_alpha = pair["alpha2"] + pair["alpha1"] - 1.0
-            new_beta = pair["beta2"] + pair["beta1"] - 1.0
-
-        new_alpha = max(new_alpha, 1.0)
-        new_beta = max(new_beta, 1.0)
+            new_alpha, new_beta = bayesian_merge_damped(
+                pair["alpha2"], pair["beta2"], pair["alpha1"], pair["beta1"],
+            )
 
         # Update older atom's confidence
         await conn.execute(
