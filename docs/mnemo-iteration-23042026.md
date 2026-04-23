@@ -65,6 +65,18 @@ After fixes, a fresh diagnostic run against a test corpus (suggest seeding with 
 - Do not introduce new atom fields (lifecycle status, etc.). That is deliberately not on the roadmap.
 - Do not alter the dedup threshold (0.90). If dedup is too aggressive, that is a separate ticket.
 
+### Post-audit revisions (2026-04-23)
+
+Phase 0 audit (`docs/mnemo-confidence-audit-23042026.md`) materially revises the above. Summary of what changed; the audit doc has the reasoning:
+
+- **Required fix #1 (access-update sign error) is dropped.** No such bug exists. The recall path (`atom_service.py:732-739`) only bumps `last_accessed` and `access_count`; it does not touch α or β. The negative `corr(c_eff, access_count) = -0.489` reported in the v1 diagnostic was an artefact of two measurement errors (soft-deleted atoms included, raw Beta mean used instead of the server's decay-discounted `effective_confidence`). Active-only, server-c_eff correlation is −0.148 — weak and consistent with a cohort effect, not a sign bug.
+- **Required fix #2 (cap α growth) stands.** `max(α) = 198,429` is still real. Preferred approach from the Review notes appendix unchanged.
+- **Required fix #3 (episodic/procedural collapse) is reframed.** In server-space, episodic atoms land at mean c_eff ≈ 0.43 and procedural at ≈ 0.85, not at the raw-Beta-mean 0.889 the v1 diagnostic saw. The per-type disparity is the configured decay half-lives (14d / 90d / 180d) working as designed. Open questions moved to the audit doc: (a) is 14d episodic half-life correctly calibrated; (b) should the regex decomposer stop landing every default episodic at (8, 1). Neither is a fix; both are judgment calls.
+- **"β below prior" investigation is retired.** The schema (2, 2) default is inert because every insert path supplies a value. β = 1 is a normal high-confidence landing.
+- **Acceptance criteria need rewriting.** The four bullets in the original Ticket 1 were measured against raw α/(α+β); they are either already satisfied or no longer meaningful. Rewrite against `effective_confidence()` before Phase 1 begins. The one durable criterion: `max(alpha) / median(alpha) ≤ 50` (or similar) — that still measures the real problem.
+
+Phase 1 Ticket 1 scope, post-audit: implement the α-growth fix (diminishing returns + safety ceiling per the Review notes), nothing else. Calibration questions (14d half-life; regex-decomposer landing) are separate tickets if we choose to pick them up.
+
 ---
 
 ## Ticket 2: Graph-aware recall (1-hop expansion)
