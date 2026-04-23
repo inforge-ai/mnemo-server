@@ -10,6 +10,7 @@ identical system prompts within a 5-minute window are served from cache.
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -45,16 +46,41 @@ Rules:
 - Confidence should reflect how certain/well-supported the claim is in the source text
 
 Types:
-- episodic: A specific experience, event, or observation tied to a moment in time.
-  "I discovered that row 847 had a string in the account_id column."
-- semantic: A general fact about how something works, independent of any specific event.
-  "pandas.read_csv silently coerces mixed-type columns."
-- procedural: A rule, practice, or instruction for future behavior.
+- episodic: A claim tied to a moment in time. This includes:
+  * Experiences and observations ("I discovered row 847 had a string in account_id")
+  * Events that happened ("Zulip integration completed on 2026-04-15")
+  * Decisions ("Tom chose Beancount over ERPNext on 2026-02-15")
+  * Plans, intentions, and schedules ("Zulip integration is planned as a future pair-programming task")
+  * "As of" state claims ("Sampo is currently the project scheduler")
+  Rule of thumb: if the truth of the claim could change by the time someone
+  reads it back later, the atom is episodic and MUST include the date it was made.
+
+- semantic: A timeless fact, true regardless of when the claim is made.
+  "CPython's GIL serialises bytecode execution." / "pandas.read_csv silently coerces mixed-type columns."
+  If substituting is/was/will-be changes the meaning, the atom is NOT semantic — it is episodic.
+
+- procedural: A rule, practice, or instruction for future behaviour.
   "Always specify dtype explicitly when using read_csv."
 
 Return ONLY the JSON array, no other text."""
 
 MODEL = "claude-haiku-4-5-20251001"
+
+
+# Narrow backstop for the specific failure mode where the LLM tags a
+# time-scoped state / plan claim as semantic. Prefer false negatives over
+# false positives — a broader sweep belongs in the prompt, not here.
+_STATE_CLAIM_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"\bis\s+(?:planned|scheduled|being\s+planned|in\s+progress)\b", re.IGNORECASE),
+    re.compile(r"\bis\s+(?:currently|now|the\s+current|the\s+active|the\s+next)\b", re.IGNORECASE),
+    re.compile(r"\b(?:has|have)\s+not\s+(?:yet\s+)?been\b", re.IGNORECASE),
+    re.compile(r"\bis\s+on\s+the\s+roadmap\b", re.IGNORECASE),
+    re.compile(r"\bare\s+planning\s+to\b", re.IGNORECASE),
+)
+
+
+def _looks_like_state_claim(text: str) -> bool:
+    return any(p.search(text) for p in _STATE_CLAIM_PATTERNS)
 
 
 @lru_cache(maxsize=1)
@@ -148,6 +174,8 @@ async def llm_decompose(
             atom_type = item.get("type", "semantic")
             if atom_type not in ("episodic", "semantic", "procedural"):
                 atom_type = "semantic"
+            if atom_type == "semantic" and _looks_like_state_claim(item["text"]):
+                atom_type = "episodic"
             atoms.append(DecomposedAtom(
                 text=item["text"],
                 atom_type=atom_type,

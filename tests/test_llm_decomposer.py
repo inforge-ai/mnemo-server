@@ -243,6 +243,160 @@ class TestTypeClassification:
         assert result.atoms[0].atom_type == "semantic"
 
 
+class TestStateClaimBackstop:
+    """Tests for the state-claim backstop that downgrades semantic → episodic
+    when the LLM mis-classifies a time-scoped state/plan as a timeless fact."""
+
+    @pytest.mark.asyncio
+    async def test_zulip_planned_downgrades_to_episodic(self):
+        """The Ticket 4 motivating case: 'X is planned' is episodic, not semantic."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Zulip integration is planned as a future pair-programming task",
+             "type": "semantic", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("Zulip integration is planned as a future pair-programming task.")
+
+        assert result.atoms[0].atom_type == "episodic"
+
+    @pytest.mark.asyncio
+    async def test_is_currently_downgrades_to_episodic(self):
+        """'As of' state claims downgrade to episodic."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Sampo is currently the project scheduler",
+             "type": "semantic", "confidence": 0.85},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("Sampo is currently the project scheduler.")
+
+        assert result.atoms[0].atom_type == "episodic"
+
+    @pytest.mark.asyncio
+    async def test_has_not_yet_been_downgrades_to_episodic(self):
+        """'Has not yet been' is a time-scoped negative claim, not a timeless fact."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "The BAM interview has not yet been completed",
+             "type": "semantic", "confidence": 0.8},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("The BAM interview has not yet been completed.")
+
+        assert result.atoms[0].atom_type == "episodic"
+
+    @pytest.mark.asyncio
+    async def test_timeless_semantic_stays_semantic(self):
+        """Timeless facts with no state-claim markers are not touched."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "CPython's GIL serialises bytecode execution",
+             "type": "semantic", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("CPython's GIL serialises bytecode execution.")
+
+        assert result.atoms[0].atom_type == "semantic"
+
+    @pytest.mark.asyncio
+    async def test_general_semantic_fact_stays_semantic(self):
+        """Another timeless fact — 'uses' is not a state-claim marker."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Beancount uses double-entry accounting",
+             "type": "semantic", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("Beancount uses double-entry accounting.")
+
+        assert result.atoms[0].atom_type == "semantic"
+
+    @pytest.mark.asyncio
+    async def test_llm_episodic_is_not_touched(self):
+        """Atoms already tagged episodic by the LLM are never rewritten by the backstop."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Zulip integration is planned as a future task",
+             "type": "episodic", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("Zulip integration is planned as a future task.")
+
+        assert result.atoms[0].atom_type == "episodic"
+
+    @pytest.mark.asyncio
+    async def test_procedural_with_state_language_stays_procedural(self):
+        """Procedural atoms are never rewritten by the backstop (only semantic is)."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "Always check whether the dependency is currently installed",
+             "type": "procedural", "confidence": 0.9},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("Always check whether the dependency is currently installed.")
+
+        assert result.atoms[0].atom_type == "procedural"
+
+
+class TestStateClaimPatterns:
+    """Direct tests for _looks_like_state_claim — make the matched patterns explicit."""
+
+    def test_is_planned_matches(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        assert _looks_like_state_claim("Zulip integration is planned for next quarter")
+
+    def test_is_scheduled_matches(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        assert _looks_like_state_claim("The deployment is scheduled for Friday")
+
+    def test_is_currently_matches(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        assert _looks_like_state_claim("Sampo is currently the project scheduler")
+
+    def test_is_the_current_matches(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        assert _looks_like_state_claim("Mnemo is the current memory system")
+
+    def test_has_not_yet_been_matches(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        assert _looks_like_state_claim("The migration has not yet been applied")
+
+    def test_on_the_roadmap_matches(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        assert _looks_like_state_claim("Graph expansion is on the roadmap")
+
+    def test_plain_fact_does_not_match(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        assert not _looks_like_state_claim("CPython's GIL serialises bytecode execution")
+
+    def test_past_event_does_not_match(self):
+        from mnemo.server.llm_decomposer import _looks_like_state_claim
+        # Past events are episodic but don't need the backstop — the LLM tags them correctly
+        assert not _looks_like_state_claim("Tom deployed the server on 2026-04-15")
+
+
 class TestDecomposerIntegration:
     """Test that the correct decomposer is selected based on ANTHROPIC_API_KEY."""
 
