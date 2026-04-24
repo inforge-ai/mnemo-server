@@ -765,7 +765,7 @@ class TestArcAtoms:
         atoms = data["atoms"]
         # Procedural advice and related arc content should be reachable
         assert len(atoms) >= 1
-        texts = " ".join(a["text_content"] for a in all_atoms)
+        texts = " ".join(a["text_content"] for a in atoms)
         assert "profil" in texts.lower() or "optimi" in texts.lower() or "bottleneck" in texts.lower()
 
 
