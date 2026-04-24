@@ -318,7 +318,12 @@ def composite_score(similarity: float, confidence_effective: float, source_type:
     return base
 
 
-def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = None) -> dict:
+def _row_to_atom_response(
+    row: asyncpg.Record,
+    relevance_score: float | None = None,
+    match_type: str | None = None,
+    via: UUID | None = None,
+) -> dict:
     alpha = row["confidence_alpha"]
     beta = row["confidence_beta"]
     return {
@@ -338,6 +343,8 @@ def _row_to_atom_response(row: asyncpg.Record, relevance_score: float | None = N
         "is_active": row["is_active"],
         "confidence_alpha": alpha,
         "confidence_beta": beta,
+        "match_type": match_type,
+        "via": via,
     }
 
 
@@ -745,9 +752,13 @@ async def retrieve(
 
     # Build primary responses and apply gap threshold before graph expansion.
     # Gap threshold is applied first so that atoms cut from primary are eligible
-    # to surface in expanded_atoms (they must not be in exclude_ids).
+    # to surface as graph matches (they must not be in exclude_ids).
     primary_responses = [
-        _row_to_atom_response(r, composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]))
+        _row_to_atom_response(
+            r,
+            composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]),
+            match_type="vector",
+        )
         for r in primary
     ]
     primary_responses = _apply_gap_threshold(primary_responses, similarity_drop_threshold)
@@ -766,7 +777,7 @@ async def retrieve(
 
     expanded_responses: list[dict] = []
     # Use only post-threshold atoms as expansion seeds. Atoms cut by the gap threshold
-    # are not seeds, so they can surface in expanded_atoms if connected to a surviving atom.
+    # are not seeds, so they can surface as graph matches if connected to a surviving atom.
     kept_id_list = list(kept_ids) or primary_ids  # fall back to all if threshold cut everything
     if expand_graph and kept_id_list:
         from .graph_service import expand_graph as graph_expand
@@ -779,16 +790,26 @@ async def retrieve(
             exclude_ids=kept_ids,  # only exclude surviving primary atoms from expanded results
         )
 
-        # Filter expanded atoms by query relevance (permissive floor = 60% of primary floor)
-        # and sort by the same composite score.
-        exp_floor = min_similarity * 0.6
+        # Score graph atoms as source_score * edge_weight * discount. Guarantees
+        # graph atoms never outrank their source (discount < 1, edge_weight ≤ 1).
+        # Uses provenance (via_id, edge_weight) returned by expand_graph, not the
+        # atom's own query-similarity — that's the point of graph expansion.
+        source_scores = {a["id"]: a["relevance_score"] for a in primary_responses}
+        discount = settings.graph_recall_edge_discount
         scored: list[tuple[asyncpg.Record, float]] = []
         for r in expanded_rows:
-            sim = _cosine_sim(r["embedding"], embedding)
-            if sim >= exp_floor:
-                score = composite_score(sim, r["confidence_effective"], r["source_type"])
+            via_id = r["via_id"]
+            edge_weight = r["edge_weight"] or 1.0
+            source_score = source_scores.get(via_id, 0.0)
+            score = source_score * edge_weight * discount
+            if score > 0:
                 scored.append((r, score))
         scored.sort(key=lambda x: x[1], reverse=True)
+
+        # Apply ceiling: graph expansion adds on top of top-k, capped at
+        # (multiplier × max_results) atoms.
+        ceiling = max_results * settings.graph_recall_expansion_ceiling_multiplier
+        scored = scored[:ceiling]
 
         expanded_ids = [r["id"] for r, _ in scored]
         if expanded_ids:
@@ -801,20 +822,25 @@ async def retrieve(
                 expanded_ids,
             )
 
-        expanded_responses = [_row_to_atom_response(r, score) for r, score in scored]
+        expanded_responses = [
+            _row_to_atom_response(r, score, match_type="graph", via=r["via_id"])
+            for r, score in scored
+        ]
 
-    # Apply token budget (Change 3) — primary first, remainder to expanded
+    # Apply token budget — vector matches first, graph matches take any remainder.
     primary_responses, remaining_budget = _apply_token_budget(primary_responses, max_total_tokens)
     expanded_responses, _ = _apply_token_budget(expanded_responses, remaining_budget)
 
-    # Apply verbosity (Change 2) — compress per-atom text
+    # Apply verbosity — compress per-atom text
     primary_responses = _apply_verbosity(primary_responses, verbosity, max_content_chars)
     expanded_responses = _apply_verbosity(expanded_responses, verbosity, max_content_chars)
 
+    # Unified response: vector matches first, then graph expansions. Both carry
+    # match_type so the caller can distinguish without needing separate lists.
+    all_atoms = primary_responses + expanded_responses
     return {
-        "atoms": primary_responses,
-        "expanded_atoms": expanded_responses,
-        "total_retrieved": len(primary_responses) + len(expanded_responses),
+        "atoms": all_atoms,
+        "total_retrieved": len(all_atoms),
     }
 
 

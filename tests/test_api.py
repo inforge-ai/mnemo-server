@@ -195,7 +195,7 @@ class TestRecall:
         assert resp.status_code == 200
         data = resp.json()
         assert data["total_retrieved"] >= 1
-        texts = [a["text_content"] for a in data["atoms"] + data["expanded_atoms"]]
+        texts = [a["text_content"] for a in data["atoms"]]
         assert any("pgvector" in t or "vector" in t or "embedding" in t for t in texts)
 
     async def test_recall_empty_when_no_memories(self, client, agent):
@@ -229,8 +229,10 @@ class TestRecall:
         assert resp.status_code == 200
         data = resp.json()
         assert "atoms" in data
-        assert "expanded_atoms" in data
         assert "total_retrieved" in data
+        # Each atom carries match_type (vector | graph); graph atoms carry `via`.
+        for atom in data["atoms"]:
+            assert atom.get("match_type") in ("vector", "graph", None)
 
 
 # ── Explicit atom CRUD ────────────────────────────────────────────────────────
@@ -658,10 +660,12 @@ class TestRecallQuality:
         scores = [a["relevance_score"] for a in atoms]
         assert scores == sorted(scores, reverse=True)
 
-    async def test_expanded_atoms_filtered_by_similarity(self, client, agent):
-        """All atoms returned in expanded_atoms have relevance_score >= min_similarity * 0.6."""
+    async def test_graph_atoms_never_outrank_their_source(self, client, agent):
+        """Ticket 2 invariant: graph-expanded atoms are scored as
+        source_score * edge_weight * discount (discount < 1, edge_weight <= 1),
+        so a graph match can never score higher than the vector match it
+        expanded from. Replaces the removed 0.6-of-min-similarity floor test."""
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
-        # Store connected atoms (multi-sentence → edges created between them)
         await remember(client, agent["id"], (
             "pandas read_csv coerces column dtypes without warning. "
             "I discovered this while processing a CSV file. "
@@ -674,11 +678,17 @@ class TestRecallQuality:
             "expand_graph": True,
         }, headers=ag_headers)
         assert resp.status_code == 200
-        data = resp.json()
-        exp_floor = 0.3 * 0.6
-        for atom in data["expanded_atoms"]:
-            assert atom["relevance_score"] is not None
-            assert atom["relevance_score"] >= exp_floor
+        atoms = resp.json()["atoms"]
+        by_id = {a["id"]: a for a in atoms}
+        for atom in atoms:
+            if atom.get("match_type") == "graph":
+                via = atom.get("via")
+                assert via is not None, "graph atom missing `via`"
+                source = by_id.get(via)
+                if source is not None:
+                    assert atom["relevance_score"] <= source["relevance_score"], (
+                        f"graph atom {atom['id']} outranked its source {via}"
+                    )
 
 
 # ── Arc atoms ────────────────────────────────────────────────────────────────
@@ -737,9 +747,9 @@ class TestArcAtoms:
         assert resp.status_code == 200
         data = resp.json()
         # Graph expansion should surface related atoms from the arc text
-        all_atoms = data["atoms"] + data["expanded_atoms"]
-        assert len(all_atoms) >= 1
-        texts = " ".join(a["text_content"] for a in all_atoms)
+        atoms = data["atoms"]
+        assert len(atoms) >= 1
+        texts = " ".join(a["text_content"] for a in atoms)
         assert "index" in texts.lower() or "profil" in texts.lower()
 
     async def test_recall_expands_from_atom_to_arc(self, client, agent):
@@ -752,9 +762,9 @@ class TestArcAtoms:
         }, headers=ag_headers)
         assert resp.status_code == 200
         data = resp.json()
-        all_atoms = data["atoms"] + data["expanded_atoms"]
+        atoms = data["atoms"]
         # Procedural advice and related arc content should be reachable
-        assert len(all_atoms) >= 1
+        assert len(atoms) >= 1
         texts = " ".join(a["text_content"] for a in all_atoms)
         assert "profil" in texts.lower() or "optimi" in texts.lower() or "bottleneck" in texts.lower()
 

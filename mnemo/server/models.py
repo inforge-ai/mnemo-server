@@ -74,6 +74,12 @@ class AtomResponse(BaseModel):
     # Confidence metadata — populated at verbosity=full only
     confidence_alpha: Optional[float] = None
     confidence_beta: Optional[float] = None
+    # Graph-aware recall provenance (Ticket 2): "vector" = direct embedding
+    # match, "graph" = pulled in via 1-hop edge expansion from a vector match.
+    # `via` is set only when match_type == "graph" and points to the vector
+    # match that was the expansion source.
+    match_type: Optional[Literal["vector", "graph"]] = None
+    via: Optional[UUID] = None
 
 # ── Retrieval ──
 
@@ -89,7 +95,7 @@ class RetrieveRequest(BaseModel):
     )
     max_results: int = 10
     expand_graph: bool = True
-    expansion_depth: int = 2
+    expansion_depth: int = 1  # Ticket 2 scopes graph expansion to 1-hop.
     include_superseded: bool = False
     similarity_drop_threshold: Optional[float] = Field(
         default=0.15,
@@ -115,8 +121,10 @@ class RetrieveRequest(BaseModel):
     )
 
 class RetrieveResponse(BaseModel):
+    """Unified response: vector and graph matches in one list, annotated
+    with `match_type` per atom. Graph matches additionally carry `via`
+    pointing to the vector match they were expanded from."""
     atoms: list[AtomResponse]
-    expanded_atoms: list[AtomResponse]
     total_retrieved: int
 
 # ── Edges ──

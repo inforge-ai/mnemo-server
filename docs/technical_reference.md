@@ -305,15 +305,18 @@ All fields except `query` are optional with the defaults shown.
       "access_count": 5,
       "is_active": true,
       "confidence_alpha": 8.0,
-      "confidence_beta": 1.0
+      "confidence_beta": 1.0,
+      "match_type": "vector",
+      "via": null
     }
   ],
-  "expanded_atoms": [],
   "total_retrieved": 1
 }
 ```
 
 `confidence_alpha` and `confidence_beta` are only included when `verbosity="full"`. Verbosity `"summary"` truncates text at first sentence; `"truncated"` cuts to `max_content_chars`.
+
+`match_type` is `"vector"` for direct embedding matches and `"graph"` for atoms pulled in via 1-hop edge expansion from a vector match. Graph matches additionally carry `via`, the UUID of the vector match they expanded from. Graph atoms are scored as `source_score × edge_weight × graph_recall_edge_discount` (default discount 0.5), so they never outrank their source.
 
 #### GET /stores/{store_id}/status
 
