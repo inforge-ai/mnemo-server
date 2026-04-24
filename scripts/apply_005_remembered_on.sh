@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Apply the 005_remembered_on migration to both production and test databases.
-# Must be run as a user who can sudo to postgres (or directly as postgres).
+#
+# Run as the mnemo user (NOT as postgres): the SQL file lives under /home/mnemo
+# which postgres can't traverse. This script reads the file as mnemo and pipes
+# its contents into `sudo -u postgres psql`, so only psql runs as postgres.
 #
 # Usage:
-#   sudo -u postgres bash scripts/apply_005_remembered_on.sh
+#   bash scripts/apply_005_remembered_on.sh
 
 set -euo pipefail
 
@@ -17,9 +20,9 @@ if [ ! -f "$SQL_FILE" ]; then
 fi
 
 echo "Applying $MIGRATION to mnemo..."
-psql -d mnemo -f "$SQL_FILE"
+sudo -u postgres psql -d mnemo < "$SQL_FILE"
 
 echo "Applying $MIGRATION to mnemo_test..."
-psql -d mnemo_test -f "$SQL_FILE"
+sudo -u postgres psql -d mnemo_test < "$SQL_FILE"
 
 echo "Done."

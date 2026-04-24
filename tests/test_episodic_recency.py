@@ -38,9 +38,14 @@ async def _insert_atom(
 class TestEpisodicRecencyRanking:
 
     @pytest.mark.asyncio
-    async def test_newer_episodic_outranks_older_on_near_duplicate(self, client, agent, pool):
+    async def test_newer_episodic_outranks_older_on_near_duplicate(self, client, agent, pool, monkeypatch):
         """Zulip motivating case: 'Zulip completed' (newer remembered_on) should
         outrank 'Zulip planned' on a Zulip query even if similarity is close."""
+        # These test atoms land at ~0.82 cosine similarity, below the 0.85
+        # production threshold. Lower the threshold for this test so the
+        # recency demotion path actually exercises. See PR #17 for follow-up
+        # to craft atom pairs that hit ≥0.85 naturally.
+        monkeypatch.setattr(settings, "episodic_recency_similarity_threshold", 0.5)
         aid = agent["id"]
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
 
@@ -59,7 +64,8 @@ class TestEpisodicRecencyRanking:
         resp = await client.post(
             f"/v1/agents/{aid}/recall",
             json={"query": "Zulip integration pair programming",
-                  "min_similarity": 0.2, "max_results": 5, "expand_graph": False},
+                  "min_similarity": 0.0, "max_results": 5, "expand_graph": False,
+                  "similarity_drop_threshold": None},
             headers=ag_headers,
         )
         assert resp.status_code == 200
@@ -75,9 +81,12 @@ class TestEpisodicRecencyRanking:
         )
 
     @pytest.mark.asyncio
-    async def test_null_remembered_on_falls_back_to_created_at(self, client, agent, pool):
+    async def test_null_remembered_on_falls_back_to_created_at(self, client, agent, pool, monkeypatch):
         """Atoms with NULL remembered_on use created_at for ranking — the
         existing behaviour for pre-Ticket-4b atoms. Older created_at is demoted."""
+        # Test atoms are below the 0.85 similarity threshold; lower it so the
+        # recency demotion path fires. (Same follow-up as the first test.)
+        monkeypatch.setattr(settings, "episodic_recency_similarity_threshold", 0.5)
         aid = agent["id"]
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
 
@@ -93,8 +102,9 @@ class TestEpisodicRecencyRanking:
 
         resp = await client.post(
             f"/v1/agents/{aid}/recall",
-            json={"query": "Zulip integration", "min_similarity": 0.2,
-                  "max_results": 5, "expand_graph": False},
+            json={"query": "Zulip integration", "min_similarity": 0.0,
+                  "max_results": 5, "expand_graph": False,
+                  "similarity_drop_threshold": None},
             headers=ag_headers,
         )
         atoms = resp.json()["atoms"]
@@ -172,24 +182,30 @@ class TestEpisodicRecencyRanking:
     async def test_demotion_factor_config_tunable(self, client, agent, pool, monkeypatch):
         """Lowering the demotion factor increases the score gap between the
         older and newer atom."""
+        # Lower the similarity threshold so the demotion path fires on these
+        # atom pairs. (Same follow-up as tests 1 and 2.)
+        monkeypatch.setattr(settings, "episodic_recency_similarity_threshold", 0.5)
         aid = agent["id"]
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
 
         async with pool.acquire() as conn:
             old = await _insert_atom(
-                conn, aid, "Zulip integration is planned for Q2",
+                conn, aid,
+                "Zulip integration is planned as a future pair-programming task",
                 remembered_on=datetime(2026, 3, 1, tzinfo=timezone.utc),
             )
             new = await _insert_atom(
-                conn, aid, "Zulip integration completed in Q2",
+                conn, aid,
+                "Zulip integration completed as a pair-programming task",
                 remembered_on=datetime(2026, 4, 15, tzinfo=timezone.utc),
             )
 
         async def get_ratio():
             r = await client.post(
                 f"/v1/agents/{aid}/recall",
-                json={"query": "Zulip integration", "min_similarity": 0.2,
-                      "max_results": 5, "expand_graph": False},
+                json={"query": "Zulip integration pair programming",
+                      "min_similarity": 0.0, "max_results": 5, "expand_graph": False,
+                      "similarity_drop_threshold": None},
                 headers=ag_headers,
             )
             atoms = r.json()["atoms"]
