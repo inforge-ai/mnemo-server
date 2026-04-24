@@ -42,8 +42,9 @@ Rules:
 - If a future plan is mentioned ("I'm going camping next month"), create a separate atom for the plan with the projected date, distinct from any later atom about the actual event.
 - Preserve specific details exactly: names, dates, quantities, places, identity terms, breeds, titles. Do NOT generalise — "transgender woman" stays "transgender woman", not "LGBTQ+ individual"; "golden retriever puppy" stays "golden retriever puppy", not "dog".
 - ALWAYS preserve proper nouns exactly as stated: brand names (Under Armour, Nike), product names (Exploding Kittens, Xenoblade 2), book titles (Charlotte's Web), shop names (House of MinaLima), organization names (Good Sports), place names (Fort Wayne, Voyageurs National Park), nicknames (Jo), and any other named entity. Never generalise a proper noun into a description.
-- Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0}
-- Confidence should reflect how certain/well-supported the claim is in the source text
+- RESOLVE DEFINITE-ARTICLE REFERENCES TO GENERIC NOUNS. When an atom contains a phrase like "the test run", "the project", "that meeting", "the deployment", "the system", "the issue", "the feature", "the ticket" — the referent MUST be filled in from the source context so the atom stands alone. If the source text says "the ABACAB March 2026 test run had several issues: test tasks consumed 89% of spend", the atom about costs should say "In the ABACAB March 2026 test run, test tasks consumed 89% of spend" — NOT "the test run" on its own. If the referent CANNOT be identified from the source context, keep the original phrasing and set `"entity_resolved": false` on that atom.
+- Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0, "entity_resolved": true}
+- Confidence should reflect how certain/well-supported the claim is in the source text. `entity_resolved` defaults to true; set it to false ONLY when a definite-article reference could not be resolved against the source context.
 
 Types:
 - episodic: A claim tied to a moment in time. This includes:
@@ -170,7 +171,13 @@ async def llm_decompose(
             raise ValueError(f"Expected JSON array from LLM, got {type(raw).__name__}")
         atoms = []
         for item in raw:
-            alpha, beta = _confidence_to_beta(item.get("confidence", 0.5))
+            confidence = item.get("confidence", 0.5)
+            # Atoms with an unresolved definite-article reference (e.g. "the
+            # test run" when no project is identifiable) degrade one band so
+            # decay eats them faster and recall deprioritises them.
+            if item.get("entity_resolved", True) is False:
+                confidence = max(0.0, confidence - 0.2)
+            alpha, beta = _confidence_to_beta(confidence)
             atom_type = item.get("type", "semantic")
             if atom_type not in ("episodic", "semantic", "procedural"):
                 atom_type = "semantic"
