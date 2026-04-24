@@ -27,8 +27,15 @@ class Settings(BaseSettings):
     # remembered_on, the older atom's composite score is multiplied by
     # episodic_recency_demotion_factor. NULL remembered_on falls back to
     # created_at. Non-episodic atoms are never demoted by this mechanism.
+    #
+    # Similarity threshold calibration: the original 0.85 missed realistic
+    # planned/completed pairs (the Zulip text from Ticket 4 sits at 0.816;
+    # ABACAB/BAM/Sampo-style pairs cluster in [0.80, 0.86]). 0.80 catches
+    # these while staying ~2.4x above the negative-control floor (unrelated
+    # episodics at ~0.33). Empirical re-calibration against a human-reviewed
+    # sample of prod episodic pairs is a follow-up ticket.
     episodic_recency_demotion_factor: float = 0.5
-    episodic_recency_similarity_threshold: float = 0.85
+    episodic_recency_similarity_threshold: float = 0.80
 
     # Default decay half-lives (days) by atom type
     decay_episodic: float = 14.0
