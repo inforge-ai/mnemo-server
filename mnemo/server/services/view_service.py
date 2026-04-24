@@ -419,6 +419,8 @@ async def recall_shared(
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at,
             a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on,
+            a.embedding,
             1 - (a.embedding <=> $1::vector) AS similarity,
             effective_confidence(
                 a.confidence_alpha, a.confidence_beta,
@@ -438,10 +440,15 @@ async def recall_shared(
     )
 
     rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
-    rows.sort(
-        key=lambda r: composite_score(r["similarity"], r["confidence_effective"], r["source_type"]),
-        reverse=True,
-    )
+
+    # Episodic recency demotion (Ticket 4b), same as the agent-own recall path.
+    from .atom_service import apply_episodic_recency_demotion
+    base_scores = {
+        r["id"]: composite_score(r["similarity"], r["confidence_effective"], r["source_type"])
+        for r in rows
+    }
+    final_scores = apply_episodic_recency_demotion(rows, base_scores)
+    rows.sort(key=lambda r: final_scores[r["id"]], reverse=True)
     primary = rows[:max_results]
     primary_ids = [r["id"] for r in primary]
 
@@ -480,13 +487,11 @@ async def recall_shared(
             allowed_ids=allowed_ids,
         )
 
-    # _row_to_atom_response and composite_score imported at module level
+    # _row_to_atom_response and composite_score imported at module level.
+    # Use the already-demoted final_scores so shared-view recall matches
+    # the agent-own recall path exactly.
     primary_responses = [
-        _row_to_atom_response(
-            r,
-            composite_score(r["similarity"], r["confidence_effective"], r["source_type"]),
-            match_type="vector",
-        )
+        _row_to_atom_response(r, final_scores[r["id"]], match_type="vector")
         for r in primary
     ]
 

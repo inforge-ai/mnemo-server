@@ -43,8 +43,9 @@ Rules:
 - Preserve specific details exactly: names, dates, quantities, places, identity terms, breeds, titles. Do NOT generalise — "transgender woman" stays "transgender woman", not "LGBTQ+ individual"; "golden retriever puppy" stays "golden retriever puppy", not "dog".
 - ALWAYS preserve proper nouns exactly as stated: brand names (Under Armour, Nike), product names (Exploding Kittens, Xenoblade 2), book titles (Charlotte's Web), shop names (House of MinaLima), organization names (Good Sports), place names (Fort Wayne, Voyageurs National Park), nicknames (Jo), and any other named entity. Never generalise a proper noun into a description.
 - RESOLVE DEFINITE-ARTICLE REFERENCES TO GENERIC NOUNS. When an atom contains a phrase like "the test run", "the project", "that meeting", "the deployment", "the system", "the issue", "the feature", "the ticket" — the referent MUST be filled in from the source context so the atom stands alone. If the source text says "the ABACAB March 2026 test run had several issues: test tasks consumed 89% of spend", the atom about costs should say "In the ABACAB March 2026 test run, test tasks consumed 89% of spend" — NOT "the test run" on its own. If the referent CANNOT be identified from the source context, keep the original phrasing and set `"entity_resolved": false` on that atom.
-- Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0, "entity_resolved": true}
+- Return JSON array of objects: {"text": "...", "type": "episodic|semantic|procedural", "confidence": 0.0-1.0, "entity_resolved": true, "remembered_on": "YYYY-MM-DD"}
 - Confidence should reflect how certain/well-supported the claim is in the source text. `entity_resolved` defaults to true; set it to false ONLY when a definite-article reference could not be resolved against the source context.
+- `remembered_on` is the date the event/observation actually happened — the calendar date embedded in the atom text (e.g. "2026-04-15" for "Zulip completed on 2026-04-15"). For plans, use the planned-for date; for retrospective observations, use when the observation was made. Required on every episodic atom; optional (null) for semantic/procedural. If the episodic atom references a range or approximate date, pick the most specific single date the text supports.
 
 Types:
 - episodic: A claim tied to a moment in time. This includes:
@@ -82,6 +83,24 @@ _STATE_CLAIM_PATTERNS: tuple[re.Pattern, ...] = (
 
 def _looks_like_state_claim(text: str) -> bool:
     return any(p.search(text) for p in _STATE_CLAIM_PATTERNS)
+
+
+def _parse_remembered_on(value) -> datetime | None:
+    """Parse the LLM-provided remembered_on field into a datetime.
+
+    Accepts ISO date (YYYY-MM-DD) or ISO datetime. Returns None on null,
+    missing, empty, or unparseable input — the caller falls back to the
+    request-level remembered_on, then to None (stored as NULL)."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
 
 
 @lru_cache(maxsize=1)
@@ -183,12 +202,15 @@ async def llm_decompose(
                 atom_type = "semantic"
             if atom_type == "semantic" and _looks_like_state_claim(item["text"]):
                 atom_type = "episodic"
+            # remembered_on: LLM per-atom date → request-level fallback → None.
+            atom_remembered_on = _parse_remembered_on(item.get("remembered_on")) or remembered_on
             atoms.append(DecomposedAtom(
                 text=item["text"],
                 atom_type=atom_type,
                 confidence_alpha=alpha,
                 confidence_beta=beta,
                 source_type="direct_experience",
+                remembered_on=atom_remembered_on,
             ))
 
         return DecomposerResult(atoms=atoms, usage=usage)

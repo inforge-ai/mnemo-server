@@ -55,6 +55,8 @@ class AtomCreate(BaseModel):
     source_type: str = Field(default="direct_experience", max_length=50)
     source_ref: Optional[UUID] = None
     domain_tags: list[str] = Field(default=[], max_length=20)
+    # Ticket 4b: when the event/observation happened (episodic atoms only).
+    remembered_on: Optional[datetime] = None
 
 class AtomResponse(BaseModel):
     id: UUID
@@ -80,6 +82,10 @@ class AtomResponse(BaseModel):
     # match that was the expansion source.
     match_type: Optional[Literal["vector", "graph"]] = None
     via: Optional[UUID] = None
+    # When the event/observation happened (Ticket 4b, episodic atoms only).
+    # Distinct from created_at — that's when mnemo stored the atom. NULL for
+    # semantic/procedural atoms and for episodic atoms stored before 4b.
+    remembered_on: Optional[datetime] = None
 
 # ── Retrieval ──
 

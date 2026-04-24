@@ -171,12 +171,14 @@ async def _insert_atom(
             agent_id, atom_type, text_content, structured, embedding,
             confidence_alpha, confidence_beta,
             source_type, source_ref,
-            domain_tags, decay_half_life_days, decay_type, decomposer_version
-        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12)
+            domain_tags, decay_half_life_days, decay_type, decomposer_version,
+            remembered_on
+        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12,$13)
         RETURNING
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
             source_type, domain_tags, created_at, last_accessed, access_count, is_active,
+            remembered_on,
             effective_confidence(
                 confidence_alpha, confidence_beta,
                 decay_type, decay_half_life_days,
@@ -195,6 +197,7 @@ async def _insert_atom(
         domain_tags,
         half_life,
         decomposer_version,
+        atom.remembered_on,
     )
     return row
 
@@ -210,6 +213,7 @@ async def _get_atom_row(
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
             source_type, domain_tags, created_at, last_accessed, access_count, is_active,
+            remembered_on,
             effective_confidence(
                 confidence_alpha, confidence_beta,
                 decay_type, decay_half_life_days,
@@ -318,6 +322,46 @@ def composite_score(similarity: float, confidence_effective: float, source_type:
     return base
 
 
+def apply_episodic_recency_demotion(
+    rows: list[asyncpg.Record],
+    scores: dict[UUID, float],
+) -> dict[UUID, float]:
+    """Demote older episodic atoms when a newer near-duplicate is present.
+
+    Ticket 4b. For each pair of episodic atoms A and B in the candidate set,
+    if cosine similarity between their embeddings is above the threshold AND
+    B has a newer event-date than A, multiply A's composite score by the
+    demotion factor. Non-episodic atoms are untouched. NULL remembered_on
+    falls back to created_at (per the leave-NULL migration choice).
+
+    Returns a new id→score dict so the caller can re-sort.
+    """
+    threshold = settings.episodic_recency_similarity_threshold
+    factor = settings.episodic_recency_demotion_factor
+    episodic = [r for r in rows if r["atom_type"] == "episodic"]
+    if len(episodic) < 2:
+        return scores
+
+    def recency_key(r: asyncpg.Record):
+        return _safe_get(r, "remembered_on") or r["created_at"]
+
+    out = dict(scores)
+    for a in episodic:
+        a_time = recency_key(a)
+        a_emb = a["embedding"]
+        for b in episodic:
+            if b["id"] == a["id"]:
+                continue
+            b_time = recency_key(b)
+            if b_time <= a_time:
+                continue
+            sim = _cosine_sim(list(a_emb), list(b["embedding"]))
+            if sim >= threshold:
+                out[a["id"]] = out.get(a["id"], 0.0) * factor
+                break  # one demotion is enough; don't compound
+    return out
+
+
 def _row_to_atom_response(
     row: asyncpg.Record,
     relevance_score: float | None = None,
@@ -345,7 +389,17 @@ def _row_to_atom_response(
         "confidence_beta": beta,
         "match_type": match_type,
         "via": via,
+        # remembered_on is present on rows from atom inserts/gets/retrieves
+        # and graph expansions; other SELECT paths may omit it — fall back to None.
+        "remembered_on": _safe_get(row, "remembered_on"),
     }
+
+
+def _safe_get(row: asyncpg.Record, key: str):
+    try:
+        return row[key]
+    except (KeyError, ValueError):
+        return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -635,6 +689,7 @@ async def store_explicit(
     source_type: str,
     source_ref: UUID | None,
     domain_tags: list[str],
+    remembered_on: datetime | None = None,
 ) -> dict:
     """Create an explicit typed atom (power-user interface)."""
     # Map confidence label to Beta params
@@ -670,6 +725,7 @@ async def store_explicit(
             confidence_alpha=alpha,
             confidence_beta=beta,
             structured=structured,
+            remembered_on=remembered_on,
         )
         row = await _insert_atom(conn, agent_id, atom, embedding, domain_tags, source_type, source_ref)
 
@@ -712,6 +768,7 @@ async def retrieve(
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
             source_type, domain_tags, created_at, last_accessed, access_count, is_active,
+            remembered_on,
             embedding,
             1 - (embedding <=> $1::vector) AS cosine_sim,
             effective_confidence(
@@ -742,10 +799,15 @@ async def retrieve(
 
     rows = _dedup_results(rows)
 
-    rows.sort(
-        key=lambda r: composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]),
-        reverse=True,
-    )
+    # Compute per-row composite scores, then apply episodic recency demotion:
+    # older episodic atoms with a newer near-duplicate in the candidate set
+    # have their score multiplied by the demotion factor (Ticket 4b).
+    base_scores = {
+        r["id"]: composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"])
+        for r in rows
+    }
+    final_scores = apply_episodic_recency_demotion(rows, base_scores)
+    rows.sort(key=lambda r: final_scores[r["id"]], reverse=True)
 
     primary = rows[:max_results]
     primary_ids = [r["id"] for r in primary]
@@ -756,7 +818,7 @@ async def retrieve(
     primary_responses = [
         _row_to_atom_response(
             r,
-            composite_score(r["cosine_sim"], r["confidence_effective"], r["source_type"]),
+            final_scores[r["id"]],
             match_type="vector",
         )
         for r in primary
