@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     graph_recall_edge_discount: float = 0.5
     graph_recall_expansion_ceiling_multiplier: int = 2
 
+    # Episodic recency ranking (Ticket 4b, Phase 2): within a recall, when
+    # two episodic atoms are semantically near-duplicates (cosine sim >
+    # episodic_recency_similarity_threshold) and one has a newer
+    # remembered_on, the older atom's composite score is multiplied by
+    # episodic_recency_demotion_factor. NULL remembered_on falls back to
+    # created_at. Non-episodic atoms are never demoted by this mechanism.
+    episodic_recency_demotion_factor: float = 0.5
+    episodic_recency_similarity_threshold: float = 0.85
+
     # Default decay half-lives (days) by atom type
     decay_episodic: float = 14.0
     decay_semantic: float = 90.0

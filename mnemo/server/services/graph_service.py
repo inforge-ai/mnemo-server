@@ -103,6 +103,7 @@ async def expand_graph(
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at,
             a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on,
             a.embedding,
             effective_confidence(
                 a.confidence_alpha, a.confidence_beta,

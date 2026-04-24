@@ -38,6 +38,7 @@ Very low confidence — Beta(2, 4):
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -48,6 +49,10 @@ class DecomposedAtom:
     confidence_beta: float
     structured: dict = field(default_factory=dict)
     source_type: str = "direct_experience"
+    # When the event/observation happened (episodic atoms, Ticket 4b).
+    # None for semantic/procedural or when the LLM can't determine a date.
+    # Store-time falls back to the /remember request's remembered_on if None.
+    remembered_on: datetime | None = None
 
 
 # Arc threshold constants

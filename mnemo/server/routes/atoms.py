@@ -29,6 +29,7 @@ async def create_atom(agent_id: str, body: AtomCreate, auth: AuthContext = Depen
             source_type=body.source_type,
             source_ref=body.source_ref,
             domain_tags=body.domain_tags,
+            remembered_on=body.remembered_on,
         )
     return result
 

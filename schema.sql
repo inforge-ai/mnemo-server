@@ -106,6 +106,11 @@ CREATE TABLE atoms (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_accessed   TIMESTAMPTZ,
     access_count    INTEGER NOT NULL DEFAULT 0,
+    -- When the event/observation happened (episodic atoms only).
+    -- Distinct from created_at: that's when the atom was stored. NULL for
+    -- semantic/procedural atoms and for episodic atoms pre-Ticket-4b.
+    -- Recall falls back to created_at when NULL.
+    remembered_on   TIMESTAMPTZ,
 
     -- Decay
     decay_type      TEXT NOT NULL DEFAULT 'exponential'
@@ -128,6 +133,9 @@ CREATE INDEX idx_atoms_domain_tags ON atoms USING GIN (domain_tags);
 CREATE INDEX idx_atoms_embedding ON atoms USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 CREATE INDEX idx_atoms_active ON atoms (agent_id, is_active) WHERE is_active = true;
+CREATE INDEX idx_atoms_episodic_remembered_on
+    ON atoms (agent_id, remembered_on DESC)
+    WHERE atom_type = 'episodic' AND is_active = true;
 
 -- Knowledge graph edges
 CREATE TABLE edges (
