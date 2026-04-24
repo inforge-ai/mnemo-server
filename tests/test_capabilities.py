@@ -82,7 +82,7 @@ class TestCapabilities:
         assert data["total_retrieved"] >= 1
 
         # Critical scope invariant: every returned atom_id must be in snapshot_atoms
-        returned_ids = {a["id"] for a in data["atoms"] + data["expanded_atoms"]}
+        returned_ids = {a["id"] for a in data["atoms"]}
         async with pool.acquire() as conn:
             snap_ids = {
                 str(r["atom_id"])
@@ -123,8 +123,7 @@ class TestCapabilities:
         )
         assert resp.status_code == 200
         data = resp.json()
-        all_atoms = data["atoms"] + data["expanded_atoms"]
-        for atom in all_atoms:
+        for atom in data["atoms"]:
             assert "finance" not in atom.get("domain_tags", []), (
                 f"Finance atom leaked into python-scoped view: {atom['text_content']}"
             )

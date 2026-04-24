@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     duplicate_similarity_threshold: float = 0.90
     cross_call_edge_threshold: float = 0.55
 
+    # Graph-aware recall (Ticket 2, Phase 1): after vector top-k, expand
+    # 1-hop along edges and rescore as source_score * edge_weight * discount.
+    # Ceiling caps graph matches at (multiplier × max_results) atoms.
+    graph_recall_edge_discount: float = 0.5
+    graph_recall_expansion_ceiling_multiplier: int = 2
+
     # Default decay half-lives (days) by atom type
     decay_episodic: float = 14.0
     decay_semantic: float = 90.0

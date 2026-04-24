@@ -61,7 +61,9 @@ async def expand_graph(
             SELECT
                 a.id,
                 0 AS depth,
-                1.0::float AS relevance
+                1.0::float AS relevance,
+                NULL::uuid AS via_id,
+                NULL::float AS edge_weight
             FROM atoms a
             WHERE a.id = ANY($1)
               AND ($2::uuid IS NULL OR a.agent_id = $2)
@@ -77,7 +79,9 @@ async def expand_graph(
                     ELSE e.source_id
                 END AS id,
                 ex.depth + 1 AS depth,
-                ex.relevance * e.weight * 0.7 AS relevance
+                ex.relevance * e.weight * 0.7 AS relevance,
+                ex.id AS via_id,
+                e.weight AS edge_weight
             FROM expanded ex
             JOIN edges e
               ON (e.source_id = ex.id OR e.target_id = ex.id)
@@ -106,7 +110,9 @@ async def expand_graph(
                 a.created_at, a.last_accessed, a.access_count
             ) AS confidence_effective,
             ex.depth,
-            ex.relevance
+            ex.relevance,
+            ex.via_id,
+            ex.edge_weight
         FROM expanded ex
         JOIN atoms a ON a.id = ex.id
         WHERE a.is_active = true

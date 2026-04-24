@@ -409,7 +409,6 @@ async def recall_shared(
     if not trust_row:
         return {
             "atoms": [],
-            "expanded_atoms": [],
             "total_retrieved": 0,
         }
 
@@ -483,12 +482,39 @@ async def recall_shared(
 
     # _row_to_atom_response and composite_score imported at module level
     primary_responses = [
-        _row_to_atom_response(r, composite_score(r["similarity"], r["confidence_effective"], r["source_type"]))
+        _row_to_atom_response(
+            r,
+            composite_score(r["similarity"], r["confidence_effective"], r["source_type"]),
+            match_type="vector",
+        )
         for r in primary
     ]
-    expanded_responses = [_row_to_atom_response(r) for r in expanded_rows]
 
-    total = len(primary_responses) + len(expanded_responses)
+    # Score graph-expanded atoms as source_score * edge_weight * discount, same
+    # as the agent-own recall path in atom_service.retrieve. Guarantees graph
+    # atoms never outrank their source.
+    from ..config import settings
+    source_scores = {a["id"]: a["relevance_score"] for a in primary_responses}
+    discount = settings.graph_recall_edge_discount
+    ceiling = max_results * settings.graph_recall_expansion_ceiling_multiplier
+    scored_expanded: list[tuple[asyncpg.Record, float]] = []
+    for r in expanded_rows:
+        via_id = r["via_id"]
+        edge_weight = r["edge_weight"] or 1.0
+        source_score = source_scores.get(via_id, 0.0)
+        score = source_score * edge_weight * discount
+        if score > 0:
+            scored_expanded.append((r, score))
+    scored_expanded.sort(key=lambda x: x[1], reverse=True)
+    scored_expanded = scored_expanded[:ceiling]
+
+    expanded_responses = [
+        _row_to_atom_response(r, score, match_type="graph", via=r["via_id"])
+        for r, score in scored_expanded
+    ]
+
+    all_atoms = primary_responses + expanded_responses
+    total = len(all_atoms)
 
     # Audit log
     await conn.execute(
@@ -502,8 +528,7 @@ async def recall_shared(
     )
 
     return {
-        "atoms": primary_responses,
-        "expanded_atoms": expanded_responses,
+        "atoms": all_atoms,
         "total_retrieved": total,
     }
 

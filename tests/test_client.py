@@ -94,7 +94,6 @@ async def test_recall_returns_typed_dict():
                     "access_count": 3,
                 }
             ],
-            "expanded_atoms": [],
             "total_retrieved": 1,
         })
     )
