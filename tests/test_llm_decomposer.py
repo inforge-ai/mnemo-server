@@ -397,6 +397,109 @@ class TestStateClaimPatterns:
         assert not _looks_like_state_claim("Tom deployed the server on 2026-04-15")
 
 
+class TestEntityResolution:
+    """Tests for the entity_resolved flag — atoms with unresolved definite-article
+    references to generic nouns ('the test run', 'the project') should have their
+    initial confidence degraded one band so decay eats them faster and recall
+    deprioritises them."""
+
+    @pytest.mark.asyncio
+    async def test_resolved_entity_high_confidence_passes_through(self):
+        """entity_resolved=true at high confidence lands at (8, 1) as usual."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "In the ABACAB March 2026 test run, test tasks consumed 89% of spend",
+             "type": "episodic", "confidence": 0.9, "entity_resolved": True},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("source text")
+
+        assert result.atoms[0].confidence_alpha == 8.0
+        assert result.atoms[0].confidence_beta == 1.0
+
+    @pytest.mark.asyncio
+    async def test_unresolved_entity_degrades_confidence_one_band(self):
+        """entity_resolved=false degrades 0.9 → 0.7, landing at (4, 2) not (8, 1)."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "In the test run, test tasks consumed 89% of spend",
+             "type": "episodic", "confidence": 0.9, "entity_resolved": False},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("source text")
+
+        assert result.atoms[0].confidence_alpha == 4.0
+        assert result.atoms[0].confidence_beta == 2.0
+
+    @pytest.mark.asyncio
+    async def test_unresolved_mid_band_degrades_further(self):
+        """Degradation is proportional: 0.65 → 0.45 drops from (4, 2) to (3, 2)."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "In the thing, stuff happened",
+             "type": "episodic", "confidence": 0.65, "entity_resolved": False},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("source text")
+
+        assert result.atoms[0].confidence_alpha == 3.0
+        assert result.atoms[0].confidence_beta == 2.0
+
+    @pytest.mark.asyncio
+    async def test_missing_entity_resolved_field_treats_as_resolved(self):
+        """Backwards-compatible: absent `entity_resolved` defaults to true."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "CPython's GIL serialises bytecode execution",
+             "type": "semantic", "confidence": 0.85},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose("source text")
+
+        assert result.atoms[0].confidence_alpha == 8.0
+        assert result.atoms[0].confidence_beta == 1.0
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_case_two_projects_stay_separate(self):
+        """Review-notes ambiguous case — a paragraph mentioning both ABACAB and
+        Sampo deployments produces atoms that each identify the correct project
+        (mocked at the LLM layer; we verify the decomposer preserves the LLM's
+        entity-resolved text rather than collapsing to 'the deployment')."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json.dumps([
+            {"text": "The ABACAB deployment failed with a timeout",
+             "type": "episodic", "confidence": 0.9, "entity_resolved": True},
+            {"text": "The Sampo deployment failed with a permission error",
+             "type": "episodic", "confidence": 0.9, "entity_resolved": True},
+        ]))]
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client):
+            result = await llm_decompose(
+                "Two deployments failed today: ABACAB timed out; Sampo hit a permission error."
+            )
+
+        assert len(result.atoms) == 2
+        texts = [a.text for a in result.atoms]
+        assert any("ABACAB" in t for t in texts), f"no ABACAB atom: {texts}"
+        assert any("Sampo" in t for t in texts), f"no Sampo atom: {texts}"
+        # Neither atom should have been left with a generic "the deployment"
+        assert not any(t.lower().startswith("the deployment ") and "abacab" not in t.lower() and "sampo" not in t.lower() for t in texts)
+
+
 class TestDecomposerIntegration:
     """Test that the correct decomposer is selected based on ANTHROPIC_API_KEY."""
 
