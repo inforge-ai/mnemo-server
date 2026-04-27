@@ -916,6 +916,7 @@ async def retrieve(
     # Unified response: vector matches first, then graph expansions. Both carry
     # match_type so the caller can distinguish without needing separate lists.
     all_atoms = primary_responses + expanded_responses
+    await _attach_lifecycle_edges(conn, all_atoms)
     return {
         "atoms": all_atoms,
         "total_retrieved": len(all_atoms),
@@ -942,6 +943,61 @@ async def _filter_superseded(
     )
     superseded_ids = {r["target_id"] for r in superseded}
     return [r for r in rows if r["id"] not in superseded_ids]
+
+
+async def _attach_lifecycle_edges(
+    conn: asyncpg.Connection,
+    atoms: list[dict],
+) -> None:
+    """Mutates `atoms` in-place: each atom gains a `lifecycle_edges` list with
+    any tension_with / narrows edges connecting it to other atoms. supersedes
+    is intentionally excluded — those targets are filtered upstream by
+    _filter_superseded and we don't surface the relationship metadata."""
+    if not atoms:
+        return
+    atom_ids = [a["id"] for a in atoms]
+    rows = await conn.fetch(
+        """
+        SELECT e.source_id, e.target_id, e.edge_type, e.weight,
+               e.metadata->>'reasoning' AS reasoning
+        FROM edges e
+        JOIN atoms src ON src.id = e.source_id
+        JOIN atoms tgt ON tgt.id = e.target_id
+        WHERE e.edge_type IN ('tension_with', 'narrows')
+          AND src.is_active = true
+          AND tgt.is_active = true
+          AND (e.source_id = ANY($1) OR e.target_id = ANY($1))
+        """,
+        atom_ids,
+    )
+    by_atom: dict = {aid: [] for aid in atom_ids}
+    seen: set = set()
+    for r in rows:
+        src, tgt, et = r["source_id"], r["target_id"], r["edge_type"]
+        # surface the edge on whichever endpoint is in the result set.
+        # de-dup on (this_atom, related_atom, edge_type).
+        if src in by_atom:
+            key = (src, tgt, et)
+            if key not in seen:
+                seen.add(key)
+                by_atom[src].append({
+                    "related_atom_id": tgt,
+                    "relationship": et,
+                    "reasoning": r["reasoning"],
+                    "weight": float(r["weight"]),
+                })
+        if tgt in by_atom:
+            key = (tgt, src, et)
+            if key not in seen:
+                seen.add(key)
+                by_atom[tgt].append({
+                    "related_atom_id": src,
+                    "relationship": et,
+                    "reasoning": r["reasoning"],
+                    "weight": float(r["weight"]),
+                })
+    for atom in atoms:
+        atom["lifecycle_edges"] = by_atom.get(atom["id"], [])
 
 
 async def get_atom(
