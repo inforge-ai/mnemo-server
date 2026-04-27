@@ -138,14 +138,21 @@ async def _evaluate_pair(
             rel = parsed.get("relationship")
             if rel not in _VALID_RELATIONSHIPS:
                 return None
+            try:
+                confidence = float(parsed.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                return None
+            reasoning = str(parsed.get("reasoning", ""))[:500]  # one-sentence cap
             return {
                 "relationship": rel,
-                "confidence": float(parsed.get("confidence", 0.0)),
-                "reasoning": str(parsed.get("reasoning", ""))[:500],
+                "confidence": confidence,
+                "reasoning": reasoning,
                 "usage": {
                     "model": response.model,
                     "input_tokens": response.usage.input_tokens,
                     "output_tokens": response.usage.output_tokens,
+                    "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", None),
+                    "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", None),
                 },
             }
         except json.JSONDecodeError:

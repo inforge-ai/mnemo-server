@@ -174,3 +174,69 @@ async def test_evaluate_pair_retries_once_then_returns_none():
 
     assert result is None
     assert mock_client.messages.create.await_count == 2  # initial + 1 retry
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_first_attempt_fails_second_succeeds():
+    """Retry recovers when the first call raises and the second returns valid JSON."""
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    fake_success = _mock_haiku(
+        '{"relationship": "supersedes", "confidence": 0.9, "reasoning": "ok"}'
+    )
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=[
+        RuntimeError("transient"),
+        fake_success,
+    ])
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="x", new_type="episodic",
+            existing_text="y", existing_type="episodic",
+            existing_age_days=1,
+        )
+
+    assert result is not None
+    assert result["relationship"] == "supersedes"
+    assert mock_client.messages.create.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_returns_none_on_invalid_json_no_retry():
+    """Garbled JSON is permanent — return None, do not retry."""
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    fake = _mock_haiku("this is not json at all")
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=fake)
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="x", new_type="semantic",
+            existing_text="y", existing_type="semantic",
+            existing_age_days=1,
+        )
+
+    assert result is None
+    assert mock_client.messages.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_returns_none_on_non_numeric_confidence_no_retry():
+    """Bad confidence value is permanent — return None, do not retry."""
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    fake = _mock_haiku('{"relationship": "supersedes", "confidence": "high"}')
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=fake)
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="x", new_type="semantic",
+            existing_text="y", existing_type="semantic",
+            existing_age_days=1,
+        )
+
+    assert result is None
+    assert mock_client.messages.create.await_count == 1
