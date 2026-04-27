@@ -54,3 +54,123 @@ async def test_get_candidates_excludes_self_and_inactive(pool, agent_with_addres
 
     assert all(c["id"] != new_id for c in candidates)
     assert all(c["id"] != other_id for c in candidates)
+
+
+# ── LLM caller ──────────────────────────────────────────────────────────────
+
+def _mock_haiku(payload_json: str, input_tokens: int = 100, output_tokens: int = 30):
+    msg = MagicMock()
+    msg.content = [MagicMock(text=payload_json)]
+    msg.model = "claude-haiku-4-5-20251001"
+    msg.usage = MagicMock(input_tokens=input_tokens, output_tokens=output_tokens)
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_parses_supersedes():
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    fake = _mock_haiku(
+        '{"relationship": "supersedes", "confidence": 0.92, '
+        '"reasoning": "new atom marks the planned task as complete"}'
+    )
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=fake)
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="Zulip integration is complete and in daily use",
+            new_type="episodic",
+            existing_text="Zulip integration is a planned future task",
+            existing_type="episodic",
+            existing_age_days=30,
+        )
+
+    assert result["relationship"] == "supersedes"
+    assert result["confidence"] == 0.92
+    assert "complete" in result["reasoning"]
+    assert result["usage"]["input_tokens"] == 100
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_parses_tension_with():
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    fake = _mock_haiku(
+        '{"relationship": "tension_with", "confidence": 0.78, '
+        '"reasoning": "anomaly does not invalidate Newtonian framework"}'
+    )
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=fake)
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="Mercury's perihelion precesses anomalously",
+            new_type="semantic",
+            existing_text="Newtonian gravity accurately predicts orbits",
+            existing_type="semantic",
+            existing_age_days=2,
+        )
+
+    assert result["relationship"] == "tension_with"
+    assert result["confidence"] == 0.78
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_strips_markdown_fences():
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    fake = _mock_haiku(
+        '```json\n{"relationship": "narrows", "confidence": 0.70, '
+        '"reasoning": "qualifies the original"}\n```'
+    )
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=fake)
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="Tom uses Zulip for ops, Mattermost for personal",
+            new_type="semantic",
+            existing_text="Tom uses Mattermost",
+            existing_type="semantic",
+            existing_age_days=1,
+        )
+
+    assert result["relationship"] == "narrows"
+    assert result["confidence"] == 0.70
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_returns_none_on_unknown_relationship():
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    fake = _mock_haiku('{"relationship": "weird_made_up", "confidence": 0.9}')
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=fake)
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="x", new_type="semantic",
+            existing_text="y", existing_type="semantic",
+            existing_age_days=1,
+        )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pair_retries_once_then_returns_none():
+    """Spec §4: single retry on transient error, then give up."""
+    from mnemo.server.services.lifecycle_service import _evaluate_pair
+
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=RuntimeError("transient"))
+
+    with patch("mnemo.server.services.lifecycle_service._get_client", return_value=mock_client):
+        result = await _evaluate_pair(
+            new_text="x", new_type="semantic",
+            existing_text="y", existing_type="semantic",
+            existing_age_days=1,
+        )
+
+    assert result is None
+    assert mock_client.messages.create.await_count == 2  # initial + 1 retry
