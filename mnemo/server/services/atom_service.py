@@ -961,11 +961,12 @@ async def create_edge(
     target_id: UUID,
     edge_type: str,
     weight: float,
+    metadata: dict | None = None,
 ) -> dict | None:
     row = await conn.fetchrow(
         """
-        INSERT INTO edges (source_id, target_id, edge_type, weight)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO edges (source_id, target_id, edge_type, weight, metadata)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
         RETURNING id, source_id, target_id, edge_type, weight
         """,
@@ -973,6 +974,7 @@ async def create_edge(
         target_id,
         edge_type,
         weight,
+        json.dumps(metadata) if metadata is not None else None,
     )
     return dict(row) if row else None
 
