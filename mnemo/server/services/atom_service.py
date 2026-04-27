@@ -653,6 +653,19 @@ async def store_background(
                 result["atoms_created"],
                 store_id,
             )
+            # Post-store: lifecycle relationship detection. Best-effort,
+            # never raises, gated by feature flag.
+            from ..config import settings as _settings
+            if _settings.lifecycle_detection_enabled:
+                from .lifecycle_service import detect_lifecycle_relationships
+                for new_atom_id in result.get("new_atom_ids", []):
+                    try:
+                        await detect_lifecycle_relationships(conn, agent_id, new_atom_id)
+                    except Exception:
+                        logger.warning(
+                            "detect_lifecycle_relationships failed for atom %s", new_atom_id,
+                            exc_info=True,
+                        )
     except Exception:
         error_msg = traceback.format_exc()
         logger.error("Background store %s failed: %s", store_id, error_msg)

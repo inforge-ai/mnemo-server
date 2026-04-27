@@ -451,3 +451,60 @@ async def test_llm_permanent_failure_writes_dlq(pool, agent_with_address):
         assert len(dlq) >= 1
         assert dlq[0]["new_atom_id"] == new_id
         assert dlq[0]["candidate_id"] == cand_id
+
+
+# ── store_background integration ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_store_background_invokes_lifecycle_when_enabled(pool, agent_with_address):
+    from uuid import uuid4
+    from mnemo.server.services import atom_service, lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    captured = []
+    async def _spy(conn, agent, new_id):
+        captured.append(new_id)
+        return 0
+
+    with patch.object(lifecycle_service, "detect_lifecycle_relationships", side_effect=_spy):
+        store_id = uuid4()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO store_jobs (store_id, agent_id) VALUES ($1, $2)",
+                store_id, agent_id,
+            )
+        await atom_service.store_background(
+            pool=pool, store_id=store_id, agent_id=agent_id,
+            text="The sky over Boston was clear on April 26 2026.", domain_tags=["t"],
+        )
+
+    assert len(captured) >= 1
+
+
+@pytest.mark.asyncio
+async def test_store_background_skips_lifecycle_when_disabled(pool, agent_with_address, monkeypatch):
+    from uuid import uuid4
+    from mnemo.server.config import settings
+    from mnemo.server.services import atom_service, lifecycle_service
+
+    monkeypatch.setattr(settings, "lifecycle_detection_enabled", False)
+
+    agent_id = agent_with_address["id"]
+    called = {"n": 0}
+    async def _spy(conn, agent, new_id):
+        called["n"] += 1
+        return 0
+
+    with patch.object(lifecycle_service, "detect_lifecycle_relationships", side_effect=_spy):
+        store_id = uuid4()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO store_jobs (store_id, agent_id) VALUES ($1, $2)",
+                store_id, agent_id,
+            )
+        await atom_service.store_background(
+            pool=pool, store_id=store_id, agent_id=agent_id,
+            text="Random observation about the weather.", domain_tags=["t"],
+        )
+
+    assert called["n"] == 0
