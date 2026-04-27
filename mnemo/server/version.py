@@ -40,7 +40,7 @@ def _get_commit() -> str:
 
 @lru_cache(maxsize=1)
 def get_version() -> str:
-    """Return full version string like '0.1.0+a0e02f9'."""
+    """Return full version string like '0.2.0+a0e02f9'."""
     base = _get_base_version()
     commit = _get_commit()
     return f"{base}+{commit}"
