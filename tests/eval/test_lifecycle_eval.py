@@ -1,10 +1,8 @@
 """End-to-end lifecycle eval — nine cases from docs/episodic_suppression-tension.md.
 
 These tests:
-- Hit the live Haiku decomposer + (once implemented) the live lifecycle LLM.
+- Hit the live Haiku decomposer + the live lifecycle LLM.
 - Run only with `pytest -m eval`. Slow and consumes Anthropic API budget.
-- Are marked xfail(strict=True) until the lifecycle service ships in Phase 3,
-  at which point the markers are removed.
 
 Each case stores 1+ atoms via /remember (which awaits store_background inline
 under MNEMO_SYNC_STORE_FOR_TESTS=true) then issues a /recall and asserts on
@@ -22,11 +20,7 @@ pytestmark = [
     pytest.mark.eval,
     pytest.mark.skipif(
         not os.environ.get("ANTHROPIC_API_KEY"),
-        reason="eval requires ANTHROPIC_API_KEY",
-    ),
-    pytest.mark.xfail(
-        strict=True,
-        reason="lifecycle service not yet implemented (Phase 3)",
+        reason="eval requires ANTHROPIC_API_KEY for the decomposer + lifecycle LLM",
     ),
 ]
 
