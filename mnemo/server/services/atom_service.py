@@ -504,7 +504,7 @@ async def store_from_text(
     decomposer_result = await _decompose(text, domain_tags, remembered_on=remembered_on)
     decomposed = decomposer_result.atoms
     if not decomposed:
-        return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0}
+        return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0, "new_atom_ids": []}
 
     # Log decomposer token usage if available
     if decomposer_result.usage and store_id and operator_id:
@@ -606,11 +606,14 @@ async def store_from_text(
         )
         edges_created += cross_edges
 
+    new_atom_ids = [stored_ids[i] for i in new_atom_indices]
+
     return {
         "atoms": [_row_to_atom_response(r) for r in stored_rows],
         "atoms_created": atoms_created,
         "edges_created": edges_created,
         "duplicates_merged": duplicates_merged,
+        "new_atom_ids": new_atom_ids,
     }
 
 
