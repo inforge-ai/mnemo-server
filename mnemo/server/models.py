@@ -54,7 +54,7 @@ class LifecycleEdge(BaseModel):
     related_atom_id: UUID
     relationship: Literal["tension_with", "narrows"]
     reasoning: str | None = None
-    weight: float
+    weight: float = Field(ge=0.0, le=1.0)
 
 # ── Atoms (power-user interface) ──
 
