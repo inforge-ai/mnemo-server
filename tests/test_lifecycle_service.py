@@ -243,15 +243,18 @@ async def test_evaluate_pair_returns_none_on_non_numeric_confidence_no_retry():
     assert mock_client.messages.create.await_count == 1
 
 
-def _wrap(value):
-    """Sync value -> awaitable for use as a side_effect on a regular Mock."""
-    async def _coro():
-        return value
-    return _coro()
-
-
 def _eval_returning(payload):
-    return lambda **kw: _wrap(payload)
+    """side_effect helper for the AsyncMock-patched _evaluate_pair.
+
+    patch.object on an async def auto-creates an AsyncMock. AsyncMock awaits
+    an async side_effect through the mock; returning the payload directly
+    from an async callable yields the payload as the awaited result.
+    A sync callable returning a coroutine would NOT be awaited a second time
+    and the orchestrator would receive the unfinished coroutine instead.
+    """
+    async def _impl(**kw):
+        return payload
+    return _impl
 
 
 # ── Edge writes ─────────────────────────────────────────────────────────────
