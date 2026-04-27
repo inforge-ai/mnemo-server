@@ -59,7 +59,7 @@ async def _edges_of_type(pool, agent_id: UUID, edge_type: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def _lifecycle_edges_in_recall(result: dict, edge_type: str) -> list[dict]:
+def _lifecycle_edges_in_recall(result: dict, edge_type: str) -> list[dict]:
     found = []
     for atom in result.get("atoms", []):
         for edge in atom.get("lifecycle_edges") or []:
@@ -100,7 +100,13 @@ async def test_case_2_preference_change_supersedes(client, agent_with_key, pool)
     result = await _recall(client, agent_key, aid, "Tom communication preferences")
     texts = " || ".join(a["text_content"] for a in result["atoms"]).lower()
     assert "zulip" in texts
-    assert "mattermost" not in texts or "replaced" in texts
+    standalone_old = [
+        a for a in result["atoms"]
+        if "mattermost" in a["text_content"].lower()
+        and "zulip" not in a["text_content"].lower()
+        and "replaced" not in a["text_content"].lower()
+    ]
+    assert standalone_old == [], f"old preference atom not superseded: {standalone_old}"
 
     sup = await _edges_of_type(pool, agent_uuid, "supersedes")
     assert len(sup) >= 1
@@ -109,12 +115,20 @@ async def test_case_2_preference_change_supersedes(client, agent_with_key, pool)
 # ── Case 3: Dedup-by-rephrasing (control: NO lifecycle edge) ────────────────
 
 async def test_case_3_dedup_by_rephrasing_no_edge(client, agent_with_key, pool):
-    agent_data, _agent_key, headers = agent_with_key
+    agent_data, agent_key, headers = agent_with_key
     aid = str(agent_data["id"])
     agent_uuid = UUID(aid)
 
     await remember_helper(client, aid, "test tasks consumed 89% of spend", headers=headers)
     await remember_helper(client, aid, "test tasks were cost black holes consuming 89%", headers=headers)
+
+    # Phase 3 sentinel: recall must expose a lifecycle_edges key on every atom.
+    # Pre-Phase-3 the field does not exist on AtomResponse, so this fails and
+    # the strict xfail holds. Post-Phase-3 the field is at minimum [].
+    result = await _recall(client, agent_key, aid, "test task spend")
+    assert result["atoms"], "recall returned no atoms — dedup should have produced at least one"
+    for atom in result["atoms"]:
+        assert "lifecycle_edges" in atom, "recall atom missing lifecycle_edges (Phase 3 contract)"
 
     for et in ("supersedes", "tension_with", "narrows"):
         edges = await _edges_of_type(pool, agent_uuid, et)
@@ -151,12 +165,18 @@ async def test_case_4_episodic_correction_supersedes(client, agent_with_key, poo
 # ── Case 5: Stale-but-not-superseded (control: NO edge, classified independent) ─
 
 async def test_case_5_independent_no_edge(client, agent_with_key, pool):
-    agent_data, _agent_key, headers = agent_with_key
+    agent_data, agent_key, headers = agent_with_key
     aid = str(agent_data["id"])
     agent_uuid = UUID(aid)
 
     await remember_helper(client, aid, "Tom is co-founder of Inforge LLC", headers=headers)
     await remember_helper(client, aid, "Inforge LLC was incorporated in Delaware in March 2023", headers=headers)
+
+    # Phase 3 sentinel: recall must expose a lifecycle_edges key on every atom.
+    result = await _recall(client, agent_key, aid, "Inforge company status")
+    assert result["atoms"]
+    for atom in result["atoms"]:
+        assert "lifecycle_edges" in atom, "recall atom missing lifecycle_edges (Phase 3 contract)"
 
     for et in ("supersedes", "tension_with", "narrows"):
         edges = await _edges_of_type(pool, agent_uuid, et)
@@ -184,7 +204,7 @@ async def test_case_6_narrowing_creates_narrows_edge(client, agent_with_key, poo
 
     narrows = await _edges_of_type(pool, agent_uuid, "narrows")
     assert len(narrows) >= 1
-    surfaced = await _lifecycle_edges_in_recall(result, "narrows")
+    surfaced = _lifecycle_edges_in_recall(result, "narrows")
     assert len(surfaced) >= 1, f"recall response missing lifecycle_edges narrows: {result}"
 
 
@@ -215,7 +235,7 @@ async def test_case_7_semantic_tension_not_supersedes(client, agent_with_key, po
     assert len(tension) >= 1
     sup = await _edges_of_type(pool, agent_uuid, "supersedes")
     assert sup == [], f"semantic claim incorrectly superseded: {sup}"
-    surfaced = await _lifecycle_edges_in_recall(result, "tension_with")
+    surfaced = _lifecycle_edges_in_recall(result, "tension_with")
     assert len(surfaced) >= 1
 
 
