@@ -32,4 +32,7 @@ CREATE TABLE IF NOT EXISTS lifecycle_dlq (
 CREATE INDEX IF NOT EXISTS idx_lifecycle_dlq_agent_created
     ON lifecycle_dlq (agent_id, created_at DESC);
 
+-- Runtime user needs read/write on the new DLQ table.
+GRANT SELECT, INSERT, UPDATE, DELETE ON lifecycle_dlq TO mnemo;
+
 INSERT INTO schema_migrations (version) VALUES ('006_lifecycle_edges') ON CONFLICT DO NOTHING;
