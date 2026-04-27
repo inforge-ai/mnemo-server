@@ -499,7 +499,7 @@ async def store_from_text(
 ) -> dict:
     """
     Decompose free text into atoms, deduplicate, store, and link.
-    Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N}
+    Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N, "new_atom_ids": [UUID, ...]}
     """
     decomposer_result = await _decompose(text, domain_tags, remembered_on=remembered_on)
     decomposed = decomposer_result.atoms
