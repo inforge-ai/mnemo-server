@@ -1,4 +1,5 @@
 """Unit tests for lifecycle_service. LLM call is mocked; DB is real."""
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -240,3 +241,213 @@ async def test_evaluate_pair_returns_none_on_non_numeric_confidence_no_retry():
 
     assert result is None
     assert mock_client.messages.create.await_count == 1
+
+
+def _wrap(value):
+    """Sync value -> awaitable for use as a side_effect on a regular Mock."""
+    async def _coro():
+        return value
+    return _coro()
+
+
+def _eval_returning(payload):
+    return lambda **kw: _wrap(payload)
+
+
+# ── Edge writes ─────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_writes_supersedes_at_or_above_threshold(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        old_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+
+        payload = {
+            "relationship": "supersedes",
+            "confidence": 0.85,
+            "reasoning": "marks planned task as complete",
+            "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1},
+        }
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval_returning(payload)):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+
+        assert n == 1
+        edge = await conn.fetchrow(
+            "SELECT edge_type, weight, metadata FROM edges WHERE source_id=$1 AND target_id=$2",
+            new_id, old_id,
+        )
+        assert edge["edge_type"] == "supersedes"
+        assert edge["weight"] == pytest.approx(0.85, abs=1e-6)
+        meta = edge["metadata"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        assert meta["detector"] == "auto_lifecycle_v1"
+        assert meta["reasoning"].startswith("marks")
+        assert "cosine_at_detection" in meta
+
+
+@pytest.mark.asyncio
+async def test_writes_tension_with_at_or_above_threshold(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        old_id, _ = await _insert(conn, agent_id, "Newtonian gravity accurately predicts orbits", "semantic")
+        new_id, _ = await _insert(conn, agent_id, "Mercury's perihelion precesses anomalously", "semantic")
+
+        payload = {
+            "relationship": "tension_with",
+            "confidence": 0.70,
+            "reasoning": "anomaly without invalidation",
+            "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1},
+        }
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval_returning(payload)):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+
+        assert n == 1
+        edge = await conn.fetchrow(
+            "SELECT edge_type FROM edges WHERE source_id=$1 AND target_id=$2",
+            new_id, old_id,
+        )
+        assert edge["edge_type"] == "tension_with"
+
+
+@pytest.mark.asyncio
+async def test_writes_narrows_at_or_above_threshold(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        await _insert(conn, agent_id, "Tom uses Mattermost for all communication", "semantic")
+        new_id, _ = await _insert(conn, agent_id, "Tom uses Zulip for ops, Mattermost for personal", "semantic")
+
+        payload = {
+            "relationship": "narrows",
+            "confidence": 0.70,
+            "reasoning": "qualifies",
+            "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1},
+        }
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval_returning(payload)):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+
+        assert n == 1
+        n_narrows = await conn.fetchval(
+            "SELECT COUNT(*) FROM edges WHERE edge_type = 'narrows'"
+        )
+        assert n_narrows == 1
+
+
+# ── Threshold gating ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_supersedes_below_threshold_no_edge(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+
+        payload = {
+            "relationship": "supersedes", "confidence": 0.70,  # below 0.75
+            "reasoning": "low conf",
+            "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1},
+        }
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval_returning(payload)):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+        assert n == 0
+        assert await conn.fetchval("SELECT COUNT(*) FROM edges") == 0
+
+
+@pytest.mark.asyncio
+async def test_independent_no_edge(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        await _insert(conn, agent_id, "Tom is co-founder of Inforge LLC", "semantic")
+        new_id, _ = await _insert(conn, agent_id, "Inforge LLC was incorporated in Delaware in March 2023", "semantic")
+
+        payload = {
+            "relationship": "independent", "confidence": 0.95,
+            "reasoning": "facets",
+            "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1},
+        }
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval_returning(payload)):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+        assert n == 0
+
+
+# ── No candidates ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_no_candidates_skips_llm(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        called = {"n": 0}
+        async def _spy(**kw):
+            called["n"] += 1
+            return None
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_spy):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+        assert n == 0
+        assert called["n"] == 0
+
+
+# ── Idempotency: no competing edges ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_pair_with_existing_lifecycle_edge_skips_llm(pool, agent_with_address):
+    """Per spec: no competing edges. If any lifecycle edge already exists for
+    a pair (either direction), skip evaluation entirely — do not call the LLM."""
+    from mnemo.server.services import lifecycle_service, atom_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        old_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        # Pre-existing tension_with edge between the pair (reverse direction).
+        await atom_service.create_edge(
+            conn=conn, source_id=old_id, target_id=new_id,
+            edge_type="tension_with", weight=0.7, metadata={"detector": "manual"},
+        )
+        called = {"n": 0}
+        async def _spy(**kw):
+            called["n"] += 1
+            return None
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_spy):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+        assert n == 0
+        assert called["n"] == 0
+
+
+# ── DLQ ─────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_llm_permanent_failure_writes_dlq(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        cand_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+
+        # _evaluate_pair returns None (permanent failure post-retry).
+        async def _eval_none(**kw):
+            return None
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval_none):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+
+        assert n == 0
+        dlq = await conn.fetch(
+            "SELECT new_atom_id, candidate_id, agent_id FROM lifecycle_dlq"
+        )
+        assert len(dlq) >= 1
+        assert dlq[0]["new_atom_id"] == new_id
+        assert dlq[0]["candidate_id"] == cand_id
