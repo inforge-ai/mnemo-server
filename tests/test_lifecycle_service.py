@@ -464,6 +464,7 @@ async def test_store_background_invokes_lifecycle_when_enabled(pool, agent_with_
     from mnemo.server.services import atom_service, lifecycle_service
 
     agent_id = agent_with_address["id"]
+    operator_id = agent_with_address["operator"]["id"]
     captured = []
     async def _spy(conn, agent, new_id):
         captured.append(new_id)
@@ -473,12 +474,13 @@ async def test_store_background_invokes_lifecycle_when_enabled(pool, agent_with_
         store_id = uuid4()
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO store_jobs (store_id, agent_id) VALUES ($1, $2)",
-                store_id, agent_id,
+                "INSERT INTO store_jobs (store_id, agent_id, operator_id) VALUES ($1, $2, $3)",
+                store_id, agent_id, operator_id,
             )
         await atom_service.store_background(
             pool=pool, store_id=store_id, agent_id=agent_id,
             text="The sky over Boston was clear on April 26 2026.", domain_tags=["t"],
+            operator_id=operator_id,
         )
 
     assert len(captured) >= 1
@@ -493,6 +495,7 @@ async def test_store_background_skips_lifecycle_when_disabled(pool, agent_with_a
     monkeypatch.setattr(settings, "lifecycle_detection_enabled", False)
 
     agent_id = agent_with_address["id"]
+    operator_id = agent_with_address["operator"]["id"]
     called = {"n": 0}
     async def _spy(conn, agent, new_id):
         called["n"] += 1
@@ -502,12 +505,13 @@ async def test_store_background_skips_lifecycle_when_disabled(pool, agent_with_a
         store_id = uuid4()
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO store_jobs (store_id, agent_id) VALUES ($1, $2)",
-                store_id, agent_id,
+                "INSERT INTO store_jobs (store_id, agent_id, operator_id) VALUES ($1, $2, $3)",
+                store_id, agent_id, operator_id,
             )
         await atom_service.store_background(
             pool=pool, store_id=store_id, agent_id=agent_id,
             text="Random observation about the weather.", domain_tags=["t"],
+            operator_id=operator_id,
         )
 
     assert called["n"] == 0
