@@ -80,3 +80,39 @@ async def test_recall_does_not_surface_supersedes_in_lifecycle_edges(pool, agent
     assert old_id not in ids
     new_atom = next(a for a in result["atoms"] if a["id"] == new_id)
     assert (new_atom.get("lifecycle_edges") or []) == []
+
+
+@pytest.mark.asyncio
+async def test_recall_filters_superseded_even_via_graph_expansion(pool, agent_with_address):
+    """Graph expansion follows 'related' / 'summarises' / etc. edges and can
+    pull in atoms that are the target of a supersedes edge. The primary-rows
+    filter doesn't catch those — the post-merge filter does. Regression guard
+    for a real bug surfaced by eval Cases 1, 4, 9.
+    """
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        old_id = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        # supersedes (new -> old) means recall should hide old
+        await create_edge(
+            conn=conn, source_id=new_id, target_id=old_id,
+            edge_type="supersedes", weight=0.9,
+            metadata={"reasoning": "x", "detector": "auto_lifecycle_v1"},
+        )
+        # 'related' edge gives graph expansion a path back to the old atom
+        await create_edge(
+            conn=conn, source_id=new_id, target_id=old_id,
+            edge_type="related", weight=0.8,
+        )
+
+        result = await retrieve(
+            conn=conn, agent_id=agent_id, query="Zulip integration status",
+            domain_tags=None, min_confidence=0.0, min_similarity=0.0,
+            max_results=10, expand_graph=True, expansion_depth=1,
+            include_superseded=False, similarity_drop_threshold=None,
+            verbosity="standard", max_content_chars=None, max_total_tokens=None,
+        )
+
+    ids = [a["id"] for a in result["atoms"]]
+    assert new_id in ids
+    assert old_id not in ids, "graph expansion re-introduced superseded atom"

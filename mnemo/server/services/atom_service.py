@@ -916,6 +916,12 @@ async def retrieve(
     # Unified response: vector matches first, then graph expansions. Both carry
     # match_type so the caller can distinguish without needing separate lists.
     all_atoms = primary_responses + expanded_responses
+    # Graph expansion follows 'related'/'summarises'/etc. edges and can re-
+    # introduce atoms that are the target of an active supersedes edge. The
+    # primary-rows filter at line 814 didn't catch those. Apply once more
+    # post-merge so superseded atoms can't surface via either path.
+    if not include_superseded:
+        all_atoms = await _filter_superseded(conn, all_atoms)
     await _attach_lifecycle_edges(conn, all_atoms)
     return {
         "atoms": all_atoms,
