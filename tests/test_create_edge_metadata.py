@@ -36,7 +36,10 @@ async def test_create_edge_persists_metadata(pool, agent_with_address):
         row = await conn.fetchrow(
             "SELECT metadata FROM edges WHERE id = $1", result["id"],
         )
-        assert json.loads(row["metadata"]) == {
+        meta = row["metadata"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        assert meta == {
             "reasoning": "test",
             "detector": "auto_lifecycle_v1",
         }
