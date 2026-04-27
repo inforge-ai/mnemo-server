@@ -17,12 +17,19 @@ _RESERVED_RECORD_ATTRS = frozenset({
     "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
     "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
     "created", "msecs", "relativeCreated", "thread", "threadName",
-    "processName", "process", "taskName", "message",
+    "processName", "process", "taskName", "message", "asctime",
 })
 
 
 class JsonFormatter(logging.Formatter):
-    """Emit one JSON object per LogRecord. Extra kwargs are merged at top level."""
+    """Emit one JSON object per LogRecord.
+
+    The output keys are: timestamp / level / logger / message, plus an
+    optional `exception` field, plus any user-supplied keys passed via
+    `extra={...}` on the log call. Internal LogRecord attributes
+    (pathname, lineno, thread, etc.) are suppressed via
+    _RESERVED_RECORD_ATTRS so they never appear in the payload.
+    """
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {
@@ -48,6 +55,8 @@ def configure_logging(level: str = "INFO", stream: TextIO | None = None) -> None
     handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
+    # level is set on the root logger; handler level stays at NOTSET so
+    # all records pass through. Adding a second handler would inherit this.
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level)

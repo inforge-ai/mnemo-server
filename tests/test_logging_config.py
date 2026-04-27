@@ -2,8 +2,7 @@
 import io
 import json
 import logging
-
-import pytest
+import sys
 
 
 def test_json_formatter_emits_required_fields():
@@ -53,7 +52,6 @@ def test_json_formatter_includes_exception_info():
     try:
         raise ValueError("boom")
     except ValueError:
-        import sys
         record = logging.LogRecord(
             name="my.module", level=logging.ERROR, pathname=__file__,
             lineno=1, msg="failed", args=(), exc_info=sys.exc_info(),
@@ -85,3 +83,23 @@ def test_configure_logging_routes_records_through_json_formatter():
     finally:
         root.handlers = saved_handlers
         root.setLevel(saved_level)
+
+
+def test_json_formatter_does_not_leak_internal_attrs():
+    from mnemo.server.logging_config import JsonFormatter
+
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="my.module",
+        level=logging.DEBUG,
+        pathname=__file__,
+        lineno=99,
+        msg="internal attrs should be hidden",
+        args=(),
+        exc_info=None,
+    )
+    payload = json.loads(formatter.format(record))
+
+    internal_attrs = {"pathname", "lineno", "levelno", "thread", "msecs", "processName", "module"}
+    leaked = internal_attrs & payload.keys()
+    assert not leaked, f"Internal attrs leaked into JSON payload: {leaked}"
