@@ -242,91 +242,104 @@ async def detect_lifecycle_relationships(
 
     edges_written = 0
     for cand in candidates:
-        # Idempotency / no-competing-edges: skip if any lifecycle edge exists
-        # for this pair already (either direction). Saves an LLM call too.
-        if await _pair_has_lifecycle_edge(conn, new_atom_id, cand["id"]):
-            continue
+        try:
+            # Idempotency / no-competing-edges: skip if any lifecycle edge exists
+            # for this pair already (either direction). Saves an LLM call too.
+            if await _pair_has_lifecycle_edge(conn, new_atom_id, cand["id"]):
+                continue
 
-        t0 = time.monotonic()
-        existing_age_days = max(
-            0,
-            int((datetime.now(timezone.utc) - cand["created_at"]).total_seconds() / 86400),
-        )
-        result = await _evaluate_pair(
-            new_text=new_row["text_content"],
-            new_type=new_row["atom_type"],
-            existing_text=cand["text_content"],
-            existing_type=cand["atom_type"],
-            existing_age_days=existing_age_days,
-        )
-        latency_ms = int((time.monotonic() - t0) * 1000)
+            t0 = time.monotonic()
+            existing_age_days = max(
+                0,
+                int((datetime.now(timezone.utc) - cand["created_at"]).total_seconds() / 86400),
+            )
+            result = await _evaluate_pair(
+                new_text=new_row["text_content"],
+                new_type=new_row["atom_type"],
+                existing_text=cand["text_content"],
+                existing_type=cand["atom_type"],
+                existing_age_days=existing_age_days,
+            )
+            latency_ms = int((time.monotonic() - t0) * 1000)
 
-        if result is None:
-            await _record_dlq(conn, new_atom_id, cand["id"], agent_id, "lifecycle LLM permanent failure")
-            logger.warning(
+            if result is None:
+                await _record_dlq(conn, new_atom_id, cand["id"], agent_id, "lifecycle LLM permanent failure")
+                logger.warning(
+                    "lifecycle_check",
+                    extra={
+                        "event": "lifecycle_check",
+                        "new_atom_id": str(new_atom_id),
+                        "candidate_atom_id": str(cand["id"]),
+                        "agent_id": str(agent_id),
+                        "cosine": cand["similarity"],
+                        "edge_created": False,
+                        "latency_ms": latency_ms,
+                        "dlq": True,
+                    },
+                )
+                continue
+
+            rel = result["relationship"]
+            edge_type: str | None = None
+            if rel in _THRESHOLDS:
+                threshold = getattr(settings, _THRESHOLDS[rel])
+                if result["confidence"] >= threshold:
+                    edge_type = rel
+
+            edge_created = False
+            if edge_type is not None:
+                try:
+                    edge = await atom_service.create_edge(
+                        conn=conn,
+                        source_id=new_atom_id,
+                        target_id=cand["id"],
+                        edge_type=edge_type,
+                        weight=float(result["confidence"]),
+                        metadata={
+                            "reasoning": result["reasoning"],
+                            "detected_at": datetime.now(timezone.utc).isoformat(),
+                            "detector": DETECTOR_VERSION,
+                            "cosine_at_detection": cand["similarity"],
+                        },
+                    )
+                    if edge is not None:
+                        edges_written += 1
+                        edge_created = True
+                except Exception:
+                    logger.warning("lifecycle edge write failed", exc_info=True)
+
+            usage = result.get("usage") or {}
+            logger.info(
                 "lifecycle_check",
                 extra={
                     "event": "lifecycle_check",
                     "new_atom_id": str(new_atom_id),
                     "candidate_atom_id": str(cand["id"]),
                     "agent_id": str(agent_id),
+                    "new_atom_type": new_row["atom_type"],
+                    "existing_atom_type": cand["atom_type"],
                     "cosine": cand["similarity"],
-                    "edge_created": False,
+                    "llm_relationship": rel,
+                    "llm_confidence": result["confidence"],
+                    "llm_reasoning": result.get("reasoning"),
+                    "edge_created": edge_created,
+                    "edge_type": edge_type if edge_created else None,
                     "latency_ms": latency_ms,
-                    "dlq": True,
+                    "haiku_input_tokens": usage.get("input_tokens"),
+                    "haiku_output_tokens": usage.get("output_tokens"),
+                },
+            )
+        except Exception:
+            logger.warning(
+                "lifecycle candidate processing failed",
+                exc_info=True,
+                extra={
+                    "event": "lifecycle_candidate_failed",
+                    "new_atom_id": str(new_atom_id),
+                    "candidate_atom_id": str(cand["id"]),
+                    "agent_id": str(agent_id),
                 },
             )
             continue
-
-        rel = result["relationship"]
-        edge_type: str | None = None
-        if rel in _THRESHOLDS:
-            threshold = getattr(settings, _THRESHOLDS[rel])
-            if result["confidence"] >= threshold:
-                edge_type = rel
-
-        edge_created = False
-        if edge_type is not None:
-            try:
-                edge = await atom_service.create_edge(
-                    conn=conn,
-                    source_id=new_atom_id,
-                    target_id=cand["id"],
-                    edge_type=edge_type,
-                    weight=float(result["confidence"]),
-                    metadata={
-                        "reasoning": result["reasoning"],
-                        "detected_at": datetime.now(timezone.utc).isoformat(),
-                        "detector": DETECTOR_VERSION,
-                        "cosine_at_detection": cand["similarity"],
-                    },
-                )
-                if edge is not None:
-                    edges_written += 1
-                    edge_created = True
-            except Exception:
-                logger.warning("lifecycle edge write failed", exc_info=True)
-
-        usage = result.get("usage") or {}
-        logger.info(
-            "lifecycle_check",
-            extra={
-                "event": "lifecycle_check",
-                "new_atom_id": str(new_atom_id),
-                "candidate_atom_id": str(cand["id"]),
-                "agent_id": str(agent_id),
-                "new_atom_type": new_row["atom_type"],
-                "existing_atom_type": cand["atom_type"],
-                "cosine": cand["similarity"],
-                "llm_relationship": rel,
-                "llm_confidence": result["confidence"],
-                "llm_reasoning": result.get("reasoning"),
-                "edge_created": edge_created,
-                "edge_type": edge_type if edge_created else None,
-                "latency_ms": latency_ms,
-                "haiku_input_tokens": usage.get("input_tokens"),
-                "haiku_output_tokens": usage.get("output_tokens"),
-            },
-        )
 
     return edges_written
