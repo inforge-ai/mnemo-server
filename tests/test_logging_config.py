@@ -109,7 +109,14 @@ def test_json_formatter_does_not_leak_internal_attrs():
 
 @pytest.mark.asyncio
 async def test_lifespan_configures_json_logging(monkeypatch):
-    """The FastAPI lifespan must call configure_logging()."""
+    """The FastAPI lifespan must call configure_logging().
+
+    Sets a placeholder MNEMO_DATABASE_URL so Settings() instantiation
+    on import does not fail; the DB is never actually used because
+    create_pool / set_pool / close_pool are all monkeypatched below.
+    """
+    monkeypatch.setenv("MNEMO_DATABASE_URL", "postgresql://placeholder/test")
+
     from mnemo.server import main as main_module
     from mnemo.server.logging_config import JsonFormatter
 
