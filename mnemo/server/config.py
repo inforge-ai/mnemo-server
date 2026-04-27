@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # Testing
     sync_store_for_tests: bool = False  # if True, /remember awaits the store task inline
 
+    # Logging
+    log_level: str = "INFO"
+
     model_config = {"env_prefix": "MNEMO_", "env_file": ".env", "extra": "ignore"}
 
 
