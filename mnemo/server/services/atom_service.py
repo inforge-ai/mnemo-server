@@ -499,12 +499,12 @@ async def store_from_text(
 ) -> dict:
     """
     Decompose free text into atoms, deduplicate, store, and link.
-    Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N}
+    Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N, "new_atom_ids": [UUID, ...]}
     """
     decomposer_result = await _decompose(text, domain_tags, remembered_on=remembered_on)
     decomposed = decomposer_result.atoms
     if not decomposed:
-        return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0}
+        return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0, "new_atom_ids": []}
 
     # Log decomposer token usage if available
     if decomposer_result.usage and store_id and operator_id:
@@ -606,11 +606,14 @@ async def store_from_text(
         )
         edges_created += cross_edges
 
+    new_atom_ids = [stored_ids[i] for i in new_atom_indices]
+
     return {
         "atoms": [_row_to_atom_response(r) for r in stored_rows],
         "atoms_created": atoms_created,
         "edges_created": edges_created,
         "duplicates_merged": duplicates_merged,
+        "new_atom_ids": new_atom_ids,
     }
 
 
@@ -650,6 +653,19 @@ async def store_background(
                 result["atoms_created"],
                 store_id,
             )
+            # Post-store: lifecycle relationship detection. Best-effort,
+            # never raises, gated by feature flag.
+            from ..config import settings as _settings
+            if _settings.lifecycle_detection_enabled:
+                from .lifecycle_service import detect_lifecycle_relationships
+                for new_atom_id in result.get("new_atom_ids", []):
+                    try:
+                        await detect_lifecycle_relationships(conn, agent_id, new_atom_id)
+                    except Exception:
+                        logger.warning(
+                            "detect_lifecycle_relationships failed for atom %s", new_atom_id,
+                            exc_info=True,
+                        )
     except Exception:
         error_msg = traceback.format_exc()
         logger.error("Background store %s failed: %s", store_id, error_msg)
@@ -900,6 +916,13 @@ async def retrieve(
     # Unified response: vector matches first, then graph expansions. Both carry
     # match_type so the caller can distinguish without needing separate lists.
     all_atoms = primary_responses + expanded_responses
+    # Graph expansion follows 'related'/'summarises'/etc. edges and can re-
+    # introduce atoms that are the target of an active supersedes edge. The
+    # primary-rows filter at line 814 didn't catch those. Apply once more
+    # post-merge so superseded atoms can't surface via either path.
+    if not include_superseded:
+        all_atoms = await _filter_superseded(conn, all_atoms)
+    await _attach_lifecycle_edges(conn, all_atoms)
     return {
         "atoms": all_atoms,
         "total_retrieved": len(all_atoms),
@@ -926,6 +949,61 @@ async def _filter_superseded(
     )
     superseded_ids = {r["target_id"] for r in superseded}
     return [r for r in rows if r["id"] not in superseded_ids]
+
+
+async def _attach_lifecycle_edges(
+    conn: asyncpg.Connection,
+    atoms: list[dict],
+) -> None:
+    """Mutates `atoms` in-place: each atom gains a `lifecycle_edges` list with
+    any tension_with / narrows edges connecting it to other atoms. supersedes
+    is intentionally excluded — those targets are filtered upstream by
+    _filter_superseded and we don't surface the relationship metadata."""
+    if not atoms:
+        return
+    atom_ids = [a["id"] for a in atoms]
+    rows = await conn.fetch(
+        """
+        SELECT e.source_id, e.target_id, e.edge_type, e.weight,
+               e.metadata->>'reasoning' AS reasoning
+        FROM edges e
+        JOIN atoms src ON src.id = e.source_id
+        JOIN atoms tgt ON tgt.id = e.target_id
+        WHERE e.edge_type IN ('tension_with', 'narrows')
+          AND src.is_active = true
+          AND tgt.is_active = true
+          AND (e.source_id = ANY($1) OR e.target_id = ANY($1))
+        """,
+        atom_ids,
+    )
+    by_atom: dict = {aid: [] for aid in atom_ids}
+    seen: set = set()
+    for r in rows:
+        src, tgt, et = r["source_id"], r["target_id"], r["edge_type"]
+        # surface the edge on whichever endpoint is in the result set.
+        # de-dup on (this_atom, related_atom, edge_type).
+        if src in by_atom:
+            key = (src, tgt, et)
+            if key not in seen:
+                seen.add(key)
+                by_atom[src].append({
+                    "related_atom_id": tgt,
+                    "relationship": et,
+                    "reasoning": r["reasoning"],
+                    "weight": float(r["weight"]),
+                })
+        if tgt in by_atom:
+            key = (tgt, src, et)
+            if key not in seen:
+                seen.add(key)
+                by_atom[tgt].append({
+                    "related_atom_id": src,
+                    "relationship": et,
+                    "reasoning": r["reasoning"],
+                    "weight": float(r["weight"]),
+                })
+    for atom in atoms:
+        atom["lifecycle_edges"] = by_atom.get(atom["id"], [])
 
 
 async def get_atom(
@@ -961,11 +1039,12 @@ async def create_edge(
     target_id: UUID,
     edge_type: str,
     weight: float,
+    metadata: dict | None = None,
 ) -> dict | None:
     row = await conn.fetchrow(
         """
-        INSERT INTO edges (source_id, target_id, edge_type, weight)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO edges (source_id, target_id, edge_type, weight, metadata)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
         RETURNING id, source_id, target_id, edge_type, weight
         """,
@@ -973,6 +1052,7 @@ async def create_edge(
         target_id,
         edge_type,
         weight,
+        json.dumps(metadata) if metadata is not None else None,
     )
     return dict(row) if row else None
 

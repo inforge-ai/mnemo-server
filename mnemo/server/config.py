@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     # Testing
     sync_store_for_tests: bool = False  # if True, /remember awaits the store task inline
 
+    # Lifecycle relationship detection (docs/episodic_suppression-tension.md).
+    # Detection band [low, high) excludes off-topic pairs and dedup-band pairs.
+    # Asymmetric thresholds: supersedes is destructive (silently retires an
+    # atom), so it requires more LLM confidence than the additive types.
+    lifecycle_detection_enabled: bool = False
+    lifecycle_band_low: float = 0.50
+    lifecycle_band_high: float = 0.90
+    lifecycle_candidate_limit: int = 5
+    lifecycle_llm_timeout_seconds: float = 5.0
+    supersedes_threshold: float = 0.75
+    tension_threshold: float = 0.65
+    narrows_threshold: float = 0.65
     # Logging
     log_level: str = "INFO"
 

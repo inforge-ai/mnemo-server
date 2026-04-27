@@ -28,6 +28,7 @@ if not _test_url:
     )
 os.environ["MNEMO_DATABASE_URL"] = _test_url
 os.environ.setdefault("MNEMO_SYNC_STORE_FOR_TESTS", "true")
+os.environ.setdefault("MNEMO_LIFECYCLE_DETECTION_ENABLED", "true")
 
 # Set a known admin key for tests
 TEST_ADMIN_KEY = "test-admin-key-for-rbac-tests"
@@ -60,6 +61,7 @@ _CLEAN = """
 DELETE FROM agent_trust;
 DELETE FROM capabilities;
 DELETE FROM snapshot_atoms;
+DELETE FROM lifecycle_dlq;
 DELETE FROM edges;
 DELETE FROM views;
 DELETE FROM store_failures;
