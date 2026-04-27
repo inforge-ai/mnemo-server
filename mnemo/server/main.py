@@ -8,13 +8,17 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .config import settings
 from .database import create_pool, close_pool, set_pool
+from .logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging(level=settings.log_level)
+
     from .embeddings import warmup
     await asyncio.get_event_loop().run_in_executor(None, warmup)
 
@@ -23,7 +27,6 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("ANTHROPIC_API_KEY not set — falling back to regex decomposer")
 
-    from .config import settings
     if not settings.admin_key:
         logger.warning("MNEMO_ADMIN_KEY not set — admin endpoints will be inaccessible")
 

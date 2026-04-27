@@ -4,6 +4,8 @@ import json
 import logging
 import sys
 
+import pytest
+
 
 def test_json_formatter_emits_required_fields():
     from mnemo.server.logging_config import JsonFormatter
@@ -103,3 +105,57 @@ def test_json_formatter_does_not_leak_internal_attrs():
     internal_attrs = {"pathname", "lineno", "levelno", "thread", "msecs", "processName", "module"}
     leaked = internal_attrs & payload.keys()
     assert not leaked, f"Internal attrs leaked into JSON payload: {leaked}"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_configures_json_logging(monkeypatch):
+    """The FastAPI lifespan must call configure_logging()."""
+    from mnemo.server import main as main_module
+    from mnemo.server.logging_config import JsonFormatter
+
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    saved_level = root.level
+    root.handlers = []
+    root.setLevel(logging.WARNING)
+
+    called = {"count": 0}
+    real_configure = main_module.configure_logging
+
+    def spy(*args, **kwargs):
+        called["count"] += 1
+        return real_configure(*args, **kwargs)
+
+    monkeypatch.setattr(main_module, "configure_logging", spy)
+
+    async def _noop_pool():
+        class _Sentinel:
+            async def close(self):
+                return None
+        return _Sentinel()
+
+    async def _noop_close():
+        return None
+
+    monkeypatch.setattr(main_module, "create_pool", _noop_pool)
+    monkeypatch.setattr(main_module, "close_pool", _noop_close)
+    monkeypatch.setattr(main_module, "set_pool", lambda p: None)
+
+    async def _noop(*a, **kw):
+        return None
+    monkeypatch.setattr("mnemo.server.embeddings.warmup", lambda: None)
+    monkeypatch.setattr("mnemo.server.services.migration_service.run_migrations", _noop)
+
+    async def _consolidation_noop(pool):
+        return None
+    monkeypatch.setattr(
+        "mnemo.server.services.consolidation.consolidation_loop", _consolidation_noop,
+    )
+
+    try:
+        async with main_module.lifespan(main_module.app):
+            assert called["count"] == 1
+            assert any(isinstance(h.formatter, JsonFormatter) for h in logging.getLogger().handlers)
+    finally:
+        root.handlers = saved_handlers
+        root.setLevel(saved_level)
