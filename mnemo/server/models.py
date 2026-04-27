@@ -45,6 +45,17 @@ class StoreJobResponse(BaseModel):
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
 
+# ── Lifecycle edges (surfaced in recall responses) ──
+
+class LifecycleEdge(BaseModel):
+    """Surfaced in recall responses for atoms that participate in
+    tension_with or narrows relationships. supersedes edges are filtered
+    server-side and never surface here."""
+    related_atom_id: UUID
+    relationship: Literal["tension_with", "narrows"]
+    reasoning: str | None = None
+    weight: float
+
 # ── Atoms (power-user interface) ──
 
 class AtomCreate(BaseModel):
@@ -86,6 +97,10 @@ class AtomResponse(BaseModel):
     # Distinct from created_at — that's when mnemo stored the atom. NULL for
     # semantic/procedural atoms and for episodic atoms stored before 4b.
     remembered_on: Optional[datetime] = None
+    # Lifecycle relationships (tension_with / narrows) — populated by the
+    # recall path when the atom participates in such edges. supersedes edges
+    # are filtered server-side and never appear here.
+    lifecycle_edges: list[LifecycleEdge] | None = None
 
 # ── Retrieval ──
 
@@ -140,7 +155,8 @@ class EdgeCreate(BaseModel):
     target_id: UUID
     edge_type: Literal[
         "supports", "contradicts", "depends_on", "generalises",
-        "specialises", "motivated_by", "evidence_for", "supersedes", "summarises", "related"
+        "specialises", "motivated_by", "evidence_for", "supersedes",
+        "summarises", "related", "tension_with", "narrows",
     ]
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
 
