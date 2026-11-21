@@ -238,6 +238,58 @@ async def _whoami(base_url, api_key):
     click.echo()
 
 
+# ── Database migrations (direct DB connection) ────────────────────────────────
+
+def _migration_database_url(explicit: str | None) -> str:
+    """MNEMO_MIGRATION_DATABASE_URL (a role allowed to run DDL), falling back
+    to MNEMO_DATABASE_URL. Reads .env from the working directory if present."""
+    if explicit:
+        return explicit
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=False)
+    except ImportError:  # pragma: no cover
+        pass
+    url = os.environ.get("MNEMO_MIGRATION_DATABASE_URL") or os.environ.get("MNEMO_DATABASE_URL")
+    if not url:
+        click.echo("Set MNEMO_MIGRATION_DATABASE_URL or MNEMO_DATABASE_URL.", err=True)
+        sys.exit(1)
+    return url
+
+
+@cli.command("migrate")
+@click.option("--database-url", default=None, help="Override the database URL.")
+@click.option("--dry-run", is_flag=True, default=False, help="List pending migrations without applying.")
+@click.option("--to", "to_version", default=None, help="Stop after this version (inclusive), e.g. 007_deactivation_tracking.")
+def migrate(database_url, dry_run, to_version):
+    """Apply pending migrations/*.sql in filename order, one transaction each."""
+    import asyncpg
+
+    from mnemo.server.services.migration_service import apply_pending
+
+    url = _migration_database_url(database_url)
+
+    async def _go():
+        conn = await asyncpg.connect(url)
+        try:
+            return await apply_pending(conn, dry_run=dry_run, to=to_version)
+        finally:
+            await conn.close()
+
+    try:
+        versions = _run(_go())
+    except Exception as exc:
+        click.echo(f"Migration failed: {type(exc).__name__}: {exc}", err=True)
+        sys.exit(1)
+
+    if not versions:
+        click.echo("No pending migrations.")
+        return
+    verb = "Pending" if dry_run else "Applied"
+    for v in versions:
+        click.echo(f"{verb}: {v}")
+
+
 # ── Admin commands (API-based) ─────────────────────────────────────────────────
 
 @cli.group()
