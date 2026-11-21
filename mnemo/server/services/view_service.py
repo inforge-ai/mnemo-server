@@ -26,6 +26,7 @@ from uuid import UUID
 
 import asyncpg
 
+from ..config import settings
 from ..embeddings import encode
 from .atom_service import _row_to_atom_response, composite_score
 
@@ -439,7 +440,8 @@ async def recall_shared(
         max_results * 2,
     )
 
-    rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
+    if settings.recall_confidence_floor_enabled:
+        rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
 
     # Episodic recency demotion (Ticket 4b), same as the agent-own recall path.
     from .atom_service import apply_episodic_recency_demotion
@@ -498,7 +500,6 @@ async def recall_shared(
     # Score graph-expanded atoms as source_score * edge_weight * discount, same
     # as the agent-own recall path in atom_service.retrieve. Guarantees graph
     # atoms never outrank their source.
-    from ..config import settings
     source_scores = {a["id"]: a["relevance_score"] for a in primary_responses}
     discount = settings.graph_recall_edge_discount
     ceiling = max_results * settings.graph_recall_expansion_ceiling_multiplier
@@ -588,8 +589,11 @@ async def recall_all_shared(
 
     filtered = []
     for r in rows:
-        if r["similarity"] >= min_similarity and r["confidence_effective"] >= 0.05:
-            filtered.append(r)
+        if r["similarity"] < min_similarity:
+            continue
+        if settings.recall_confidence_floor_enabled and r["confidence_effective"] < 0.05:
+            continue
+        filtered.append(r)
     filtered = filtered[:max_results]
 
     atom_ids = [r["id"] for r in filtered]

@@ -775,7 +775,7 @@ async def retrieve(
     embedding = await encode(query, prompt_name="query")
     over_fetch = max_results * 2
 
-    # Fetch top candidates using the ivfflat index (ORDER BY distance ASC).
+    # Fetch top candidates by exact cosine distance over the agent's atoms.
     # Similarity floor, confidence filter, and composite ranking are applied
     # in Python to avoid naming conflicts with pg_trgm's similarity() function.
     rows = await conn.fetch(
@@ -807,7 +807,8 @@ async def retrieve(
 
     # Apply similarity floor, confidence filter, compute composite score, sort.
     rows = [r for r in rows if r["cosine_sim"] >= min_similarity]
-    rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
+    if settings.recall_confidence_floor_enabled:
+        rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
 
     # Filter superseded atoms unless requested
     if not include_superseded:
