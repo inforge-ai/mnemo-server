@@ -107,16 +107,16 @@ class AtomResponse(BaseModel):
 class RetrieveRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     domain_tags: Optional[list[str]] = None
-    min_confidence: float = 0.1
+    min_confidence: float = Field(default=0.1, ge=0.0, le=1.0)
     min_similarity: float = Field(
         default=0.25,
         ge=0.0,
         le=1.0,
         description="Minimum cosine similarity floor (calibrated for EmbeddingGemma-300M).",
     )
-    max_results: int = 10
+    max_results: int = Field(default=10, ge=1, le=50)
     expand_graph: bool = True
-    expansion_depth: int = 1  # Ticket 2 scopes graph expansion to 1-hop.
+    expansion_depth: int = Field(default=1, ge=0, le=2)  # Ticket 2 scopes graph expansion to 1-hop.
     include_superseded: bool = False
     similarity_drop_threshold: Optional[float] = Field(
         default=0.15,

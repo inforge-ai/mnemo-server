@@ -416,6 +416,10 @@ async def _create_similarity_edges(
     edges_created = 0
     for i in range(len(stored_ids)):
         for j in range(i + 1, len(stored_ids)):
+            # Two decomposed atoms can dedup into the same existing atom;
+            # never link an atom to itself.
+            if stored_ids[i] == stored_ids[j]:
+                continue
             sim = _cosine_sim(embeddings[i], embeddings[j])
             if sim > threshold:
                 try:
@@ -530,7 +534,9 @@ async def store_from_text(
         except Exception:
             logger.warning("Failed to log decomposer usage for store %s", store_id, exc_info=True)
 
-    decomposer_version = "haiku_v1" if os.environ.get("ANTHROPIC_API_KEY") else "regex_v1"
+    # Record what actually ran: the LLM path returns usage; the regex fallback
+    # (no API key, API error or unparseable response) does not.
+    decomposer_version = "haiku_v1" if decomposer_result.usage else "regex_v1"
 
     stored_ids: list[UUID] = []
     stored_rows: list[asyncpg.Record] = []
@@ -721,7 +727,7 @@ async def store_explicit(
         alpha, beta = (4.0, 2.0)
 
     embedding = await encode(text_content)
-    duplicate = await _check_duplicate(conn, agent_id, embedding)
+    duplicate = await _check_duplicate(conn, agent_id, embedding, atom_type)
 
     if duplicate:
         await _merge_duplicate(
