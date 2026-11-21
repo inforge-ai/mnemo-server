@@ -1,0 +1,29 @@
+{
+  "id": "planned_then_done",
+  "description": "A plan, then its completion stored a month later: recall for status returns the completion first and not the plan.",
+  "failure_pattern": "planned state outranks completed state",
+  "steps": [
+    {
+      "text": "We plan to migrate the Osprey billing service to Postgres next month.",
+      "remembered_on": "2026-09-01T10:00:00Z"
+    },
+    {
+      "text": "The Osprey billing service migration to Postgres is done.",
+      "remembered_on": "2026-10-03T10:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "Status of the Osprey billing service Postgres migration"
+  },
+  "assert": {
+    "recall_top_match": "done|complete|finished|migrated",
+    "recall_none_match": [
+      "\\bplan(s|ned|ning)?\\b"
+    ]
+  },
+  "xfail": {
+    "phase": "phase TBD",
+    "fix": "deterministic planned->done supersession; today lifecycle detection suppresses the plan in ~3 of 4 runs",
+    "strict": false
+  }
+}

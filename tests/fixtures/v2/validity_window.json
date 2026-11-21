@@ -1,0 +1,23 @@
+{
+  "id": "validity_window",
+  "description": "'This week only' is not returned as a current fact when recalled two months later.",
+  "failure_pattern": "temporary state read as permanent",
+  "steps": [
+    {
+      "text": "This week only, the Larkspur team standup is moved to 11:00.",
+      "remembered_on": "2026-09-07T08:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "What time is the Larkspur team standup?"
+  },
+  "assert": {
+    "recall_none_match": [
+      "11:00|\\b11 ?am\\b"
+    ]
+  },
+  "xfail": {
+    "phase": "phase TBD",
+    "fix": "atom schema v2 validity windows ('this week only' keeps its frame and expires)"
+  }
+}

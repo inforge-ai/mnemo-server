@@ -1,0 +1,26 @@
+{
+  "id": "updated_number",
+  "description": "'score is 76.1%' then 'score is 82.1%, the earlier figure was wrong': recall returns 82.1%.",
+  "failure_pattern": "corrected value does not supersede the old one",
+  "steps": [
+    {
+      "text": "The Halyard model's benchmark score is 76.1%.",
+      "remembered_on": "2026-10-01T12:00:00Z"
+    },
+    {
+      "text": "The Halyard model's benchmark score is 82.1%; the earlier 76.1% figure was wrong.",
+      "remembered_on": "2026-10-08T12:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "What is the Halyard model's benchmark score?"
+  },
+  "assert": {
+    "recall_top_match": "82\\.1",
+    "recall_none_match": [
+      "^(?!.*(wrong|incorrect|earlier|previous|correct|82\\.1)).*76\\.1"
+    ]
+  },
+  "xfail": null,
+  "note": "Failed at duplicate_similarity_threshold=0.90 (the corrected atom merged into the old one); passes at the Phase 0 production setting 0.97."
+}
