@@ -179,4 +179,170 @@ The alpha values have blown far past any sensible range. Alpha growth is unbound
 - `confidence_alpha` reaches 198k. That is out of scope for Phase 0, but it bears on the confidence-floor change and on recalibration.
 - The production port is bound to `0.0.0.0` through an uncommitted compose change.
 
-**STOP: gate G1.** Waiting for Tom before starting the backup (item 2).
+**Gate G1:** approved by Tom on 2026-11-21, with amendments (recorded under G1 decisions below).
+
+---
+
+## G1 decisions (Tom, 2026-11-21)
+- **5c:** restore only `source_type='direct_experience'`. Arc atoms stay inactive with `deactivation_reason='arc'`.
+- **Deletion caveat:** resolved. The non-merged inactive atoms are exactly the all-time decayed count, 6,725, so none were deliberately deleted. At G2, give per-agent counts split by merged / decayed.
+- **New 5c-bis:** count active `consolidation` atoms per non-eval agent. At G2, propose deactivating them with `deactivation_reason='consolidation_copy'`.
+- **5e:** drop `idx_atoms_embedding` and do **not** create an HNSW index. Remove `ivfflat.probes`. Confirm per-agent latency with EXPLAIN ANALYZE.
+- `mnemo migrate` ignores `schema_migrations` rows that match no file.
+- The docker-compose port binding is unchanged; Tom will decide.
+- Agents owned by others (`nels-*`, `eaara`): *"include from the restore"*. This is ambiguous (include *in* or exclude *from*), so G2 shows both totals.
+
+---
+
+## 2. Backup
+
+| item | value |
+|---|---|
+| file | `~/backups/mnemo-prod-2026-11-21.dump` (custom format, mode 600) |
+| size | 139,474,330 bytes (133 MB); database size 394 MB |
+| sha256 | `46a93f4433d4ccd873db0c491a21add89c78408dd4b0a059bf696ef7531ae7ac` |
+| `pg_restore --list` | 18 TABLE DATA entries, one for every table in `public` |
+| dumped as | role `mnemo`, which can read every table; took 18 s |
+
+| rows | production at dump time | restored copy |
+|---|---:|---:|
+| atoms | 39,672 | 39,672 |
+| edges | 44,455 | 44,455 |
+| agents | 25 | 25 |
+
+- **Differs from spec:** the restore into `mnemo_eval` on the host Postgres is **not done**.
+  - Role `mnemo` has neither CREATEDB nor superuser, every table is owned by `postgres`, and sudo needs a password.
+  - Instead, the dump was restored into a local container (`pgvector/pgvector:0.8.2-pg16`, bound to 127.0.0.1:55432) as `mnemo_prodcopy`. Its counts are in the table above.
+  - That copy is used only for rehearsals. It holds private data, so it gets dropped after Phase 0.
+  - **Needed from Tom:** a superuser step to create `mnemo_eval` on the host (commands under "Needed from Tom" below).
+- Edges went 44,453 → 44,455 between the baseline and the dump (live writes).
+
+---
+
+## 3, 4, 6, 7. Code (branch `v2/phase0`)
+
+| commit | item |
+|---|---|
+| `9f1cd58` | 3: consolidation step flags and recall confidence floor flag, all default off |
+| `35e5cd1` | 4 and 5e (code): `mnemo migrate`, startup check, migrations 007 and 008, `ivfflat.probes` removed |
+| `07f0f09` | 7: four small fixes |
+| `00f8676` | 6: v2 regression fixtures |
+
+Notes:
+- **Item 3:** `recall_all_shared` had its own hardcoded `>= 0.05` floor. It is now behind the same flag.
+- **Item 3, production config:** `MNEMO_DUPLICATE_SIMILARITY_THRESHOLD=0.97` is not set yet. It goes into `.env` at 5f.
+- **Item 4:**
+  - `mnemo migrate [--dry-run] [--to VERSION] [--database-url URL]`. `--to` lets 5a apply only 007, leaving 008 for 5e.
+  - Startup fails while migrations are pending (`MNEMO_REQUIRE_MIGRATIONS`, default true).
+  - The legacy `002` and `003` rows came from those migrations recording themselves under short names.
+- **Item 5e (code):** `008_drop_ivfflat_index.sql`. `schema.sql` keeps the index as part of the 001–005 baseline, and 008 drops it.
+
+### Schema check (item 4)
+- Built a scratch database from `schema.sql` plus `mnemo migrate --to 006_lifecycle_edges`. Its `pg_dump --schema-only` matches production apart from **column order**:
+  - Production added `atoms.remembered_on` with `ALTER TABLE`, so it is the last column.
+  - `schema.sql` declares it mid-table.
+  - This is harmless.
+- Grants are identical.
+- 006 is idempotent. Re-running it on the production copy only raised "already exists, skipping" notices.
+- Dry run against production: pending `007_deactivation_tracking` and `008_drop_ivfflat_index`.
+- Rehearsal on the copy: 007 deleted 318 self-loops (edges 44,455 → 44,137), and 008 dropped the index.
+- The diff after 5a gets repeated against production itself.
+
+### Tests
+- Full suite against a fresh `mnemo_test` built with `schema.sql` plus `mnemo migrate`: **435 passed, 1 failed**, 17 eval tests deselected.
+- The failure, `test_stats_enrichment.py::test_stats_includes_date_range`, is pre-existing and LLM-dependent. It fails on unmodified code too, and passes when run alone. The test stores "First memory stored today.", which Haiku sometimes decomposes into zero atoms.
+- **Pre-existing problems (not fixed):**
+  - `tests/test_client.py` imports `mnemo.client`, which moved out of the repo in `eda7ad3`, so the module fails to collect. Excluded with `--ignore`.
+  - The suite loads `.env`, so the decomposer and lifecycle tests call the live Anthropic API using the production key.
+- New tests:
+  - `test_consolidation_defaults.py` (4)
+  - `test_migrations.py` (8)
+  - `test_phase0_small_fixes.py` (16)
+
+### Regression fixtures (item 6)
+Eight synthetic cases in `tests/fixtures/v2/`, run with `pytest -m eval tests/eval/test_v2_fixtures.py` at the Phase 0 dedup threshold of 0.97. Each was run 2–6 times against the live decomposer.
+
+| case | today |
+|---|---|
+| attribution_addressee | pass |
+| attribution_own_state | pass |
+| abbreviation_verbatim | pass |
+| negation_pair | pass |
+| updated_number | pass at 0.97; **failed at 0.90**, where the corrected atom merged into the old one |
+| read_your_writes | xfail (strict) |
+| validity_window | xfail (strict) |
+| planned_then_done | xfail (**non-strict**): fails about 1 run in 4, when lifecycle detection doesn't suppress the plan |
+
+- The xfail `phase` is "phase TBD". `mnemo-v2-plan.md` isn't in the repo, so Tom needs to assign phases.
+- The attribution cases pass when the speaker is labelled in the text. They guard against regressions but don't reproduce an unlabelled case.
+
+---
+
+## 5. Rehearsal on the production copy (preview, not the G2 numbers)
+These numbers come from the dump taken 2026-11-21. The real G2 dry run runs against production in the data window.
+
+### 5b classification
+| deactivation_reason | source_type | atoms |
+|---|---|---:|
+| merged | consolidation | 23,430 |
+| merged | direct_experience | 475 |
+| merged | arc | 21 |
+| arc | arc | 48 |
+| decay_or_deleted | direct_experience | 6,677 |
+
+The decayed and arc rows add up to 6,725. Merged arc atoms keep `merged` rather than `arc`.
+
+### 5c restore preview: inactive `direct_experience` atoms, non-eval active agents
+| agent | decayed (restore) | merged (stays inactive) |
+|---|---:|---:|
+| tapio | 679 | 3 |
+| toms-claude-desktop | 554 | 373 |
+| eaara | 499 | 10 |
+| clio | 487 | 20 |
+| illmarinen | 453 | 0 |
+| nels-claude-desktop | 177 | 24 |
+| amphion | 50 | 0 |
+| inforge-researcher | 18 | 0 |
+| nels-hermes-agent | 17 | 0 |
+| lloyd | 15 | 0 |
+| toms-claude-code | 4 | 0 |
+| agent1 | 3 | 0 |
+| **all** | **2,956** | **430** |
+
+Restore totals:
+- **Including** `nels-*` and `eaara`: 2,956.
+- **Excluding** them: 2,263 (693 fewer).
+
+### 5c-bis preview: active `consolidation` atoms, non-eval agents
+| agent | atoms |
+|---|---:|
+| clio | 28 |
+| tapio | 14 |
+| illmarinen | 6 |
+| toms-claude-desktop | 4 |
+| nels-claude-desktop | 2 |
+| inforge-researcher | 1 |
+| eaara | 1 |
+| **all** | **56** |
+
+### 5e latency
+- EXPLAIN ANALYZE on **production** (read-only, `ivfflat.probes=10`), clio's recall candidate query: the planner **does not use the ivfflat index**. It uses a bitmap scan on `idx_atoms_active` and a top-N sort, taking 9.7 ms. So dropping the index changes nothing for recall at today's sizes.
+- On the copy, retrieve's candidate query (LIMIT 20) per agent took:
+  - 0.6–11.6 ms with the index present.
+  - 0.1–7.4 ms after 008 and VACUUM ANALYZE.
+  - Every agent got the same row count both ways.
+- This gets re-measured on production after 5c and 5d.
+
+---
+
+## Needed from Tom before item 5
+1. **`mnemo_eval`:** run as a superuser:
+   ```
+   sudo -u postgres createdb -O postgres mnemo_eval
+   sudo -u postgres psql mnemo_eval -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; CREATE EXTENSION IF NOT EXISTS vector;'
+   sudo -u postgres pg_restore -d mnemo_eval --no-owner ~tompdavis/backups/mnemo-prod-2026-11-21.dump
+   ```
+   Or provide a role that can do it.
+2. **Migration role:** a `MNEMO_MIGRATION_DATABASE_URL` for a role that can run DDL on production, since the tables are owned by `postgres`. Otherwise run `mnemo migrate` with a superuser URL yourself.
+3. **Phase numbers** for the xfail fixtures (from `mnemo-v2-plan.md`).
+4. Whether `nels-*` and `eaara` are **in or out** of the 5c restore.
