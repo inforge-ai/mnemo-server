@@ -22,8 +22,7 @@
     ]
   },
   "xfail": {
-    "phase": "phase TBD",
-    "fix": "deterministic planned->done supersession; today lifecycle detection suppresses the plan in ~3 of 4 runs",
-    "strict": false
+    "phase": "phase 2",
+    "fix": "deterministic planned->done supersession"
   }
 }

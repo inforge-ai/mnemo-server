@@ -22,5 +22,15 @@
     ]
   },
   "xfail": null,
-  "note": "Failed at duplicate_similarity_threshold=0.90 (the corrected atom merged into the old one); passes at the Phase 0 production setting 0.97."
+  "dedup_thresholds": [
+    0.97,
+    0.9
+  ],
+  "xfail_at_threshold": {
+    "0.9": {
+      "phase": "phase 2",
+      "fix": "store-time dedup must not merge a corrected value into the value it corrects, at any threshold"
+    }
+  },
+  "note": "Guard for phase 2 at any dedup threshold. Passes at the Phase 0 production setting 0.97; at 0.90 the corrected atom merges into the old one."
 }

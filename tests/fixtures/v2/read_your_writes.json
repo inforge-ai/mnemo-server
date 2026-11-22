@@ -17,7 +17,7 @@
     ]
   },
   "xfail": {
-    "phase": "phase TBD",
+    "phase": "phase 1",
     "fix": "synchronous or inspectable writes: remember returns the stored atoms, or recall waits on pending stores for the agent"
   }
 }

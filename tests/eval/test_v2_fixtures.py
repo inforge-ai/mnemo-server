@@ -14,7 +14,8 @@ and run against each atom's text separately:
 Cases the current system fails carry "xfail": {"phase": ..., "fix": ...} and
 run as xfail(strict=True), so a fix that makes one pass must also flip it.
 "strict": false marks a case that fails only some of the time (LLM
-nondeterminism); flip it to strict once the fix lands.
+nondeterminism). Cases run at the Phase 0 production dedup threshold unless
+they list `dedup_thresholds`; `xfail_at_threshold` sets per-threshold xfails.
 
 Hits the live decomposer (and lifecycle LLM): run with `pytest -m eval`.
 Fixture text is synthetic. Never copy stored atoms or raw feedback here.
@@ -42,18 +43,29 @@ pytestmark = [
 ]
 
 
+PHASE0_DEDUP_THRESHOLD = 0.97  # MNEMO_DUPLICATE_SIMILARITY_THRESHOLD in production
+
+
+def _xfail_mark(x: dict):
+    return pytest.mark.xfail(
+        strict=x.get("strict", True),
+        reason=f"{x.get('phase', 'phase ?')}: {x.get('fix', '')}",
+    )
+
+
 def _load_cases():
+    """One param per (case, dedup threshold). `dedup_thresholds` defaults to
+    the Phase 0 production setting; `xfail_at_threshold` overrides `xfail`
+    for a given threshold (keys are str(float), e.g. "0.9")."""
     params = []
     for path in sorted(FIXTURE_DIR.glob("*.json")):
         case = json.loads(path.read_text())
-        marks = []
-        if case.get("xfail"):
-            x = case["xfail"]
-            marks.append(pytest.mark.xfail(
-                strict=x.get("strict", True),
-                reason=f"{x.get('phase', 'phase ?')}: {x.get('fix', '')}",
-            ))
-        params.append(pytest.param(case, id=case["id"], marks=marks))
+        thresholds = case.get("dedup_thresholds", [PHASE0_DEDUP_THRESHOLD])
+        for t in thresholds:
+            x = case.get("xfail_at_threshold", {}).get(str(float(t)), case.get("xfail"))
+            marks = [_xfail_mark(x)] if x else []
+            pid = case["id"] if len(thresholds) == 1 else f"{case['id']}@{t}"
+            params.append(pytest.param(case, t, id=pid, marks=marks))
     return params
 
 
@@ -70,15 +82,14 @@ async def _wait_for_store(client, store_id: str, headers: dict, timeout: float =
         await asyncio.sleep(0.25)
 
 
-@pytest.mark.parametrize("case", _load_cases())
-async def test_v2_fixture(case, client, agent_with_key, pool, monkeypatch):
+@pytest.mark.parametrize("case, dedup_threshold", _load_cases())
+async def test_v2_fixture(case, dedup_threshold, client, agent_with_key, pool, monkeypatch):
     agent_data, agent_key, headers = agent_with_key
     aid = str(agent_data["id"])
 
     sync = case.get("sync_store", True)
     monkeypatch.setattr(settings, "sync_store_for_tests", sync)
-    # Match the Phase 0 production setting (MNEMO_DUPLICATE_SIMILARITY_THRESHOLD).
-    monkeypatch.setattr(settings, "duplicate_similarity_threshold", 0.97)
+    monkeypatch.setattr(settings, "duplicate_similarity_threshold", dedup_threshold)
 
     store_ids = []
     for step in case["steps"]:

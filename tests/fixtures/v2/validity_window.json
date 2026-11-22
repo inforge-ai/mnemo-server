@@ -17,7 +17,7 @@
     ]
   },
   "xfail": {
-    "phase": "phase TBD",
+    "phase": "phase 2",
     "fix": "atom schema v2 validity windows ('this week only' keeps its frame and expires)"
   }
 }
