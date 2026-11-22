@@ -1,4 +1,4 @@
--- Migration 008: drop the ivfflat embedding index (v2 Phase 0)
+-- Migration 009: drop the ivfflat embedding index (v2 Phase 0)
 --
 -- The ivfflat index (lists=100, probes=10) scans ~10% of lists across all
 -- agents and then applies the per-agent filter, so recall for smaller agents

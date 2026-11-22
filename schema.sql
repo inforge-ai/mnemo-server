@@ -140,7 +140,7 @@ CREATE TABLE atoms (
 CREATE INDEX idx_atoms_agent_id ON atoms (agent_id);
 CREATE INDEX idx_atoms_agent_type ON atoms (agent_id, atom_type);
 CREATE INDEX idx_atoms_domain_tags ON atoms USING GIN (domain_tags);
--- Baseline (001–005) state; dropped by migrations/008_drop_ivfflat_index.sql.
+-- Baseline (001–005) state; dropped by migrations/009_drop_ivfflat_index.sql.
 CREATE INDEX idx_atoms_embedding ON atoms USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 CREATE INDEX idx_atoms_active ON atoms (agent_id, is_active) WHERE is_active = true;
