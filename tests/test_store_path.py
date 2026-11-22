@@ -259,8 +259,9 @@ async def test_sweep_marks_stuck_jobs_failed(client, agent, pool):
 async def test_run_store_reports_timings(client, agent, pool):
     from mnemo.server.services import store_service
     async with pool.acquire() as conn:
+        op = await conn.fetchval("SELECT operator_id FROM agents WHERE id = $1", UUID(agent["id"]))
         src = await store_service.create_store(
-            conn, agent_id=UUID(agent["id"]), operator_id=None, agent_name="test-agent", agent_metadata={},
+            conn, agent_id=UUID(agent["id"]), operator_id=op, agent_name="test-agent", agent_metadata={},
             text=NOTE, domain_tags=[], remembered_on=None, speaker=None, addressee=None, channel=None,
             origin_class="unspecified",
         )
