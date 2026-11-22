@@ -19,7 +19,7 @@ router = APIRouter(tags=["views"])
 async def create_view(agent_id: str, body: ViewCreate, auth: AuthContext = Depends(require_agent)):
     """Create a snapshot view — freezes matching atom IDs at this moment."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -36,7 +36,7 @@ async def create_view(agent_id: str, body: ViewCreate, auth: AuthContext = Depen
 @router.get("/agents/{agent_id}/views", response_model=list[ViewResponse])
 async def list_views(agent_id: str, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -48,7 +48,7 @@ async def list_views(agent_id: str, auth: AuthContext = Depends(require_agent)):
 async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, auth: AuthContext = Depends(require_agent)):
     """Search across all views shared with this agent."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
 
     from_agent_id = None
@@ -81,7 +81,7 @@ async def recall_all_shared_endpoint(agent_id: str, body: SharedRecallRequest, a
 async def export_skill(agent_id: str, view_id: UUID, auth: AuthContext = Depends(require_agent)):
     """Export a snapshot view as an α=1 skill package with rendered markdown."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -111,7 +111,7 @@ async def recall_shared(
     Graph expansion is scope-bounded to the snapshot's atoms only.
     """
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -147,7 +147,7 @@ async def recall_shared(
 async def list_shared_views(agent_id: str, auth: AuthContext = Depends(require_agent)):
     """List all views shared with this agent via active capabilities."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)

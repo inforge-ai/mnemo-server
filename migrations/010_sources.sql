@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS sources (
                       'user_stated', 'professional', 'measurement',
                       'document', 'agent_inference', 'unspecified')),
     remembered_on TIMESTAMPTZ,
+    domain_tags   TEXT[] NOT NULL DEFAULT '{}',   -- request tags, for /retry
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_store ON sources (store_id);

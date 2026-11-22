@@ -11,10 +11,14 @@ class Settings(BaseSettings):
     # "fake" is a deterministic hashed bag-of-words embedder for the unit
     # test suite (no model download, no network). Never use it in production.
     embedding_backend: Literal["sentence_transformers", "fake"] = "sentence_transformers"
-    # Decomposer selection. "auto" = Anthropic when ANTHROPIC_API_KEY is set,
-    # else regex (pre-Phase-1 behaviour). "fake" = scripted test decomposer
-    # (tests/conftest.py), regex when nothing is scripted.
-    decomposer_provider: Literal["auto", "anthropic", "regex", "fake"] = "auto"
+    # Decomposer v2 (docs/phase1-design.md §4). No silent fallback: the
+    # server refuses to start with "anthropic" and no ANTHROPIC_API_KEY.
+    # "regex" only when chosen explicitly; "fake" = scripted test decomposer.
+    # "openrouter" is for the bake-off against mnemo_eval / test DBs only.
+    decomposer_provider: Literal["anthropic", "openrouter", "regex", "fake"] = "anthropic"
+    decomposer_model: str = "claude-haiku-4-5-20251001"
+    decomposer_deadline_seconds: float = 90.0  # whole decomposition, attempts included
+    allow_non_anthropic_decomposer: bool = False
     embedding_dim: int = 768
     max_retrieval_results: int = 50
     default_retrieval_limit: int = 10
@@ -124,6 +128,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"{', '.join(fakes)} is only allowed when MNEMO_DATABASE_URL "
                 "points at a test database (its URL must contain 'test')."
+            )
+        # Spec rule 4: no production memory text to a non-Anthropic provider.
+        if self.decomposer_provider == "openrouter" and not (
+            self.allow_non_anthropic_decomposer
+            and ("mnemo_eval" in self.database_url or "test" in self.database_url)
+        ):
+            raise ValueError(
+                "MNEMO_DECOMPOSER_PROVIDER=openrouter requires "
+                "MNEMO_ALLOW_NON_ANTHROPIC_DECOMPOSER=true and a mnemo_eval or test database."
             )
         return self
 

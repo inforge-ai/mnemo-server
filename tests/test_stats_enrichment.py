@@ -29,7 +29,7 @@ async def test_stats_includes_date_range(client, agent):
     Was flaky when it ran against the live decomposer (which could return no
     atoms for this text); the scripted fake decomposer makes it deterministic.
     """
-    from mnemo.server import fake_decomposer
+    from mnemo.server.decomposers import fake as fake_decomposer
     from mnemo.server.decomposer import DecomposedAtom
 
     fake_decomposer.script([DecomposedAtom(

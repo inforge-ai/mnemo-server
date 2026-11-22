@@ -165,7 +165,7 @@ async def resolve_agent_address(address: str, auth: AuthContext = Depends(resolv
 async def get_agent(agent_id: str, auth: AuthContext = Depends(resolve_auth)):
     """Get agent by ID. Operator sees own agents only; admin sees all."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -188,7 +188,7 @@ async def get_agent(agent_id: str, auth: AuthContext = Depends(resolve_auth)):
 @router.get("/agents/{agent_id}/stats", response_model=AgentStats)
 async def agent_stats(agent_id: str, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -207,7 +207,7 @@ async def rotate_agent_key(agent_id: str, auth: AuthContext = Depends(require_op
     Overwrites the existing key hash and returns the new plaintext key once.
     """
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
 
     async with get_conn() as conn:
         # Verify agent exists and is active
@@ -244,7 +244,7 @@ async def depart_agent(agent_id: str, auth: AuthContext = Depends(require_admin)
     3. Return summary.
     """
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     async with get_conn() as conn:
         try:
             result = await do_depart(conn, agent_uuid)
@@ -266,7 +266,7 @@ async def reactivate_agent(agent_id: str, auth: AuthContext = Depends(require_ad
     Note: capabilities revoked during departure are NOT restored.
     """
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     async with get_conn() as conn:
         try:
             result = await do_reinstate(conn, agent_uuid)

@@ -15,7 +15,7 @@ router = APIRouter(tags=["atoms"])
 async def create_atom(agent_id: str, body: AtomCreate, auth: AuthContext = Depends(require_agent)):
     """Explicit typed atom creation (power-user interface)."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -37,7 +37,7 @@ async def create_atom(agent_id: str, body: AtomCreate, auth: AuthContext = Depen
 @router.get("/agents/{agent_id}/atoms/{atom_id}", response_model=AtomResponse)
 async def get_atom(agent_id: str, atom_id: UUID, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -50,7 +50,7 @@ async def get_atom(agent_id: str, atom_id: UUID, auth: AuthContext = Depends(req
 @router.delete("/agents/{agent_id}/atoms/{atom_id}", status_code=204)
 async def delete_atom(agent_id: str, atom_id: UUID, auth: AuthContext = Depends(require_agent)):
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -63,7 +63,7 @@ async def delete_atom(agent_id: str, atom_id: UUID, auth: AuthContext = Depends(
 async def link_atoms(agent_id: str, body: EdgeCreate, auth: AuthContext = Depends(require_agent)):
     """Create an edge between two atoms (both must belong to this agent)."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)

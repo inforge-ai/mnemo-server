@@ -37,6 +37,7 @@ CREATE TABLE sources (
                       'user_stated', 'professional', 'measurement',
                       'document', 'agent_inference', 'unspecified')),
     remembered_on TIMESTAMPTZ,
+    domain_tags   TEXT[] NOT NULL DEFAULT '{}',   -- request tags, for /retry (added in implementation)
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX idx_sources_store ON sources (store_id);
@@ -313,7 +314,7 @@ Pure functions, unit-tested on synthetic strings. They run on every decomposed a
 | `ungrounded_quote` | Normalise both strings: Unicode NFKC, casefold, curly quotes and dashes mapped to ASCII, whitespace runs collapsed to one space, trimmed. Flag if the quote is empty or is not a substring of the normalised source. |
 | `abbreviation_altered` | For each token in the quote matching the abbreviation pattern `\b[A-Z][A-Z0-9]{1,5}\b` (2–6 characters, starting with a capital), flag if that exact token, case-sensitive and whole-word, does not appear in the atom text. |
 | `unsupported_term` | For each token in the atom text matching the same pattern, flag if it does not appear (case-sensitive, whole-word) anywhere in the source. This catches a code or ticker the model introduced, e.g. by "correcting" or expanding one. |
-| `no_subject` | Flag if the atom's first word (ignoring leading punctuation) is a pronoun or demonstrative: I, me, my, you, your, he, him, his, she, her, it, its, we, our, they, them, their, this, that, these, those. Also flag if the text contains no capitalised word after the first, no all-capitals token and no digit, i.e. nothing that names anyone. |
+| `no_subject` | Flag if the atom's first word (ignoring leading punctuation) is a pronoun or demonstrative: I, me, my, you, your, he, him, his, she, her, it, its, we, our, they, them, their, this, that, these, those. Also flag if the first word is lowercase, i.e. a bare verb phrase with the subject dropped ("went camping in July"). A leading number or code is not flagged. (Implementation note: an earlier draft also flagged atoms with "no capitalised word after the first", but that wrongly flagged "Tom prefers tea", so it was dropped.) |
 
 - **Effect.** Only `ungrounded_quote` changes anything: that atom is stored one band lower on the existing ladder, Beta(8,1) → (4,2) → (3,2) → (2,3) → (2,4), with the floor at (2,4). `abbreviation_altered`, `unsupported_term` and `no_subject` are **record-only**: the flag is set in `verification.flags` and returned in the response, and nothing else changes.
 - **Abbreviations are never interpreted.** The store never expands or interprets an abbreviation, and never asks the caller for clarification.

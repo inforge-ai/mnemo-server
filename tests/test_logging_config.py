@@ -152,6 +152,7 @@ async def test_lifespan_configures_json_logging(monkeypatch):
         return None
     monkeypatch.setattr("mnemo.server.embeddings.warmup", lambda: None)
     monkeypatch.setattr("mnemo.server.services.migration_service.run_migrations", _noop)
+    monkeypatch.setattr("mnemo.server.services.store_service.sweep_stuck_jobs", _noop)
 
     async def _consolidation_noop(pool):
         return None

@@ -1,16 +1,16 @@
-import asyncio
 import logging
 import time
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 
 from ..auth import AuthContext, require_agent, require_agent_match, resolve_auth
 from ..config import settings
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
 from ..models import RememberRequest, RememberResponse, RetrieveRequest, RetrieveResponse, StoreJobResponse
-from ..services import atom_service
+from ..services import atom_service, store_service
 from ..services.ops_service import log_operation
 
 logger = logging.getLogger(__name__)
@@ -18,9 +18,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memory"])
 
 
-@router.post("/agents/{agent_id}/remember", response_model=RememberResponse, status_code=201)
+def _store_outcome_response(outcome: dict) -> JSONResponse:
+    """Map a store_service outcome to the HTTP response (201 / 502 / 500)."""
+    if outcome["status"] == "complete":
+        body = RememberResponse(**{k: v for k, v in outcome.items() if k != "http_status"})
+        return JSONResponse(status_code=201, content=body.model_dump(mode="json"))
+    return JSONResponse(
+        status_code=outcome["http_status"],
+        content={
+            "status": "failed",
+            "store_id": str(outcome["store_id"]),
+            "source_id": str(outcome["source_id"]),
+            "error": outcome["error"],
+        },
+    )
+
+
+@router.post(
+    "/agents/{agent_id}/remember",
+    status_code=201,
+    response_model=RememberResponse,
+    responses={502: {"description": "Decomposer failed; the source text is kept and the store can be retried."}},
+)
 async def remember(agent_id: str, body: RememberRequest, auth: AuthContext = Depends(require_agent)):
-    """Store a free-text memory. Returns immediately; decomposition runs in background."""
+    """Store a free-text memory.
+
+    wait=true (default): returns when storage is complete, with the atoms
+    stored. wait=false: returns immediately with status "queued".
+    The source text is written before decomposition, so a failure loses
+    nothing (POST /stores/{store_id}/retry).
+    """
     # ── Input validation ──
     stripped = body.text.strip()
     if not stripped:
@@ -36,51 +63,50 @@ async def remember(agent_id: str, body: RememberRequest, auth: AuthContext = Dep
         logger.warning("Large input: %d chars from agent %s", len(body.text), agent_id)
 
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
-        await _require_active_agent(conn, agent_uuid)
-        # Resolve operator_id for decomposer usage logging
-        op_row = await conn.fetchrow(
-            "SELECT operator_id FROM agents WHERE id = $1", agent_uuid,
+        agent = await conn.fetchrow(
+            "SELECT status, name, operator_id, metadata FROM agents WHERE id = $1", agent_uuid,
         )
-        operator_id = op_row["operator_id"] if op_row else None
-
-    store_id = uuid4()
-    async with get_conn() as conn:
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if agent["status"] != "active":
+            raise HTTPException(status_code=410, detail="Agent has departed")
         await log_operation(conn, "remember", auth.agent_id, target_id=agent_uuid)
-        await conn.execute(
-            """
-            INSERT INTO store_jobs (store_id, agent_id, operator_id)
-            VALUES ($1, $2, $3)
-            """,
-            store_id, agent_uuid, operator_id,
+        src = await store_service.create_store(
+            conn,
+            agent_id=agent_uuid,
+            operator_id=agent["operator_id"],
+            agent_name=agent["name"],
+            agent_metadata=agent["metadata"],
+            text=body.text,
+            domain_tags=body.domain_tags,
+            remembered_on=body.remembered_on,
+            speaker=body.speaker,
+            addressee=body.addressee,
+            channel=body.channel,
+            origin_class=body.origin_class,
         )
-    coro = atom_service.store_background(
-        pool=pool,
-        store_id=store_id,
-        agent_id=agent_uuid,
-        text=body.text,
-        domain_tags=body.domain_tags,
-        operator_id=operator_id,
-        remembered_on=body.remembered_on,
-    )
+
+    if body.wait:
+        return _store_outcome_response(await store_service.run_store(pool, src))
+
+    coro = store_service.run_store(pool, src)
     if settings.sync_store_for_tests:
         await coro
     else:
-        # TODO: concurrent create_task calls for the same content race on
-        # _check_duplicate (TOCTOU across separate connections). Fix options:
-        # (a) pg_advisory_xact_lock on (agent_id, embedding_hash),
-        # (b) unique partial index + ON CONFLICT, or (c) per-agent serial queue.
-        asyncio.create_task(coro)
-    return {"status": "queued", "store_id": store_id}
+        store_service.spawn(coro)
+    return JSONResponse(status_code=201, content={
+        "status": "queued", "store_id": str(src.store_id), "source_id": str(src.source_id),
+    })
 
 
 @router.post("/agents/{agent_id}/recall", response_model=RetrieveResponse, response_model_exclude_none=True)
 async def recall(agent_id: str, body: RetrieveRequest, auth: AuthContext = Depends(require_agent)):
     """Retrieve relevant memories via semantic search + optional graph expansion."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -111,22 +137,41 @@ async def recall(agent_id: str, body: RetrieveRequest, auth: AuthContext = Depen
 
 @router.get("/stores/{store_id}/status", response_model=StoreJobResponse)
 async def store_status(store_id: UUID, auth: AuthContext = Depends(resolve_auth)):
-    """Check the status of an async store operation."""
+    """Status of a store, with its atoms. Visible to the owning agent, the
+    owning operator, or admin; anyone else gets 404."""
     async with get_conn() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT sj.store_id, sj.status, sj.atoms_created,
-                   sj.created_at, sj.completed_at, sj.error
-            FROM store_jobs sj
-            JOIN agents a ON a.id = sj.agent_id
-            WHERE sj.store_id = $1
-              AND ($2::uuid IS NULL OR a.operator_id = $2)
-            """,
-            store_id, auth.operator_id,
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Store job not found")
-    return dict(row)
+        row = await store_service.job_visible_to(conn, store_id, auth)
+        if not row:
+            raise HTTPException(status_code=404, detail="Store job not found")
+        atoms = await store_service.store_atoms(conn, row["source_id"])
+    return {
+        "store_id": row["store_id"], "status": row["status"], "atoms_created": row["atoms_created"],
+        "created_at": row["created_at"], "completed_at": row["completed_at"], "error": row["error"],
+        "source_id": row["source_id"], "atoms": atoms,
+    }
+
+
+@router.post(
+    "/stores/{store_id}/retry",
+    status_code=201,
+    response_model=RememberResponse,
+    responses={409: {"description": "Store is not in the failed state."}},
+)
+async def store_retry(store_id: UUID, auth: AuthContext = Depends(resolve_auth)):
+    """Re-run a failed store from its source row (same store_id/source_id).
+    Safe to repeat: a failed store wrote no atoms."""
+    pool = await get_pool()
+    async with get_conn() as conn:
+        row = await store_service.job_visible_to(conn, store_id, auth)
+        if not row:
+            raise HTTPException(status_code=404, detail="Store job not found")
+        if row["status"] != "failed":
+            raise HTTPException(status_code=409, detail=f"Store is {row['status']}; only failed stores can be retried")
+        src = await store_service.load_store(conn, store_id)
+        if src is None:
+            raise HTTPException(status_code=409, detail="Store has no source row (stored before v2 Phase 1)")
+        await log_operation(conn, "store_retry", auth.agent_id, target_id=src.agent_id)
+    return _store_outcome_response(await store_service.run_store(pool, src))
 
 
 async def _require_active_agent(conn, agent_id: UUID):

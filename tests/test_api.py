@@ -107,16 +107,27 @@ class TestAgents:
 # ── Remember endpoint ─────────────────────────────────────────────────────────
 
 class TestRemember:
-    async def test_remember_returns_queued_status(self, client, agent):
+    async def test_remember_wait_false_returns_queued_status(self, client, agent):
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
         resp = await client.post(f"/v1/agents/{agent['id']}/remember", json={
             "text": "pandas.read_csv silently coerces mixed-type columns.",
             "domain_tags": ["python", "pandas"],
+            "wait": False,
         }, headers=ag_headers)
         assert resp.status_code == 201
         data = resp.json()
         assert data["status"] == "queued"
-        assert "store_id" in data
+        assert "store_id" in data and "source_id" in data
+
+    async def test_remember_default_waits_and_returns_atoms(self, client, agent):
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
+        resp = await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": "pandas.read_csv silently coerces mixed-type columns.",
+        }, headers=ag_headers)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["status"] == "complete"
+        assert data["atoms_created"] >= 1 and data["atoms"]
 
     async def test_remember_returns_typed_atoms(self, client, agent):
         ag_headers = {"X-Agent-Key": agent["agent_key"]}

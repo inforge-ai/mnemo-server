@@ -2,6 +2,7 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import pytest
 
 from mnemo.server.decomposer import DecomposedAtom
@@ -466,63 +467,78 @@ async def test_llm_permanent_failure_writes_dlq(pool, agent_with_address):
 
 # ── store_background integration ─────────────────────────────────────────────
 
+async def _run_store(pool, agent, text):
+    from mnemo.server.services import store_service
+    async with pool.acquire() as conn:
+        src = await store_service.create_store(
+            conn, agent_id=agent["id"], operator_id=agent["operator"]["id"],
+            agent_name=agent["name"], agent_metadata={}, text=text, domain_tags=["t"],
+            remembered_on=None, speaker=None, addressee=None, channel=None,
+            origin_class="unspecified",
+        )
+    return await store_service.run_store(pool, src)
+
+
 @pytest.mark.asyncio
-async def test_store_background_invokes_lifecycle_when_enabled(pool, agent_with_address, monkeypatch):
-    from uuid import uuid4
+async def test_store_invokes_lifecycle_when_enabled(pool, agent_with_address, monkeypatch):
     from mnemo.server.config import settings
-    from mnemo.server.services import atom_service, lifecycle_service
+    from mnemo.server.services import lifecycle_service
 
     monkeypatch.setattr(settings, "lifecycle_detection_enabled", True)
-
-    agent_id = agent_with_address["id"]
-    operator_id = agent_with_address["operator"]["id"]
     captured = []
-    async def _spy(conn, agent, new_id):
+
+    async def _spy(db, agent, new_id):
+        # Store path passes the pool, so no connection is held during the LLM call.
+        assert isinstance(db, asyncpg.Pool)
         captured.append(new_id)
         return 0
 
     with patch.object(lifecycle_service, "detect_lifecycle_relationships", side_effect=_spy):
-        store_id = uuid4()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO store_jobs (store_id, agent_id, operator_id) VALUES ($1, $2, $3)",
-                store_id, agent_id, operator_id,
-            )
-        await atom_service.store_background(
-            pool=pool, store_id=store_id, agent_id=agent_id,
-            text="The sky over Boston was clear on April 26 2026.", domain_tags=["t"],
-            operator_id=operator_id,
-        )
+        outcome = await _run_store(pool, agent_with_address, "The sky over Boston was clear on April 26 2026.")
 
+    assert outcome["status"] == "complete"
     assert len(captured) >= 1
 
 
 @pytest.mark.asyncio
-async def test_store_background_skips_lifecycle_when_disabled(pool, agent_with_address, monkeypatch):
-    from uuid import uuid4
+async def test_store_skips_lifecycle_when_disabled(pool, agent_with_address, monkeypatch):
     from mnemo.server.config import settings
-    from mnemo.server.services import atom_service, lifecycle_service
+    from mnemo.server.services import lifecycle_service
 
     monkeypatch.setattr(settings, "lifecycle_detection_enabled", False)
-
-    agent_id = agent_with_address["id"]
-    operator_id = agent_with_address["operator"]["id"]
     called = {"n": 0}
-    async def _spy(conn, agent, new_id):
+
+    async def _spy(db, agent, new_id):
         called["n"] += 1
         return 0
 
     with patch.object(lifecycle_service, "detect_lifecycle_relationships", side_effect=_spy):
-        store_id = uuid4()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO store_jobs (store_id, agent_id, operator_id) VALUES ($1, $2, $3)",
-                store_id, agent_id, operator_id,
-            )
-        await atom_service.store_background(
-            pool=pool, store_id=store_id, agent_id=agent_id,
-            text="Random observation about the weather.", domain_tags=["t"],
-            operator_id=operator_id,
-        )
+        await _run_store(pool, agent_with_address, "Random observation about the weather.")
 
     assert called["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_detect_with_pool_releases_connection_during_llm(pool, agent_with_address):
+    """With a pool, lifecycle detection holds no connection while the model runs."""
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        old_id, old_emb = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic",
+                                  emb=vector_at_cosine(old_emb, 0.70, seed=6))
+
+    seen = {}
+
+    async def _eval(**kw):
+        seen["idle"] = pool.get_idle_size()
+        seen["size"] = pool.get_size()
+        return {"relationship": "supersedes", "confidence": 0.9, "reasoning": "done",
+                "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1}}
+
+    with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval):
+        n = await lifecycle_service.detect_lifecycle_relationships(pool, agent_id, new_id)
+
+    assert n == 1
+    assert seen["idle"] == seen["size"]

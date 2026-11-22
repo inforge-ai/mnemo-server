@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pytest
 
-from mnemo.server import fake_decomposer
+from mnemo.server.decomposers import fake as fake_decomposer
 from mnemo.server.config import settings
 from mnemo.server.decomposer import DecomposedAtom
 from mnemo.server.embeddings import encode, encode_batch
@@ -58,17 +58,19 @@ async def test_live_anthropic_client_is_refused(request):
 
 
 async def test_fake_decomposer_scripts_and_raises():
-    from mnemo.server.services.atom_service import _decompose
+    from mnemo.server.decomposers import DecomposeRequest, DecomposerError, decompose_note
 
+    req = lambda t: DecomposeRequest(text=t, agent_name="a", speaker="a")
     atom = DecomposedAtom(text="Scripted.", atom_type="semantic",
                           confidence_alpha=8.0, confidence_beta=1.0)
     fake_decomposer.script([atom], RuntimeError("provider down"))
-    first = await _decompose("anything")
+    first = await decompose_note(req("anything"))
     assert [a.text for a in first.atoms] == ["Scripted."]
-    with pytest.raises(RuntimeError, match="provider down"):
-        await _decompose("anything")
-    # Nothing queued: deterministic regex fallback.
-    third = await _decompose("Postgres supports JSONB columns.")
+    # Unexpected errors surface as a plain DecomposerError.
+    with pytest.raises(DecomposerError, match="decomposer error"):
+        await decompose_note(req("anything"))
+    # Nothing queued: deterministic regex.
+    third = await decompose_note(req("Postgres supports JSONB columns."))
     assert third.atoms
 
 
@@ -94,7 +96,7 @@ def test_real_backends_allowed_without_test_db():
     from mnemo.server.config import Settings
 
     s = Settings(database_url=PROD_LIKE_URL,
-                 embedding_backend="sentence_transformers", decomposer_provider="auto")
+                 embedding_backend="sentence_transformers", decomposer_provider="anthropic")
     assert s.embedding_backend == "sentence_transformers"
 
 

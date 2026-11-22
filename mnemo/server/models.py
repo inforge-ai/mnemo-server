@@ -27,15 +27,49 @@ class AgentCreateResponse(AgentResponse):
 
 # ── Remember (primary interface) ──
 
+OriginClass = Literal[
+    "user_stated", "professional", "measurement", "document", "agent_inference", "unspecified",
+]
+
+
 class RememberRequest(BaseModel):
-    """The simple interface. Agent just says what happened."""
+    """The simple interface. Agent just says what happened.
+
+    v2 Phase 1: provenance fields and `wait` (default true: the response
+    lists the stored atoms). `speaker` defaults to the calling agent's name.
+    """
     text: str = Field(..., min_length=1, max_length=50_000)
     domain_tags: list[str] = Field(default=[], max_length=20)
     remembered_on: Optional[datetime] = None
+    speaker: Optional[str] = Field(None, min_length=1, max_length=200)
+    addressee: Optional[str] = Field(None, min_length=1, max_length=200)
+    channel: Optional[str] = Field(None, min_length=1, max_length=200)
+    origin_class: OriginClass = "unspecified"
+    wait: bool = True
+
+
+class StoredAtom(BaseModel):
+    """One atom of a store: newly created, or an existing atom it merged into."""
+    id: UUID
+    atom_type: str
+    text_content: str
+    remembered_on: Optional[datetime] = None
+    source_quote: Optional[str] = None
+    merged_into_existing: bool = False
+    flags: list[str] = []
+
 
 class RememberResponse(BaseModel):
-    status: str = "queued"
+    """wait=true success. (wait=false returns status/store_id/source_id only;
+    failure returns status="failed" with `error`, HTTP 502 or 500.)"""
+    status: str
     store_id: UUID
+    source_id: Optional[UUID] = None
+    atoms_created: int = 0
+    duplicates_merged: int = 0
+    atoms: list[StoredAtom] = []
+    warnings: list[str] = []
+
 
 class StoreJobResponse(BaseModel):
     store_id: UUID
@@ -44,6 +78,8 @@ class StoreJobResponse(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
+    source_id: Optional[UUID] = None
+    atoms: list[StoredAtom] = []
 
 # ── Lifecycle edges (surfaced in recall responses) ──
 

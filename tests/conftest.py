@@ -101,7 +101,7 @@ def pytest_configure(config):
     config._mnemo_eval = _is_eval_run(config)
     if config._mnemo_eval:
         settings.embedding_backend = "sentence_transformers"
-        settings.decomposer_provider = "auto"
+        settings.decomposer_provider = "anthropic"
         from mnemo.server.embeddings import warmup
         warmup()
     else:
@@ -120,7 +120,7 @@ def _no_live_llm(request, monkeypatch):
         yield
         return
     import anthropic
-    from mnemo.server import fake_decomposer, llm_decomposer
+    from mnemo.server.decomposers import anthropic as anthropic_decomposer, fake as fake_decomposer
     from mnemo.server.services import lifecycle_service
 
     attempts: list[str] = []
@@ -131,7 +131,7 @@ def _no_live_llm(request, monkeypatch):
         raise RuntimeError("live Anthropic client constructed in a non-eval test")
 
     monkeypatch.setattr(anthropic.AsyncAnthropic, "__init__", _refuse)
-    llm_decomposer._get_client.cache_clear()
+    anthropic_decomposer._get_client.cache_clear()
     if hasattr(lifecycle_service._get_client, "cache_clear"):
         lifecycle_service._get_client.cache_clear()
     fake_decomposer.reset()
@@ -298,9 +298,8 @@ async def remember(
 ):
     """Call /remember and wait for storage to complete.
 
-    With MNEMO_SYNC_STORE_FOR_TESTS=true, the route awaits store_background
-    inline before returning, so the POST itself blocks until all atoms are
-    stored. No background task coordination needed.
+    v2 Phase 1: wait=true is the default, so the POST returns once storage
+    is complete and lists the stored atoms.
 
     Pass headers={"X-Agent-Key": key} for auth. If headers is None and
     auth is disabled, no auth header is sent.
@@ -314,5 +313,5 @@ async def remember(
         headers=headers or {},
     )
     assert resp.status_code == 201, f"remember failed: {resp.status_code} {resp.text}"
-    assert resp.json()["status"] == "queued"
+    assert resp.json()["status"] == "complete"
     return resp

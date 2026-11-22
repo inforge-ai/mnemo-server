@@ -98,11 +98,7 @@ async def health_detailed(request: Request):
         pgvector_version = "unknown"
 
     # Decomposer type
-    provider = settings.decomposer_provider
-    if provider == "auto":
-        decomposer = "haiku" if os.environ.get("ANTHROPIC_API_KEY") else "regex"
-    else:
-        decomposer = provider
+    decomposer = settings.decomposer_provider
 
     info.update({
         "sharing_enabled": sharing_enabled,
