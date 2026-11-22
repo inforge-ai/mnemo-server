@@ -24,4 +24,21 @@ SELECT :agents_left = :expected_agents AND :foreign_atoms = 0 AS ok \gset
   \echo MISMATCH - rolling back
   ROLLBACK;
 \endif
-SELECT (SELECT count(*) FROM agents) agents, (SELECT count(*) FROM atoms) atoms, (SELECT count(*) FROM edges) edges;
+-- Operators with no agents left (api_keys cascade from operators).
+BEGIN;
+WITH del AS (
+  DELETE FROM operators o
+  WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.operator_id = o.id)
+  RETURNING o.id
+)
+SELECT count(*) AS deleted_operators FROM del \gset
+\echo deleted_operators :deleted_operators
+COMMIT;
+
+SELECT (SELECT count(*) FROM agents) agents, (SELECT count(*) FROM atoms) atoms,
+       (SELECT count(*) FROM edges) edges, (SELECT count(*) FROM operators) operators,
+       (SELECT count(*) FROM api_keys) api_keys;
+
+-- Rewrite every table so deleted rows (memory text) are physically gone,
+-- not just dead tuples. VACUUM cannot run inside a transaction.
+VACUUM FULL;

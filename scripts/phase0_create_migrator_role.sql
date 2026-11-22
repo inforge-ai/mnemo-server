@@ -6,8 +6,10 @@
 --   sudo -u postgres psql -d mnemo -v ON_ERROR_STOP=1 -f scripts/phase0_create_migrator_role.sql
 -- psql prompts for the new role's password (not echoed, not in shell history).
 --
--- Then add to .env (never commit it):
---   MNEMO_MIGRATION_DATABASE_URL=postgresql://mnemo_migrator:<password>@localhost:5432/mnemo
+-- Then store the password in ~/.pgpass (mode 600), not in .env:
+--   localhost:5432:mnemo:mnemo_migrator:<password>
+-- and pass the URL explicitly, without a password:
+--   mnemo migrate --database-url postgresql://mnemo_migrator@localhost:5432/mnemo
 --
 -- What it changes:
 --   - creates LOGIN role mnemo_migrator (NOSUPERUSER, NOCREATEDB, NOCREATEROLE)

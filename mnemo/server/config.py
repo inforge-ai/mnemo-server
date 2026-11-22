@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # step soft-deletes or rewrites memories (decay deactivation, generalised
     # copies, newer-of-pair merges, edge deletion); enable explicitly only
     # when the data loss is intended. Departed-agent purge is unaffected.
+    # WARNING: do not enable before Phase 3. Phase 0 restored ~3k atoms
+    # whose decayed confidence is below min_effective_confidence; re-enabling
+    # decay would deactivate all of them again on the next run.
     consolidation_decay_enabled: bool = False
     consolidation_generalise_enabled: bool = False
     consolidation_merge_enabled: bool = False
