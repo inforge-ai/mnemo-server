@@ -26,7 +26,7 @@ The Phase 0 prerequisite (24-hour consolidation check) is not yet due. The first
 | 8 Harder fixtures | `tests/fixtures/v2/` | 8 new synthetic cases: no-label attribution, third-system attribution, ticker abbreviation, long note, provider failure, reported speech, temporary state, correction. 5× repeats. `read_your_writes` and `updated_number@0.90` flipped to pass. |
 | 9 Bake-off | `scripts/eval/decision_bakeoff.py`, `docs/phase1-bakeoff.md` | 5 decision models plus a generative baseline, 2 tasks, 8,820 requests. Recommends `liquid/d1.2-ultra` (one model for both tasks), with `typesafe/jev-1.14` for relation if the tasks are split. |
 
-**Tests:** 503 non-eval tests pass locally, offline (0 non-loopback connections) and in CI. CI is green on every commit except `2c4b505` (see deviations).
+**Tests:** 503 non-eval tests pass locally, offline (0 non-loopback connections) and in CI. CI is green on every commit except `2c4b505` and `ce07b78` (see deviations).
 
 ## G2 package (for Tom)
 
@@ -69,7 +69,7 @@ The deploy steps are unchanged from the spec: backup, migrate, rebuild, restart,
 - **`store_failures` writes are delete-then-insert,** not an upsert. The app role has no `UPDATE` on that table in production; this was found by a test.
 - **`no_subject` false positives fixed after G1.** The heuristic flagged atoms starting with a lowercase agent name (`clio …`). Known names (speaker, addressee, agent, user) now count as subjects.
 - **Lifecycle log line** no longer carries the model's reasoning, which paraphrases atom text (rule 3). The reasoning stays in edge metadata.
-- **Commit mistake.** `2c4b505` was pushed with only file deletions and the full feature message, because a `git add` failed and the commit was chained with `;`. `5a01865` carries the code. History was not rewritten. CI is red on `2c4b505` alone and green from `5a01865`.
+- **Commit mistake.** `2c4b505` was pushed with only file deletions and the full feature message, because a `git add` failed and the commit was chained with `;`. `5a01865` carries the code. History was not rewritten. CI is red on `2c4b505` alone and green from `5a01865`. Separately, `ce07b78` (store timings) went out with its new test failing: the test-and-commit chain piped pytest through `tail`, which hid the failure. `cdf9363` fixed it, and those chains now use `pipefail`.
 - **Outside the repo:**
   - `~/.cache/mnemo-bakeoff` holds the LoCoMo-derived bake-off items and the raw model outputs, so `run` can resume and `report` can rerun. It is public benchmark text read from `mnemo_eval`, not production data.
   - The test DB container `mnemo-test-pg` holds synthetic data only.
