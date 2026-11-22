@@ -11,6 +11,15 @@ and run against each atom's text separately:
   recall_any_match  [re]  every pattern matches at least one recall result
   recall_none_match [re]  no pattern matches any recall result
 
+v2 Phase 1 additions:
+  - every live case runs MNEMO_FIXTURE_REPEAT times (default 5) and must pass
+    each time; a case can set "repeat" to override (e.g. deterministic ones)
+  - steps may set speaker / addressee / channel / origin_class
+  - a step may set "filler": {"paragraph": "... {i} ...", "count": N} to
+    prepend N generated synthetic paragraphs (the long-note case)
+  - "simulate": "provider_failure" swaps in the fake decomposer raising a
+    DecomposerError; assert keys "http_status", "source_kept", "atom_count"
+
 Cases the current system fails carry "xfail": {"phase": ..., "fix": ...} and
 run as xfail(strict=True), so a fix that makes one pass must also flip it.
 "strict": false marks a case that fails only some of the time (LLM
@@ -44,6 +53,8 @@ pytestmark = [
 
 
 PHASE0_DEDUP_THRESHOLD = 0.97  # MNEMO_DUPLICATE_SIMILARITY_THRESHOLD in production
+DEFAULT_REPEAT = int(os.environ.get("MNEMO_FIXTURE_REPEAT", "5"))
+STEP_FIELDS = ("remembered_on", "speaker", "addressee", "channel", "origin_class")
 
 
 def _xfail_mark(x: dict):
@@ -61,12 +72,23 @@ def _load_cases():
     for path in sorted(FIXTURE_DIR.glob("*.json")):
         case = json.loads(path.read_text())
         thresholds = case.get("dedup_thresholds", [PHASE0_DEDUP_THRESHOLD])
+        repeat = case.get("repeat", DEFAULT_REPEAT)
         for t in thresholds:
             x = case.get("xfail_at_threshold", {}).get(str(float(t)), case.get("xfail"))
             marks = [_xfail_mark(x)] if x else []
             pid = case["id"] if len(thresholds) == 1 else f"{case['id']}@{t}"
-            params.append(pytest.param(case, t, id=pid, marks=marks))
+            for k in range(1, repeat + 1):
+                rid = pid if repeat == 1 else f"{pid}#{k}"
+                params.append(pytest.param(case, t, id=rid, marks=marks))
     return params
+
+
+def _step_text(step: dict) -> str:
+    filler = step.get("filler")
+    if not filler:
+        return step["text"]
+    paras = [filler["paragraph"].format(i=i) for i in range(1, filler["count"] + 1)]
+    return "\n\n".join(paras + [step["text"]])
 
 
 def _matches(pattern: str, text: str) -> bool:
@@ -91,11 +113,16 @@ async def test_v2_fixture(case, dedup_threshold, client, agent_with_key, pool, m
     monkeypatch.setattr(settings, "sync_store_for_tests", sync)
     monkeypatch.setattr(settings, "duplicate_similarity_threshold", dedup_threshold)
 
+    if case.get("simulate") == "provider_failure":
+        await _provider_failure(case, client, pool, aid, headers, monkeypatch)
+        return
+
     store_ids = []
     for step in case["steps"]:
-        body = {"text": step["text"]}
-        if step.get("remembered_on"):
-            body["remembered_on"] = step["remembered_on"]
+        body = {"text": _step_text(step)}
+        for f in STEP_FIELDS:
+            if step.get(f):
+                body[f] = step[f]
         r = await client.post(f"/v1/agents/{aid}/remember", json=body, headers=headers)
         assert r.status_code == 201, r.text
         store_ids.append(r.json()["store_id"])
@@ -106,6 +133,25 @@ async def test_v2_fixture(case, dedup_threshold, client, agent_with_key, pool, m
         if not sync:  # let background stores finish before the DB is cleaned
             for sid in store_ids:
                 await _wait_for_store(client, sid, headers)
+
+
+async def _provider_failure(case, client, pool, aid, headers, monkeypatch):
+    """The decomposer fails: 502, the source row exists, no atoms stored."""
+    from mnemo.server.decomposers import DecomposerError, fake
+
+    monkeypatch.setattr(settings, "decomposer_provider", "fake")
+    a = case["assert"]
+    for step in case["steps"]:
+        fake.script(DecomposerError("provider timeout"))
+        r = await client.post(f"/v1/agents/{aid}/remember", json={"text": step["text"]}, headers=headers)
+        assert r.status_code == a["http_status"], r.text
+        body = r.json()
+        assert body["status"] == "failed" and body["error"] == "provider timeout"
+        async with pool.acquire() as conn:
+            kept = await conn.fetchval("SELECT text FROM sources WHERE id = $1", UUID(body["source_id"]))
+            n = await conn.fetchval("SELECT count(*) FROM atoms WHERE agent_id = $1", UUID(aid))
+        assert (kept == step["text"]) is a["source_kept"]
+        assert n == a["atom_count"]
 
 
 async def _check(case, client, pool, aid, agent_key):

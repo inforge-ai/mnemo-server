@@ -1,0 +1,23 @@
+{
+  "id": "attribution_third_system",
+  "description": "A note about a third system (the grammatical topic) that attributes the cause to the addressee: the fact is about the addressee's jobs, not the system's own.",
+  "failure_pattern": "speaker/subject attribution",
+  "steps": [
+    {
+      "text": "Kestrel ingest review: the main source of the retry storms on Kestrel turns out to be you, Wren — your batch jobs retry without backoff.",
+      "speaker": "Tom",
+      "addressee": "Wren",
+      "remembered_on": "2026-11-19"
+    }
+  ],
+  "assert": {
+    "atoms_any_match": [
+      "wren.*(batch|retr)"
+    ],
+    "atoms_none_match": [
+      "kestrel('s)? (own )?batch jobs",
+      "kestrel (itself )?retries without backoff"
+    ]
+  },
+  "xfail": null
+}

@@ -191,8 +191,10 @@ def test_preamble_speaker_addressee_user_channel_date():
     p = build_preamble(_req(speaker="Sam", addressee="Clio", channel="zulip #ops",
                             user_name="Tom", remembered_on=datetime(2026, 11, 20)))
     assert 'This note was written by Sam. "I", "me" and "my" in the note mean Sam.' in p
-    assert '"You" and "your" in the note mean Clio.' in p
-    assert "stored by the agent clio on Sam's behalf" in p
+    assert '"You" and "your" in the note mean Clio: write Clio wherever the note says "you".' in p
+    assert 'A statement about "you" is a fact about Clio, never about Sam.' in p
+    assert "The note is stored in the memory of the agent clio." in p
+    assert "behalf" not in p
     assert "The agent's user is Tom." in p
     assert "The note came from: zulip #ops." in p
     assert "The note is dated Friday, 20 November 2026." in p
@@ -201,7 +203,7 @@ def test_preamble_speaker_addressee_user_channel_date():
 def test_preamble_without_addressee_does_not_guess():
     p = build_preamble(_req())
     assert 'write "the addressee" — do not guess' in p
-    assert "on clio's behalf" not in p
+    assert "stored in the memory" not in p
     assert "user is" not in p
 
 

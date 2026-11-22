@@ -1,6 +1,6 @@
 {
   "id": "read_your_writes",
-  "description": "A recall immediately after remember finds the memory (production async store path, not the test-only synchronous one).",
+  "description": "A recall immediately after remember finds the memory on the production store path (no test-only synchronous mode). Phase 1: remember waits by default.",
   "failure_pattern": "async write invisibility",
   "sync_store": false,
   "steps": [
@@ -16,8 +16,5 @@
       "marlin"
     ]
   },
-  "xfail": {
-    "phase": "phase 1",
-    "fix": "synchronous or inspectable writes: remember returns the stored atoms, or recall waits on pending stores for the agent"
-  }
+  "xfail": null
 }

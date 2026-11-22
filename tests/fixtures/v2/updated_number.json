@@ -26,11 +26,5 @@
     0.97,
     0.9
   ],
-  "xfail_at_threshold": {
-    "0.9": {
-      "phase": "phase 2",
-      "fix": "store-time dedup must not merge a corrected value into the value it corrects, at any threshold"
-    }
-  },
-  "note": "Guard for phase 2 at any dedup threshold. Passes at the Phase 0 production setting 0.97; at 0.90 the corrected atom merges into the old one."
+  "note": "Guard for phase 2 at any dedup threshold. Phase 0: passed at 0.97, failed at 0.90 (the corrected atom merged into the old one). Phase 1 (2026-11-22): passes at both, 10/10 runs each with Haiku 4.5 and prompt v2 \u2014 the v2 atom names what it replaces, stays below the 0.90 merge threshold, and lifecycle detection supersedes the old atom. Store-time dedup itself is unchanged (Phase 2)."
 }

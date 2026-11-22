@@ -102,6 +102,8 @@ def pytest_configure(config):
     if config._mnemo_eval:
         settings.embedding_backend = "sentence_transformers"
         settings.decomposer_provider = "anthropic"
+        # Production runs lifecycle detection (supersedes / tension edges).
+        settings.lifecycle_detection_enabled = True
         from mnemo.server.embeddings import warmup
         warmup()
     else:

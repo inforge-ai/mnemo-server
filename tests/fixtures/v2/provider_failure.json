@@ -1,0 +1,18 @@
+{
+  "id": "provider_failure",
+  "description": "Simulated provider failure: remember returns 502, the source row is kept, and no atoms are stored.",
+  "failure_pattern": "silent loss on decomposer failure",
+  "simulate": "provider_failure",
+  "repeat": 1,
+  "steps": [
+    {
+      "text": "The Gannet nightly export moved to 03:00 UTC."
+    }
+  ],
+  "assert": {
+    "http_status": 502,
+    "source_kept": true,
+    "atom_count": 0
+  },
+  "xfail": null
+}

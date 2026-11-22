@@ -1,0 +1,27 @@
+{
+  "id": "abbreviation_ticker_finance",
+  "description": "An abbreviation next to a real listed ticker in a finance sentence, where a common expansion exists and would be wrong to add: both are copied verbatim, neither is expanded.",
+  "failure_pattern": "hallucinated abbreviation expansion",
+  "steps": [
+    {
+      "text": "Rebalance plan: keep the PE sleeve at 4% and trim VTI by a tenth before year end.",
+      "speaker": "Tom",
+      "addressee": "Clio",
+      "remembered_on": "2026-11-20"
+    }
+  ],
+  "assert": {
+    "atoms_any_match": [
+      "\\bPE\\b",
+      "\\bVTI\\b"
+    ],
+    "atoms_none_match": [
+      "price[- ]to[- ]earnings",
+      "\\bp/e\\b",
+      "private equity",
+      "vanguard",
+      "total (stock )?market"
+    ]
+  },
+  "xfail": null
+}

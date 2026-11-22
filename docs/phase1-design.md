@@ -260,9 +260,9 @@ The system prompt is built per request. `{…}` placeholders are filled from the
 
 ```text
 This note was written by {speaker}. "I", "me" and "my" in the note mean {speaker}.
-[If addressee:] The note is addressed to {addressee}. "You" and "your" in the note mean {addressee}.
+[If addressee:] The note is addressed to {addressee}. "You" and "your" in the note mean {addressee}: write {addressee} wherever the note says "you". A statement about "you" is a fact about {addressee}, never about {speaker}.
 [If no addressee:] The note names no addressee. If it says "you", write "the addressee" — do not guess who that is.
-[If speaker != agent_name:] The note is being stored by the agent {agent_name} on {speaker}'s behalf.
+[If speaker != agent_name:] The note is stored in the memory of the agent {agent_name}.
 [If agents.metadata.user_name:] The agent's user is {user_name}.
 [If channel:] The note came from: {channel}.
 The note is dated {date, e.g. Friday, 20 November 2026}. Resolve every relative date against this date.
@@ -278,7 +278,7 @@ Rules for every atom:
 4. Copy abbreviations, tickers, codes, identifiers and proper nouns exactly as written, with the same capitalisation. Never expand an abbreviation, never replace a ticker with a company name, never correct a spelling you are unsure of.
 5. One coherent claim per atom. Do not split facts that only make sense together. Do not generalise: keep numbers, names, dates and quantities exactly.
 6. Resolve vague references ("the project", "that meeting", "the issue") from the note so the atom stands alone. If the note does not say what it refers to, keep the wording and set entity_resolved to false.
-7. Resolve every relative time ("yesterday", "next month", "two weeks ago") to an absolute date using the note's date. Every episodic atom says when it happened or was observed.
+7. Resolve every relative time ("yesterday", "next month", "two weeks ago") to an absolute date using the note's date. Every episodic atom must state its date in the text: when it happened, or for a state that can change, "As of <date>, …" using the note's date.
 8. A plan or intention ("will", "plans to", "next week") is its own atom, with the planned date. Do not record a plan as something that has already happened.
 9. source_quote is the shortest passage copied character-for-character from the note that supports the atom. It may be one sentence or several consecutive sentences, but it must be one unbroken passage. Do not paraphrase, shorten with "...", or join separate passages. If no single passage supports the atom, do not create the atom.
 10. If the note is a conversation about a system, a tool or this memory service itself, record only the decisions, facts and plans it reaches — not the back-and-forth, not who asked what, not opinions that were later dropped.
@@ -302,6 +302,16 @@ Fields:
 
 Record the atoms with the record_atoms tool. If the note contains nothing worth remembering, call it with an empty list.
 ```
+
+**Post-G1 change, made during implementation.** Two preamble lines changed from the approved text:
+- The addressee line gained "write {addressee} wherever the note says "you". A statement about "you" is a fact about {addressee}, never about {speaker}."
+- "The note is being stored by the agent {agent_name} on {speaker}'s behalf" became "The note is stored in the memory of the agent {agent_name}."
+
+Reason: on fixture `attribution_no_label`, Haiku 4.5 with the approved wording attributed the "you" remark to the speaker (3 of 3 runs when the agent was the addressee), or stored nothing (3 of 3 runs when the agent was a third party). With the new wording, 6 of 6 runs were attributed correctly.
+
+**Post-G1 change, rule 7.** "Every episodic atom says when it happened or was observed" became "must state its date in the text: when it happened, or for a state that can change, "As of <date>, …"". This restores the v1 "MUST include when it happened" force that the spec said to keep.
+
+Reason: without it, the `negation_pair` atoms ("uses Jenkins" / "no longer uses Jenkins") came out undated, with cosine 0.916. That is above the lifecycle band ceiling of 0.90, so no `supersedes` edge was considered and the fixture failed 5 of 5. With the dated wording the cosine is 0.788.
 
 The user turn is the note text alone, or the part text for a split note. The v1 prompt's LoCoMo-specific rules and examples are dropped: "15–30 facts per conversation", the reaction-to-news rule, and the named examples. The date-resolution and `remembered_on` rules are kept.
 

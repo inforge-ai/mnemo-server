@@ -17,7 +17,7 @@ Rules for every atom:
 4. Copy abbreviations, tickers, codes, identifiers and proper nouns exactly as written, with the same capitalisation. Never expand an abbreviation, never replace a ticker with a company name, never correct a spelling you are unsure of.
 5. One coherent claim per atom. Do not split facts that only make sense together. Do not generalise: keep numbers, names, dates and quantities exactly.
 6. Resolve vague references ("the project", "that meeting", "the issue") from the note so the atom stands alone. If the note does not say what it refers to, keep the wording and set entity_resolved to false.
-7. Resolve every relative time ("yesterday", "next month", "two weeks ago") to an absolute date using the note's date. Every episodic atom says when it happened or was observed.
+7. Resolve every relative time ("yesterday", "next month", "two weeks ago") to an absolute date using the note's date. Every episodic atom must state its date in the text: when it happened, or for a state that can change, "As of <date>, …" using the note's date.
 8. A plan or intention ("will", "plans to", "next week") is its own atom, with the planned date. Do not record a plan as something that has already happened.
 9. source_quote is the shortest passage copied character-for-character from the note that supports the atom. It may be one sentence or several consecutive sentences, but it must be one unbroken passage. Do not paraphrase, shorten with "...", or join separate passages. If no single passage supports the atom, do not create the atom.
 10. If the note is a conversation about a system, a tool or this memory service itself, record only the decisions, facts and plans it reaches — not the back-and-forth, not who asked what, not opinions that were later dropped.
@@ -81,14 +81,18 @@ def build_preamble(req: DecomposeRequest) -> str:
     lines = [f'This note was written by {req.speaker}. "I", "me" and "my" in the note mean {req.speaker}.']
     if req.addressee:
         lines.append(
-            f'The note is addressed to {req.addressee}. "You" and "your" in the note mean {req.addressee}.'
+            f'The note is addressed to {req.addressee}. "You" and "your" in the note mean '
+            f'{req.addressee}: write {req.addressee} wherever the note says "you". A statement '
+            f'about "you" is a fact about {req.addressee}, never about {req.speaker}.'
         )
     else:
         lines.append(
             'The note names no addressee. If it says "you", write "the addressee" — do not guess who that is.'
         )
     if req.speaker != req.agent_name:
-        lines.append(f"The note is being stored by the agent {req.agent_name} on {req.speaker}'s behalf.")
+        # Not "on {speaker}'s behalf": that wording made Haiku 4.5 attribute
+        # "you" statements to the speaker (fixture attribution_no_label).
+        lines.append(f"The note is stored in the memory of the agent {req.agent_name}.")
     if req.user_name:
         lines.append(f"The agent's user is {req.user_name}.")
     if req.channel:
