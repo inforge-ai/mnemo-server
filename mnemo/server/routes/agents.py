@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..auth import AuthContext, require_admin, require_agent, require_agent_match, require_operator, resolve_auth
 from ..database import get_conn, get_pool
 from ..services.address_service import create_address, resolve_address as resolve_address_fn, resolve_agent_identifier
-from ..models import AgentCreate, AgentCreateResponse, AgentResponse, AgentStats
+from ..models import AgentCreate, AgentCreateResponse, AgentMeResponse, AgentResponse, AgentStats
 from ..services.agent_service import depart_agent as do_depart, reinstate_agent as do_reinstate
 from ..services.atom_service import get_agent_stats
 from ..services.auth_service import create_agent_key, get_or_create_local_operator
@@ -159,6 +159,26 @@ async def resolve_agent_address(address: str, auth: AuthContext = Depends(resolv
         "address": row["address"],
         "operator": row["operator_name"],
     }
+
+
+@router.get("/agents/me", response_model=AgentMeResponse)
+async def get_me(auth: AuthContext = Depends(resolve_auth)):
+    """The agent identified by the X-Agent-Key (v2 Phase 1). Agent keys only.
+    Registered before /agents/{agent_id} so "me" is never an identifier."""
+    if auth.role != "agent" or auth.agent_id is None:
+        raise HTTPException(status_code=403, detail="GET /agents/me needs an agent key (X-Agent-Key).")
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT a.id, a.name, a.status, aa.address
+            FROM agents a LEFT JOIN agent_addresses aa ON aa.agent_id = a.id
+            WHERE a.id = $1
+            """,
+            auth.agent_id,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return dict(row)
 
 
 @router.get("/agents/{agent_id}", response_model=AgentResponse)

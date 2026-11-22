@@ -9,7 +9,10 @@ from ..auth import AuthContext, require_agent, require_agent_match, resolve_auth
 from ..config import settings
 from ..database import get_conn, get_pool
 from ..services.address_service import resolve_agent_identifier
-from ..models import RememberRequest, RememberResponse, RetrieveRequest, RetrieveResponse, StoreJobResponse
+from ..models import (
+    RecentRequest, RecentResponse, RememberRequest, RememberResponse,
+    RetrieveRequest, RetrieveResponse, StoreJobResponse,
+)
 from ..services import atom_service, store_service
 from ..services.ops_service import log_operation
 
@@ -126,6 +129,9 @@ async def recall(agent_id: str, body: RetrieveRequest, auth: AuthContext = Depen
             verbosity=body.verbosity,
             max_content_chars=body.max_content_chars,
             max_total_tokens=body.max_total_tokens,
+            since=body.since,
+            until=body.until,
+            atom_types=body.atom_types,
         )
         await log_operation(
             conn, "recall", auth.agent_id, target_id=agent_uuid,
@@ -133,6 +139,29 @@ async def recall(agent_id: str, body: RetrieveRequest, auth: AuthContext = Depen
             metadata={"results_returned": result["total_retrieved"]},
         )
     return result
+
+
+@router.post("/agents/{agent_id}/recent", response_model=RecentResponse, response_model_exclude_none=True)
+async def recent(agent_id: str, body: RecentRequest, auth: AuthContext = Depends(require_agent)):
+    """Newest atoms first (order_by "stored" = created_at, "event" =
+    COALESCE(remembered_on, created_at)). No embedding, no access update."""
+    pool = await get_pool()
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
+    require_agent_match(agent_uuid, auth)
+    async with get_conn() as conn:
+        await _require_active_agent(conn, agent_uuid)
+        t0 = time.monotonic()
+        atoms = await atom_service.recent(
+            conn, agent_uuid, limit=body.limit, since=body.since, until=body.until,
+            atom_types=body.atom_types, domain_tags=body.domain_tags,
+            include_superseded=body.include_superseded, order_by=body.order_by,
+        )
+        await log_operation(
+            conn, "recent", auth.agent_id, target_id=agent_uuid,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            metadata={"results_returned": len(atoms)},
+        )
+    return {"atoms": atoms, "total_returned": len(atoms)}
 
 
 @router.get("/stores/{store_id}/status", response_model=StoreJobResponse)

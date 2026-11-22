@@ -30,6 +30,8 @@ async def expand_graph(
     scope_filter: dict | None,
     exclude_ids: set[UUID] | None = None,
     allowed_ids: set[UUID] | None = None,
+    since=None,
+    until=None,
 ) -> list[asyncpg.Record]:
     """
     Follow edges up to `depth` hops from seed_ids and return expanded atoms.
@@ -103,7 +105,7 @@ async def expand_graph(
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at,
             a.last_accessed, a.access_count, a.is_active,
-            a.remembered_on,
+            a.remembered_on, a.source_id, s.origin_class,
             a.embedding,
             effective_confidence(
                 a.confidence_alpha, a.confidence_beta,
@@ -116,9 +118,14 @@ async def expand_graph(
             ex.edge_weight
         FROM expanded ex
         JOIN atoms a ON a.id = ex.id
+        LEFT JOIN sources s ON s.id = a.source_id
         WHERE a.is_active = true
           AND a.id != ALL($1)   -- exclude seeds
           AND a.id != ALL($6)   -- exclude caller-specified IDs
+          -- Date window (v2 Phase 1) on returned atoms; traversal may pass
+          -- through atoms outside it.
+          AND ($8::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) >= $8)
+          AND ($9::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) < $9)
         ORDER BY a.id, ex.relevance DESC
         """,
         seed_ids,
@@ -128,6 +135,8 @@ async def expand_graph(
         scope_domain_tags,
         list(exclude_ids),
         allowed_list,
+        since,
+        until,
     )
 
     return list(rows)

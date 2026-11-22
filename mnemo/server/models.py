@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Literal
 from uuid import UUID
 from datetime import datetime
@@ -133,6 +133,10 @@ class AtomResponse(BaseModel):
     # Distinct from created_at — that's when mnemo stored the atom. NULL for
     # semantic/procedural atoms and for episodic atoms stored before 4b.
     remembered_on: Optional[datetime] = None
+    # v2 Phase 1 provenance: the source row and its origin class. NULL for
+    # atoms stored before Phase 1 and for explicit /atoms stores.
+    source_id: Optional[UUID] = None
+    origin_class: Optional[str] = None
     # Lifecycle relationships (tension_with / narrows) — populated by the
     # recall path when the atom participates in such edges. supersedes edges
     # are filtered server-side and never appear here.
@@ -154,6 +158,13 @@ class RetrieveRequest(BaseModel):
     expand_graph: bool = True
     expansion_depth: int = Field(default=1, ge=0, le=2)  # Ticket 2 scopes graph expansion to 1-hop.
     include_superseded: bool = False
+    # v2 Phase 1: SQL-side filters on COALESCE(remembered_on, created_at)
+    # (since inclusive, until exclusive) and atom type.
+    since: Optional[datetime] = None
+    until: Optional[datetime] = None
+    atom_types: Optional[list[Literal["episodic", "semantic", "procedural"]]] = Field(
+        default=None, min_length=1, max_length=3,
+    )
     similarity_drop_threshold: Optional[float] = Field(
         default=0.15,
         ge=0.0,
@@ -176,6 +187,13 @@ class RetrieveRequest(BaseModel):
         le=10000,
         description="Approximate token budget for all returned content",
     )
+
+    @model_validator(mode="after")
+    def _window(self):
+        if self.since and self.until and self.since >= self.until:
+            raise ValueError("since must be earlier than until")
+        return self
+
 
 class RetrieveResponse(BaseModel):
     """Unified response: vector and graph matches in one list, annotated
@@ -327,3 +345,35 @@ class AgentStats(BaseModel):
     topics: list[str] = []
     date_range: Optional[dict] = None
     most_accessed: list[dict] = []
+
+
+# ── Recent (v2 Phase 1) ──
+
+class RecentRequest(BaseModel):
+    limit: int = Field(20, ge=1, le=100)
+    since: Optional[datetime] = None
+    until: Optional[datetime] = None
+    atom_types: Optional[list[Literal["episodic", "semantic", "procedural"]]] = Field(
+        default=None, min_length=1, max_length=3,
+    )
+    domain_tags: Optional[list[str]] = Field(default=None, max_length=20)
+    include_superseded: bool = False
+    order_by: Literal["stored", "event"] = "stored"
+
+    @model_validator(mode="after")
+    def _window(self):
+        if self.since and self.until and self.since >= self.until:
+            raise ValueError("since must be earlier than until")
+        return self
+
+
+class RecentResponse(BaseModel):
+    atoms: list[AtomResponse]
+    total_returned: int
+
+
+class AgentMeResponse(BaseModel):
+    id: UUID
+    name: str
+    address: Optional[str] = None
+    status: str

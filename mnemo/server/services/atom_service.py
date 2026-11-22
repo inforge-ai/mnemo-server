@@ -204,17 +204,18 @@ async def _get_atom_row(
     return await conn.fetchrow(
         """
         SELECT
-            id, agent_id, atom_type, text_content, structured,
-            confidence_alpha, confidence_beta,
-            source_type, domain_tags, created_at, last_accessed, access_count, is_active,
-            remembered_on,
+            a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
+            a.confidence_alpha, a.confidence_beta,
+            a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on, a.source_id, s.origin_class,
             effective_confidence(
-                confidence_alpha, confidence_beta,
-                decay_type, decay_half_life_days,
-                created_at, last_accessed, access_count
+                a.confidence_alpha, a.confidence_beta,
+                a.decay_type, a.decay_half_life_days,
+                a.created_at, a.last_accessed, a.access_count
             ) AS confidence_effective
-        FROM atoms
-        WHERE id = $1 AND agent_id = $2 AND is_active = true
+        FROM atoms a
+        LEFT JOIN sources s ON s.id = a.source_id
+        WHERE a.id = $1 AND a.agent_id = $2 AND a.is_active = true
         """,
         atom_id,
         agent_id,
@@ -386,6 +387,9 @@ def _row_to_atom_response(
         # remembered_on is present on rows from atom inserts/gets/retrieves
         # and graph expansions; other SELECT paths may omit it — fall back to None.
         "remembered_on": _safe_get(row, "remembered_on"),
+        # v2 Phase 1 provenance (NULL for atoms stored before Phase 1).
+        "source_id": _safe_get(row, "source_id"),
+        "origin_class": _safe_get(row, "origin_class"),
     }
 
 
@@ -724,9 +728,16 @@ async def retrieve(
     verbosity: str = "full",
     max_content_chars: int = 200,
     max_total_tokens: int | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    atom_types: list[str] | None = None,
 ) -> dict:
     """
     Semantic retrieval with decay filtering, access updates, optional graph expansion.
+
+    since/until (on COALESCE(remembered_on, created_at); since inclusive,
+    until exclusive) and atom_types are SQL WHERE filters applied before
+    LIMIT, for both the vector candidates and graph-expanded atoms.
 
     Ranking: composite score = similarity * (0.7 + 0.3 * effective_confidence),
     with a 15% specificity penalty for consolidated atoms.
@@ -742,28 +753,35 @@ async def retrieve(
     rows = await conn.fetch(
         """
         SELECT
-            id, agent_id, atom_type, text_content, structured,
-            confidence_alpha, confidence_beta,
-            source_type, domain_tags, created_at, last_accessed, access_count, is_active,
-            remembered_on,
-            embedding,
-            1 - (embedding <=> $1::vector) AS cosine_sim,
+            a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
+            a.confidence_alpha, a.confidence_beta,
+            a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on, a.source_id, s.origin_class,
+            a.embedding,
+            1 - (a.embedding <=> $1::vector) AS cosine_sim,
             effective_confidence(
-                confidence_alpha, confidence_beta,
-                decay_type, decay_half_life_days,
-                created_at, last_accessed, access_count
+                a.confidence_alpha, a.confidence_beta,
+                a.decay_type, a.decay_half_life_days,
+                a.created_at, a.last_accessed, a.access_count
             ) AS confidence_effective
-        FROM atoms
-        WHERE agent_id = $2
-          AND is_active = true
-          AND ($3::text[] IS NULL OR domain_tags && $3)
-        ORDER BY embedding <=> $1::vector ASC
+        FROM atoms a
+        LEFT JOIN sources s ON s.id = a.source_id
+        WHERE a.agent_id = $2
+          AND a.is_active = true
+          AND ($3::text[] IS NULL OR a.domain_tags && $3)
+          AND ($5::text[] IS NULL OR a.atom_type = ANY($5))
+          AND ($6::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) >= $6)
+          AND ($7::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) < $7)
+        ORDER BY a.embedding <=> $1::vector ASC
         LIMIT $4
         """,
         embedding,
         agent_id,
         domain_tags,
         over_fetch,
+        atom_types,
+        since,
+        until,
     )
 
     # Apply similarity floor, confidence filter, compute composite score, sort.
@@ -826,8 +844,10 @@ async def retrieve(
             agent_id=agent_id,
             seed_ids=kept_id_list,
             depth=expansion_depth,
-            scope_filter=None,
+            scope_filter={"atom_types": atom_types} if atom_types else None,
             exclude_ids=kept_ids,  # only exclude surviving primary atoms from expanded results
+            since=since,
+            until=until,
         )
 
         # Score graph atoms as source_score * edge_weight * discount. Guarantees
@@ -977,6 +997,57 @@ async def get_atom(
     if row is None:
         return None
     return _row_to_atom_response(row)
+
+
+async def recent(
+    conn: asyncpg.Connection,
+    agent_id: UUID,
+    limit: int = 20,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    atom_types: list[str] | None = None,
+    domain_tags: list[str] | None = None,
+    include_superseded: bool = False,
+    order_by: str = "stored",
+) -> list[dict]:
+    """Newest active atoms. No embedding, no access-count update.
+
+    order_by="stored": created_at DESC (default). "event":
+    COALESCE(remembered_on, created_at) DESC. All filters are in the WHERE
+    clause, before LIMIT."""
+    order = (
+        "COALESCE(a.remembered_on, a.created_at) DESC, a.created_at DESC"
+        if order_by == "event" else "a.created_at DESC"
+    )
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
+            a.confidence_alpha, a.confidence_beta,
+            a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on, a.source_id, s.origin_class,
+            effective_confidence(
+                a.confidence_alpha, a.confidence_beta,
+                a.decay_type, a.decay_half_life_days,
+                a.created_at, a.last_accessed, a.access_count
+            ) AS confidence_effective
+        FROM atoms a
+        LEFT JOIN sources s ON s.id = a.source_id
+        WHERE a.agent_id = $1
+          AND a.is_active = true
+          AND ($2::text[] IS NULL OR a.atom_type = ANY($2))
+          AND ($3::text[] IS NULL OR a.domain_tags && $3)
+          AND ($4::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) >= $4)
+          AND ($5::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) < $5)
+          AND ($6 OR NOT EXISTS (
+                SELECT 1 FROM edges e JOIN atoms src ON src.id = e.source_id
+                WHERE e.target_id = a.id AND e.edge_type = 'supersedes' AND src.is_active = true))
+        ORDER BY {order}
+        LIMIT $7
+        """,
+        agent_id, atom_types, domain_tags, since, until, include_superseded, limit,
+    )
+    return [_row_to_atom_response(r) for r in rows]
 
 
 async def soft_delete_atom(
