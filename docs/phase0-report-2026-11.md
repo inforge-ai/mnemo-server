@@ -415,8 +415,158 @@ Each execute script runs in one transaction and **rolls back unless the affected
 
 Status at 2026-11-22: role `mnemo_migrator` does not exist yet, and all 18 production tables are still owned by `postgres`. The window has not started and the old server is still running.
 
-## Needed from Tom before the data window
-1. **Run** `sudo -u postgres psql -d mnemo -v ON_ERROR_STOP=1 -f scripts/phase0_create_migrator_role.sql`, then add `MNEMO_MIGRATION_DATABASE_URL` to `.env`.
-2. **G3:** confirm the eval list: the 11 `locomo-conv-*` agents, and whether `agent1` goes too. Confirm the 143 trust rows may cascade.
-3. **Go-ahead** to stop the production server for the window (`docker compose stop mnemo-server`) and restart on `v2/phase0` afterwards.
-4. **Whether `planned_then_done` stays strict** given the 3/3 XPASS.
+## Review and pre-window additions (Tom, 2026-11-22)
+Tom reviewed `v2/phase0` at `f4d0570` and approved it. He ran the role script on `mnemo` and `mnemo_eval` and created `~/.pgpass`. Additions, in commit `7a0c676`:
+1. The `mnemo_eval` trim also deletes operators with no agents left (their api_keys cascade), then runs `VACUUM FULL`.
+2. All copies of production data are removed after 5f, except the backup dump (see "Cleanup" below).
+3. The header of the role script now says `~/.pgpass`, not `.env`.
+4. **Do not enable `consolidation_decay_enabled` before Phase 3.** Re-enabling it would immediately deactivate all 2,957 restored atoms, because they sit below `min_effective_confidence`. A warning comment is now on the setting in `config.py`.
+
+Checks before starting: role `mnemo_migrator` exists (not superuser, no createdb) and owns 18 tables in each database. `.pgpass` logins work for both. URLs are passed with `--database-url postgresql://mnemo_migrator@localhost:5432/<db>`, so no password appears anywhere.
+
+## 5. Production data window (2026-11-22)
+| time (UTC) | event |
+|---|---|
+| 14:23:55 | old server stopped (`docker compose stop mnemo-server`). Last consolidation run 13:51:41. |
+| ~14:31 | new server healthy on `7a0c676`. **Downtime about 7½ minutes.** |
+
+**Reference totals when the server stopped:** 39,700 atoms (baseline 39,672), 44,618 edges, 25 agents. Clio's total was 2,033 (baseline 2,005, +28 new writes). Every other agent's total matched the baseline, so no agent's total dropped.
+
+| step | approved | production | result |
+|---|---:|---:|---|
+| 5a `migrate --to 008_merge_pairs` | — | — | applied 007 and 008; 318 self-loops deleted (edges 44,618 → 44,300) |
+| 5b classify | — | — | 0 unclassified. merged 23,926 (consolidation 23,430, direct 475, arc 21); arc 48; `decay_or_deleted` **6,678** (rehearsal 6,677) |
+| 5c restore | 2,956 | **2,957** | restored 2,957 |
+| 5c-bis consolidation copies | 56 | 56 | deactivated 56 |
+| 5c-ter merge_pairs | 430 | 430 | exported 430 |
+| 5d production delete | 11 agents / 26,802 atoms | same | atoms 39,700 → 12,898; 0 non-eval agents with a changed total |
+| 5e `migrate` (009), VACUUM ANALYZE | — | — | index dropped; no pending migrations |
+
+**5c, old vs new:** 2,956 → 2,957. Clio's restore count went 487 → 488 because one atom decayed after the backup was taken. Same selection rule, and clio's total grew, so this falls under Tom's rule and the new number was used. Everything else matched the approval exactly.
+
+**5d, trust rows:** `agent_trust` went 532 → 136. From the untrimmed `mnemo_eval`:
+- 136 rows between non-eval agents: all kept.
+- 143 rows from non-eval agents to eval agents: cascaded, as approved.
+- 253 rows owned by the eval agents: removed with them.
+
+### Per-agent atoms (before the window → after)
+| agent | total | active before | active after |
+|---|---:|---:|---:|
+| toms-claude-desktop | 3,731 | 1,438 | 1,988 |
+| eaara | 2,357 | 1,848 | 2,346 |
+| nels-claude-desktop | 2,281 | 600 | 775 |
+| clio | 2,033 | 859 | 1,319 |
+| tapio | 1,459 | 771 | 1,436 |
+| illmarinen | 624 | 164 | 611 |
+| amphion | 163 | 112 | 162 |
+| inforge-researcher | 107 | 88 | 105 |
+| lloyd | 69 | 54 | 69 |
+| toms-claude-code | 43 | 39 | 43 |
+| nels-hermes-agent | 26 | 9 | 26 |
+| agent1 | 3 | 0 | 3 |
+| zethus | 2 | 2 | 2 |
+| mimir | 0 | 0 | 0 |
+
+`agent1` was kept. Tom didn't confirm it for deletion at G3.
+
+### 5d, `mnemo_eval`
+1. `mnemo migrate` applied 007, 008 and 009 (Tom's item 6); nothing pending.
+2. Trimmed to eval agents only, with `expected_agents=11`.
+
+What remains in `mnemo_eval`:
+
+| table | rows |
+|---|---:|
+| agents | 11 (all `locomo-conv-*`) |
+| atoms | 26,802 |
+| edges | 19,664 |
+| operators | 1 (`tom`, which owns the eval agents; 3 operators deleted) |
+| api_keys | 4 (hashes, owned by `tom`) |
+| access_log | 20,017 (eval agents' merge rows) |
+| decomposer_usage | 291 |
+| operations | 1,832 |
+| agent_trust | 110 |
+| views | 0 |
+| merge_pairs | 0 |
+
+- Non-eval agents, atoms and `access_log` rows left: 0. `store_failures`: 0.
+- After `VACUUM FULL` and `ANALYZE`, dead tuples are **0**, and a further `VACUUM FULL atoms` wrote a new data file (filenode 107436 → 107479). The deleted rows are physically gone.
+- `VACUUM FULL` skipped only system catalogs owned by `postgres`.
+- Size: 136 MB.
+
+### 5e latency (production, EXPLAIN ANALYZE, no vector index)
+Every query uses the btree index `idx_atoms_active` (bitmap heap scan), or a plain index scan for the smallest agents.
+
+| agent | rows | cold ms | warm ms |
+|---|---:|---:|---:|
+| eaara | 20 | 34.7 | 9.5 |
+| toms-claude-desktop | 20 | 31.9 | 6.9 |
+| tapio | 20 | 17.8 | 4.6 |
+| clio | 20 | 11.3 | 5.3 |
+| nels-claude-desktop | 20 | 11.3 | 2.6 |
+| inforge-researcher | 20 | 6.0 | 0.6 |
+| illmarinen | 20 | 4.3 | 3.0 |
+| agent1 | 3 | 2.1 | 0.9 |
+| lloyd | 20 | 1.3 | 0.4 |
+| toms-claude-code | 20 | 1.1 | 0.2 |
+| amphion | 20 | 1.0 | 0.7 |
+| nels-hermes-agent | 20 | 0.3 | 0.2 |
+| zethus | 2 | 0.1 | 0.0 |
+
+### 5f restart
+- **Command:** `BUILD_COMMIT=7a0c676 docker compose up -d --build`.
+- **Config:** `.env` has one line added, `MNEMO_DUPLICATE_SIMILARITY_THRESHOLD=0.97`. The container's `MNEMO_*` names are ADMIN_KEY, DATABASE_URL, DOCKER_DATABASE_URL, DUPLICATE_SIMILARITY_THRESHOLD and LIFECYCLE_DETECTION_ENABLED.
+- **docker-compose:** port binding unchanged (`0.0.0.0:8000`), as Tom asked.
+- **Health:** `/v1/health` returns `ok`, version `0.2.0+7a0c676`, schema `009_drop_ivfflat_index`. The startup check logged "All migrations applied".
+
+One recall per active agent through the API, using the admin key and the query "what have I been working on recently". All returned 200.
+
+| agent | results | ms |
+|---|---:|---:|
+| toms-claude-desktop | 30 | 120 |
+| tapio | 29 | 106 |
+| illmarinen | 28 | 109 |
+| nels-claude-desktop | 28 | 107 |
+| clio | 26 | 143 |
+| eaara | 17 | 114 |
+| amphion | 8 | 89 |
+| toms-claude-code | 5 | 82 |
+| lloyd | 3 | 72 |
+| agent1 | 1 | 307 |
+| inforge-researcher | 0 | 70 |
+| mimir | 0 | 69 |
+| nels-hermes-agent | 0 | 65 |
+| zethus | 0 | 82 |
+
+- Counts above 10 include graph-expansion matches.
+- 0 means nothing cleared the similarity floor for this generic query.
+- The first request includes warm-up.
+- These recalls updated `access_count` and `last_accessed` on the atoms they returned.
+
+## Cleanup of production-data copies (after 5f, 2026-11-22)
+| copy | contents | action |
+|---|---|---|
+| container `mnemo-phase0-pg` | `mnemo_prodcopy` (136 MB, restored dump, trimmed to eval agents in rehearsal), `mnemo_rehearse` (213 MB, full rehearsal copy), plus `mnemo_test` and `mnemo_scratch` (synthetic data only) | removed with `docker rm -f -v` |
+| anonymous volume `ac158994…` | that container's data directory | removed with the container; confirmed gone |
+| `/tmp/m.sql` inside the container | role script copy | removed with the container |
+| image `pgvector/pgvector:0.8.2-pg16` | software only | removed |
+| session scratchpad files | baseline query output, per-agent counts and ids, schema and grant dumps, latency results; counts and ids only, never atom text | all deleted; directory empty |
+| `~/backups/mnemo-prod-2026-11-21.dump` | full backup | **kept**, as Tom asked (mode 600, sha256 above) |
+
+**Not removed:**
+- `mnemo_eval` on the host: the intended eval database, now eval agents only.
+- Test-run temp directories under `/tmp/pytest-of-tompdavis`: synthetic migration files only.
+- `/tmp/s2.csv` and `/tmp/sheet2.csv`: created 2026-11-22 10:17, not by this work, so left alone.
+- The old April server image: dangling, code only.
+- **The test database is gone with the container.** Rebuild it for future test runs with `schema.sql` plus `mnemo migrate`.
+
+## Exit criteria
+| criterion | status |
+|---|---|
+| Default consolidation run deactivates, merges, creates and deletes nothing | covered by `test_consolidation_defaults.py`. **Production check pending:** the `access_log` consolidation rows should show zeros 24 hours after 14:31 UTC |
+| Restored counts match the G2 dry run | yes: 2,957 = dry run (approved 2,956 + 1 decay, under Tom's rule) |
+| No eval agents in production; `mnemo_eval` holds only eval agents | yes |
+| Fresh `schema.sql` + `mnemo migrate` matches production | yes, apart from `remembered_on` column order |
+| Vector index | dropped, not HNSW, per Tom's G1 amendment; recall works for every active agent |
+| Full suite passes; fixtures exist with expected xfails | 439 passed, 1 known LLM-flaky failure; fixtures in place |
+| Report complete | this document; PR still to open |
