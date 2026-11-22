@@ -400,6 +400,21 @@ Each execute script runs in one transaction and **rolls back unless the affected
   - `mimir`: operator `tom`, 0 atoms. Not benchmark data on its face.
 - **Live drift since the baseline:** clio has grown 2,005 → 2,033 atoms. The old server is still running the hourly destructive consolidation, so the G2 counts will be re-run on production at the start of the window and checked against the approved numbers.
 
+## Window decisions (Tom, 2026-11-22)
+1. `planned_then_done` is back to non-strict xfail until phase 2 (`dd33088`).
+2. **G3:** the 143 `agent_trust` rows may cascade. This is taken as confirming the 11 `locomo-conv-*` agents. `agent1` was not confirmed, so it **stays**.
+3. **Window order:** stop the old server first, then re-run the dry runs.
+   - If counts differ from 2,956 / 56 / 430 only because of decay or new writes since the baseline (same selection rule, no agent's total atom count drops), proceed with the new numbers and record old vs new here.
+   - Stop for anything else.
+4. `MNEMO_MIGRATION_DATABASE_URL` is **not** put in `.env`. The URL is passed with `--database-url`.
+5. **Code before 5f:**
+   - `deactivation_reason` is now set at every deactivation: `deleted_by_agent`, `decay` and `merged` (`bc458bb`).
+   - A missing migrations directory now fails startup when `require_migrations` is on (`18ad3b5`).
+   - Full suite: 439 passed, 1 failed (the known LLM-flaky stats test).
+6. Run `mnemo migrate` on `mnemo_eval`.
+
+Status at 2026-11-22: role `mnemo_migrator` does not exist yet, and all 18 production tables are still owned by `postgres`. The window has not started and the old server is still running.
+
 ## Needed from Tom before the data window
 1. **Run** `sudo -u postgres psql -d mnemo -v ON_ERROR_STOP=1 -f scripts/phase0_create_migrator_role.sql`, then add `MNEMO_MIGRATION_DATABASE_URL` to `.env`.
 2. **G3:** confirm the eval list: the 11 `locomo-conv-*` agents, and whether `agent1` goes too. Confirm the 143 trust rows may cascade.
