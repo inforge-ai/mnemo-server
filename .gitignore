@@ -209,3 +209,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Private working notes: never commit (health details). Kept in ~/mnemo-private/.
+docs/rewrite-notes-*.md

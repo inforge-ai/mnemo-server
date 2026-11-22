@@ -606,15 +606,38 @@ def quantile(xs, q):
     return xs[f] + (xs[c] - xs[f]) * (k - f)
 
 
+def hand_labels() -> dict[str, str]:
+    """Tom's labels from relation_label_check.csv (blank rows ignored)."""
+    path = DATA / "relation_label_check.csv"
+    if not path.exists():
+        return {}
+    out = {}
+    with path.open(newline="") as f:
+        for row in list(csv.reader(f))[1:]:
+            if len(row) > 3 and row[3].strip().lower() in RELATIONS:
+                out[row[0]] = row[3].strip().lower()
+    return out
+
+
 def report(args) -> None:
     rows = read_jsonl(CACHE / RESULTS_FILE)
     items = {"A": {i["id"]: i for i in read_jsonl(CACHE / "grounding_items.jsonl")},
              "B": {i["id"]: i for i in read_jsonl(DATA / "relation_pairs.jsonl")}}
+    # Task B scores against Tom's hand labels where he gave one.
+    hand = hand_labels()
+    changed = 0
+    for iid, lab in hand.items():
+        if iid in items["B"]:
+            changed += items["B"][iid]["label"] != lab
+            items["B"][iid] = {**items["B"][iid], "label": lab}
     by = defaultdict(dict)   # (model, task) -> {(item, variant): row}
     for r in rows:
         by[(r["model"], r["task"])][(r["item"], r["variant"])] = r
     models = sorted({m for m, _ in by})
     print(f"_Generated {datetime.now():%Y-%m-%d %H:%M} from {len(rows)} results._\n")
+    if hand:
+        print(f"_Task B uses Tom's hand labels for the {len(hand)} checked pairs "
+              f"({changed} differ from the generated label); the other pairs keep the generated label._\n")
 
     for task in ("A", "B"):
         title = "Task A — grounding (noul: is the atom fully supported by the quote?)" if task == "A" \
@@ -770,6 +793,50 @@ def report(args) -> None:
         print("</details>\n")
 
 
+def threshold(args) -> None:
+    """Task A: tune the P(supported) threshold on one half, score on the other.
+
+    Split: stratified by (label, perturbation), seeded; both folds reported.
+    The tuned threshold maximises accuracy on the tuning half (candidates are
+    midpoints between distinct scores; ties go to the one closest to 0.5)."""
+    items = {i["id"]: i for i in read_jsonl(CACHE / "grounding_items.jsonl")}
+    rows = [r for r in read_jsonl(CACHE / RESULTS_FILE) if r["task"] == "A" and r["variant"] == "base"]
+    strata = defaultdict(list)
+    for iid, it in sorted(items.items()):
+        strata[(it["label"], it["perturbation"])].append(iid)
+    rng = random.Random(args.seed)
+    halves = ([], [])
+    for key in sorted(strata, key=str):
+        ids = strata[key][:]
+        rng.shuffle(ids)
+        halves[0].extend(ids[: len(ids) // 2]); halves[1].extend(ids[len(ids) // 2:])
+
+    def acc(scores, ids, t):
+        ok = [(scores[i] >= t) == items[i]["label"] for i in ids if i in scores]
+        return sum(ok) / len(ok), len(ok)
+
+    print(f"Task A threshold tuning: halves of {len(halves[0])} / {len(halves[1])} items, "
+          f"stratified by label and perturbation (seed {args.seed}).\n")
+    print("| model | fold (tune → test) | tuned threshold | test accuracy, tuned | test accuracy, 0.5 | test recall supported / unsupported, tuned |")
+    print("|---|---|---|---|---|---|")
+    for m in args.models.split(","):
+        scores = {r["item"]: float(r["answer"]["noul"]) for r in rows
+                  if r["model"] == m and (r["answer"] or {}).get("type") == "noul"}
+        accs = []
+        for k, (tune, test) in enumerate([(halves[0], halves[1]), (halves[1], halves[0])], start=1):
+            vals = sorted({scores[i] for i in tune if i in scores})
+            cands = [0.5] + [(a + b) / 2 for a, b in zip(vals, vals[1:])]
+            best = max(cands, key=lambda t: (acc(scores, tune, t)[0], -abs(t - 0.5)))
+            a_t, n = acc(scores, test, best)
+            a_5, _ = acc(scores, test, 0.5)
+            sup = [scores[i] >= best for i in test if i in scores and items[i]["label"]]
+            uns = [scores[i] < best for i in test if i in scores and not items[i]["label"]]
+            accs.append(a_t)
+            print(f"| {m} | {k}: half {k} → half {3 - k} | {best:.4f} | {pct(a_t)} (n={n}) | {pct(a_5)} | "
+                  f"{pct(sum(sup) / len(sup))} / {pct(sum(uns) / len(uns))} |")
+        print(f"| {m} | mean of both folds | | {pct(statistics.mean(accs))} | | |")
+
+
 def label_check(args) -> None:
     """Relation pairs for Tom to hand-label: every pair where at least
     `min_disagree` models' base answers differ from the generated label, plus
@@ -818,6 +885,9 @@ def main() -> None:
     x.add_argument("--models", default="", help="comma-separated; default: all")
     x.add_argument("--limit", type=int, default=0, help="first N items per task (pilot)")
     sub.add_parser("report")
+    th = sub.add_parser("threshold")
+    th.add_argument("--models", default="typesafe/jev-1.14,liquid/d1.2-ultra")
+    th.add_argument("--seed", type=int, default=5)
     lc = sub.add_parser("label-check")
     lc.add_argument("--min-disagree", type=int, default=2)
     lc.add_argument("--random-n", type=int, default=20)
@@ -831,6 +901,8 @@ def main() -> None:
         asyncio.run(run(args))
     elif args.cmd == "label-check":
         label_check(args)
+    elif args.cmd == "threshold":
+        threshold(args)
     else:
         report(args)
 

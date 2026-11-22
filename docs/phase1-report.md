@@ -24,7 +24,7 @@ The Phase 0 prerequisite (24-hour consolidation check) is not yet due. The first
 | 6 Read side | `atom_service.retrieve/recent`, `graph_service`, `routes/agents.py` | `since` / `until` / `atom_types` in the SQL `WHERE` before `LIMIT`, graph expansion included. `POST /recent` with `order_by` `stored`/`event`. `GET /agents/me`. Bare agent names resolve within the caller's operator. `source_id` and `origin_class` appear in responses. |
 | 7 MCP (mnemo-client) | `~/mnemo-client` `v2/phase1`, 0.6.0, **not published** | `agent_id` is optional (UUID, name or address; defaults to `/agents/me`). Every output line starts with the atom id. Remember gains speaker / addressee / channel / origin_class, plus the description text Tom specified. Recall gains since / until / atom_types and full verbosity with a 600-character cap per atom. New tools `mnemo_recent`, `mnemo_forget`, `mnemo_store_status`. 120 s remember timeout. 133 client tests. Smoke test registers 10 tools. Checked end-to-end against a local Phase 1 server. |
 | 8 Harder fixtures | `tests/fixtures/v2/` | 8 new synthetic cases: no-label attribution, third-system attribution, ticker abbreviation, long note, provider failure, reported speech, temporary state, correction. 5× repeats. `read_your_writes` and `updated_number@0.90` flipped to pass. |
-| 9 Bake-off | `scripts/eval/decision_bakeoff.py`, `docs/phase1-bakeoff.md` | Round 2: 5 decision models, 2 generative baselines, 12,390 requests. No model chosen yet (G2 review). The round 1 Haiku 4.5 negation result was a harness bug, now fixed. Grounding ranking (AUC) is a tie across most models; relation shows no significant differences. The hand-label CSV was rebuilt from disagreements. The local open-weight run is pending a decision on hardware. |
+| 9 Bake-off | `scripts/eval/decision_bakeoff.py`, `docs/phase1-bakeoff.md` | Round 2: 5 decision models, 2 generative baselines, 12,390 requests. No model chosen yet (G2 review). The round 1 Haiku 4.5 negation result was a harness bug, now fixed. Grounding ranking (AUC) is a tie across most models. With tuned thresholds, Jev reaches 89.5% and Liquid 88.4%. Relation, scored on Tom's 47 hand labels, shows no significant differences. Data-policy screen: Jev, Liquid and Microsoft are eligible (ZDR, and `provider: {"zdr": true}` is enforced); Gemini and Luna are ineligible. No local open-weight model (closed). |
 
 **Tests:** 503 non-eval tests pass locally, offline (0 non-loopback connections) and in CI. CI is green on every commit except `2c4b505` and `ce07b78` (see deviations).
 
@@ -84,8 +84,9 @@ The deploy steps are unchanged from the spec: backup, migrate, rebuild, restart,
 2. **How does `remember` latency split?** With Haiku 4.5 the model call takes 94% of the time (median 2.26 s), embedding 6% (145 ms) and the database under 1% (5 ms). With Haiku 5.5 the model call is 1.20 s.
 3. **Which decision model wins each task, and is one good enough for both?** Round 2: no decision yet, per the G2 review.
    - **Grounding:** a statistical tie on ranking. ROC AUC is 0.954–0.966 for all but `microsoft/microsoft-decision-1.1` (0.913). At a 0.5 threshold `openai/gpt-6-luna-decisions` leads (89.7%), but it is not significantly ahead of Gemini, Liquid or Haiku 4.5. The differences that are significant come from threshold placement, not ranking.
-   - **Relation:** no significant differences (90.5–95.0%; every McNemar p ≥ 0.06). `typesafe/jev-1.14` has the best AUC (0.999) and Brier score.
-   - **One model for both:** looks feasible (Liquid or Jev), pending Tom's relation labels and the local open-weight run.
+   - **Relation, on Tom's hand labels:** no significant differences (91.0–94.0%; every McNemar p ≥ 0.14).
+   - **Eligible for mnemo data (ZDR):** Jev, Liquid, Microsoft. Gemini and Luna are not.
+   - **One model for both:** feasible among the eligible three. Jev with a tuned threshold (89.5% on grounding, 93.0% on relation, best contradiction recall) or Liquid (88.4% / 93.0%, cheapest).
 4. **How sensitive are the candidates to option order and label wording?**
    - Option order hardly matters: 0–1.5% of labels flip, except `openai/gpt-6-luna-decisions` at 6.5% on relation.
    - Rewording matters more: 1.3–6.7% flips on grounding and 4.0–10.5% on relation.
@@ -96,7 +97,7 @@ The deploy steps are unchanged from the spec: backup, migrate, rebuild, restart,
 - 24-hour consolidation check (after 2026-11-23 14:31 UTC), then tick PR #23.
 - **G2:** deploy approval and the decomposer model choice.
 - **G3:** client publish questions (below).
-- Tom hand-labels `scripts/eval/data/relation_label_check.csv` (40 rows) to check the bake-off relation labels.
+- Done: Tom hand-labelled the 47-row relation check (`ccbd8ef`), and the bake-off is rescored against those labels.
 - PRs: `mnemo-server` `v2/phase1` → `v2/phase0`; `mnemo-client` `v2/phase1` → `main`; and the `inforge-ai/mnemo-mcp` "superseded" README notice. None is opened yet; awaiting the go-ahead.
 
 ### G3 questions (client publish)

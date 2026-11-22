@@ -8,9 +8,10 @@ No production integration: nothing here runs in the write or read path (spec rul
 - adds `claude-haiku-5-5` as a second baseline;
 - balances the Task A perturbations, with 45 abbreviation cases;
 - reports ROC AUC and paired McNemar tests;
-- rebuilds the hand-label check from model disagreements.
+- tunes the Task A threshold on held-out data;
+- scores Task B against Tom's hand labels.
 
-The local open-weight model is still open (see the end of this doc).
+A **data-policy screen** marks two candidates ineligible for mnemo data. Benchmarking a local open-weight model is out of scope (Tom, 2026-11-22).
 
 ## Round 2 findings
 
@@ -24,17 +25,65 @@ The local open-weight model is still open (see the end of this doc).
    - It is significantly better (Bonferroni p < 0.0083) than `typesafe/jev-1.14`, `microsoft/microsoft-decision-1.1` and Haiku 5.5. Those three lose mainly on *supported* items (recall 73–77%), which means a stricter implicit threshold. The AUCs show their ranking is as good.
    - Any Phase 2 use should set the threshold per model on held-out data, not use 0.5.
    - Every model catches 100% of negations and about 87–100% of number and abbreviation changes. Subject swaps are the hardest (82–89%).
-3. **Task B, relation: no model is significantly better than any other.**
-   - Accuracy is 90.5–95.0%. The best is Haiku 5.5 at 95.0%; every McNemar p ≥ 0.06 against it.
-   - Macro AUC is 0.992–0.999. `typesafe/jev-1.14` is highest (0.999), with the best Brier score (0.077) and contradiction recall of 85%.
-   - **Contradiction is the weak class for everyone, and part of that may be the labels.** Of the 27 pairs where at least 2 models disagree with the generated label, 17 are labelled `contradicts`. Some read more like tension than strict contradiction. Tom's hand labels on `relation_label_check.csv` (47 rows: those 27 plus 20 random, labels hidden) settle this before anyone relies on Task B numbers.
+3. **Task B, relation, scored against Tom's hand labels: no model is significantly better than any other.**
+   - Tom labelled 47 pairs: the 27 where at least two models disagreed with the generated label, plus 20 random. All 20 random pairs matched the generated label. He changed 12 of the 27 disagreements, 8 of them away from `contradicts` (to `update` ×4, `unrelated` ×2, `narrows`, `same`). So part of round 2's weak contradiction recall was label error.
+   - With his labels, accuracy is 91.0–94.0%: `microsoft/microsoft-decision-1.1` 94.0%; `typesafe/jev-1.14` and `liquid/d1.2-ultra` 93.0%. Every McNemar p ≥ 0.14.
+   - Macro AUC is 0.977–0.994.
+   - Jev has the best contradiction recall (90.9%) and a low Brier score (0.104; Microsoft 0.098).
+   - On the 47 hard pairs alone: Microsoft 36, Jev 34, Liquid 33, Haiku 4.5 33, Gemini 31, Haiku 5.5 31, Luna 30.
 4. **Option order barely matters** (0–1.5% of labels flip, except `openai/gpt-6-luna-decisions` at 6.5% on Task B). **Rewording matters more:** 1.3–6.7% flips on Task A and 4.0–10.5% on Task B.
 5. **Cost and latency.** Decision models answer in 0.17–0.28 s at p50 and cost $0.007–0.028 per 1,000 decisions. The Haiku baselines take 0.56–1.15 s and cost $0.12 (5.5) to $1.50 (4.5) per 1,000.
 
 What this leaves for the model choice:
-- On these data, `liquid/d1.2-ultra` and `typesafe/jev-1.14` are the cheap, fast, well-ranked candidates for both tasks.
-- Haiku 5.5 is the generative option at about 5–20× their cost.
-- The choice should wait for Tom's relation labels and the local open-weight run.
+- **Eligible for mnemo data** (ZDR endpoints, routing enforceable with `provider: {"zdr": true}`): `typesafe/jev-1.14`, `liquid/d1.2-ultra`, `microsoft/microsoft-decision-1.1`. See the data-policy table.
+- `google/gemini-decision-1` and `openai/gpt-6-luna-decisions` are **ineligible**: no ZDR endpoint.
+- **Grounding**, with a held-out tuned threshold: Jev reaches 89.5%, with a stable threshold of about 0.09; Liquid 88.4%, with an unstable threshold.
+- **Relation:** the three eligible models are statistically tied, at 93–94%.
+- Haiku 5.5, through Anthropic, remains the generative option at about 5–20× their cost.
+
+## Data policy (mnemo data eligibility)
+
+Checked 2026-11-22. Sources:
+- OpenRouter's model endpoints API (`/api/v1/models/{id}/endpoints`, the routed providers).
+- The public ZDR endpoint list (`/api/v1/endpoints/zdr`, 936 endpoints).
+- The ZDR and data-collection docs (`/docs/features/zdr`, `/docs/guides/privacy/data-collection`).
+- A live test of `provider` preferences on `POST /api/alpha/decisions` with a one-line synthetic state.
+
+OpenRouter itself does not store prompts or responses unless the account opts in to logging. It keeps metadata only (`/docs/guides/privacy/data-collection`). Tiers from the ZDR doc:
+- **ZDR:** no routine storage after processing, no training.
+- **Safety Retention:** stored only for abuse detection, no training.
+- **Retention and Training:** stored and used for training only as the provider's own policy says.
+
+| candidate | routed provider (only endpoint) | ZDR list | retention / training of inputs | `provider: {"zdr": true}` on Decisions | eligible for mnemo data |
+|---|---|---|---|---|---|
+| `typesafe/jev-1.14` | TypeSafe (`jev-1.14-20261014`) | yes, `safety_retention: false` | ZDR tier: no routine retention, no training | accepted, routed to TypeSafe | **yes** |
+| `liquid/d1.2-ultra` | Liquid (`d1.2-ultra-20261116`) | yes, `safety_retention: false` | ZDR tier: no routine retention, no training | accepted, routed to Liquid | **yes** |
+| `microsoft/microsoft-decision-1.1` | Azure (`microsoft-decision-1.1-20261117`) | yes, `safety_retention: false` | ZDR tier: no routine retention, no training | accepted, routed to Azure | **yes** |
+| `google/gemini-decision-1` | Google AI Studio (`gemini-decision-1-20261111`) | **no** (the ZDR doc's Google group "removes AI Studio endpoints") | per Google's AI Studio terms; not covered by OpenRouter ZDR | **rejected**: 404 "No endpoints found matching your data policy (Zero data retention)" | **no — ineligible** |
+| `openai/gpt-6-luna-decisions` | OpenAI first-party (`gpt-6-luna-decisions-20261006`) | **no** (the ZDR doc's OpenAI group "removes first-party OpenAI endpoints") | per OpenAI's API terms; not covered by OpenRouter ZDR | **rejected**: 404 "No endpoints found for openai/gpt-6-luna-decisions." | **no — ineligible** |
+
+Enforcement:
+- `provider: {"zdr": true}` **is enforced** on the Decisions endpoint: the two non-ZDR models are refused and the three ZDR models still answer. Any Phase 2 integration must send it on every request. Setting ZDR enforcement at the account level (`https://openrouter.ai/settings/privacy`) adds a second layer, because it is OR-combined with the per-request flag.
+- `provider: {"data_collection": "deny"}` **did not** exclude Gemini or Luna in the same test. The endpoint also silently accepts unknown `provider` fields: a bogus field returned 200. Do not rely on `data_collection` here.
+- The bake-off itself sent only synthetic text and LoCoMo text from `mnemo_eval`, without `zdr`. That was within rule 4, since no production memory text was involved.
+
+## Task A threshold tuning (Jev and Liquid)
+
+The threshold on P(supported) is tuned on one half of the 390 Task A items and scored on the other. The split is stratified by label and perturbation, and both folds are reported (`decision_bakeoff.py threshold`).
+
+Task A threshold tuning: halves of 193 / 197 items, stratified by label and perturbation (seed 5).
+
+| model | fold (tune → test) | tuned threshold | test accuracy, tuned | test accuracy, 0.5 | test recall supported / unsupported, tuned |
+|---|---|---|---|---|---|
+| typesafe/jev-1.14 | 1: half 1 → half 2 | 0.0900 | 90.4% (n=197) | 85.8% | 98.1% / 81.5% |
+| typesafe/jev-1.14 | 2: half 2 → half 1 | 0.0950 | 88.6% (n=193) | 83.9% | 95.2% / 80.7% |
+| typesafe/jev-1.14 | mean of both folds | | 89.5% | | |
+| liquid/d1.2-ultra | 1: half 1 → half 2 | 0.0970 | 91.4% (n=197) | 89.8% | 93.3% / 89.1% |
+| liquid/d1.2-ultra | 2: half 2 → half 1 | 0.1556 | 85.5% (n=193) | 86.0% | 84.8% / 86.4% |
+| liquid/d1.2-ultra | mean of both folds | | 88.4% | | |
+- **Jev's** best threshold is low and stable across the two folds (0.090 / 0.095). It lifts held-out accuracy by about 4–5 points over 0.5, to 89.5% on average. At 0.5 it rejected too many supported atoms.
+- **Liquid's** best threshold moves between folds (0.097 / 0.156). Its held-out accuracy averages 88.4%, and in one fold the tuned threshold did slightly worse than 0.5. Its default threshold is already close to right.
+- Each half is about 195 items, so a 95% interval is roughly ±4.5 points. These two tuned results are not distinguishable from each other or from the best untuned model (89.7%).
 
 ## Setup
 
@@ -71,7 +120,9 @@ What this leaves for the model choice:
 
 ## Round 2 results
 
-_Generated 2026-11-22 16:43 from 12390 results._
+_Generated 2026-11-22 17:31 from 12390 results._
+
+_Task B uses Tom's hand labels for the 47 checked pairs (12 differ from the generated label); the other pairs keep the generated label._
 
 ### Task A — grounding (noul: is the atom fully supported by the quote?)
 
@@ -184,26 +235,26 @@ Recall on unsupported items, by perturbation:
 
 | model | n | answered | accuracy | macro ROC AUC | recall same | recall update | recall contradicts | recall narrows | recall unrelated | Brier | ECE | flip: order | flip: wording | p50 s | p95 s | $ / 1k |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| claude-haiku-4-5-20251001 | 200 | 100.0% | 94.5% | 0.993 | 90.0% | 100.0% | 92.5% | 97.5% | 92.5% | 0.114 | 0.114 | 4.0% | 8.0% | 1.15 | 1.22 | 1.4998 |
-| claude-haiku-5-5 | 200 | 100.0% | 95.0% | 0.997 | 97.5% | 100.0% | 77.5% | 100.0% | 100.0% | 0.135 | 0.184 | 3.5% | 4.0% | 0.68 | 0.83 | 0.1496 |
-| google/gemini-decision-1 | 200 | 100.0% | 90.5% | 0.993 | 90.0% | 100.0% | 67.5% | 97.5% | 97.5% | 0.139 | 0.060 | 0.0% | 5.5% | 0.27 | 0.46 | 0.0261 |
-| liquid/d1.2-ultra | 200 | 100.0% | 92.5% | 0.996 | 95.0% | 100.0% | 72.5% | 100.0% | 95.0% | 0.130 | 0.086 | 1.5% | 5.5% | 0.20 | 0.25 | 0.0083 |
-| microsoft/microsoft-decision-1.1 | 200 | 100.0% | 91.5% | 0.998 | 87.5% | 97.5% | 72.5% | 100.0% | 100.0% | 0.110 | 0.040 | 0.0% | 5.5% | 0.28 | 0.33 | 0.0084 |
-| openai/gpt-6-luna-decisions | 200 | 100.0% | 92.0% | 0.992 | 97.5% | 97.5% | 65.0% | 100.0% | 100.0% | 0.140 | 0.065 | 6.5% | 10.5% | 0.24 | 0.43 | 0.0279 |
-| typesafe/jev-1.14 | 200 | 100.0% | 94.0% | 0.999 | 87.5% | 100.0% | 85.0% | 100.0% | 97.5% | 0.077 | 0.051 | 1.5% | 7.5% | 0.17 | 0.20 | 0.0212 |
+| claude-haiku-4-5-20251001 | 200 | 100.0% | 92.5% | 0.977 | 92.1% | 90.9% | 100.0% | 93.0% | 88.1% | 0.147 | 0.091 | 4.0% | 8.0% | 1.15 | 1.22 | 1.4998 |
+| claude-haiku-5-5 | 200 | 100.0% | 91.0% | 0.978 | 97.4% | 93.2% | 75.8% | 93.0% | 92.9% | 0.176 | 0.149 | 3.5% | 4.0% | 0.68 | 0.83 | 0.1496 |
+| google/gemini-decision-1 | 200 | 100.0% | 91.0% | 0.984 | 92.1% | 97.7% | 78.8% | 90.7% | 92.9% | 0.146 | 0.057 | 0.0% | 5.5% | 0.27 | 0.46 | 0.0261 |
+| liquid/d1.2-ultra | 200 | 100.0% | 93.0% | 0.990 | 94.7% | 97.7% | 81.8% | 95.3% | 92.9% | 0.124 | 0.097 | 1.5% | 5.5% | 0.20 | 0.25 | 0.0083 |
+| microsoft/microsoft-decision-1.1 | 200 | 100.0% | 94.0% | 0.994 | 92.1% | 95.5% | 87.9% | 95.3% | 97.6% | 0.098 | 0.036 | 0.0% | 5.5% | 0.28 | 0.33 | 0.0084 |
+| openai/gpt-6-luna-decisions | 200 | 100.0% | 91.0% | 0.984 | 97.4% | 95.5% | 72.7% | 93.0% | 92.9% | 0.149 | 0.059 | 6.5% | 10.5% | 0.24 | 0.43 | 0.0279 |
+| typesafe/jev-1.14 | 200 | 100.0% | 93.0% | 0.989 | 89.5% | 97.7% | 90.9% | 95.3% | 90.5% | 0.104 | 0.041 | 1.5% | 7.5% | 0.17 | 0.20 | 0.0212 |
 
 200 items × 3 variants. Accuracy, recall, Brier and ECE are on the base variant; unanswered items (refusal, missing answer, error) count against recall and the answered rate, not accuracy. Flip = share of answered items whose predicted label changes under the variant.
 
-Paired McNemar tests against the most accurate model, **claude-haiku-5-5** (95.0%); b = best right / other wrong, c = the reverse:
+Paired McNemar tests against the most accurate model, **microsoft/microsoft-decision-1.1** (94.0%); b = best right / other wrong, c = the reverse:
 
 | model | accuracy | b | c | exact p |
 |---|---|---|---|---|
-| claude-haiku-4-5-20251001 | 94.5% | 9 | 8 | 1 |
-| typesafe/jev-1.14 | 94.0% | 8 | 6 | 0.791 |
-| liquid/d1.2-ultra | 92.5% | 10 | 5 | 0.302 |
-| openai/gpt-6-luna-decisions | 92.0% | 9 | 3 | 0.146 |
-| microsoft/microsoft-decision-1.1 | 91.5% | 11 | 4 | 0.118 |
-| google/gemini-decision-1 | 90.5% | 14 | 5 | 0.0636 |
+| liquid/d1.2-ultra | 93.0% | 7 | 5 | 0.774 |
+| typesafe/jev-1.14 | 93.0% | 5 | 3 | 0.727 |
+| claude-haiku-4-5-20251001 | 92.5% | 11 | 8 | 0.648 |
+| claude-haiku-5-5 | 91.0% | 9 | 3 | 0.146 |
+| google/gemini-decision-1 | 91.0% | 9 | 3 | 0.146 |
+| openai/gpt-6-luna-decisions | 91.0% | 10 | 4 | 0.18 |
 
 6 comparisons; at a Bonferroni-adjusted 0.05 the threshold is p < 0.00833.
 
@@ -213,9 +264,9 @@ Paired McNemar tests against the most accurate model, **claude-haiku-5-5** (95.0
 
 | bin | n | mean confidence | accuracy |
 |---|---|---|---|
-| 0.6-0.7 | 10 | 0.630 | 0.600 |
-| 0.7-0.8 | 46 | 0.739 | 0.891 |
-| 0.8-0.9 | 87 | 0.830 | 0.977 |
+| 0.6-0.7 | 10 | 0.630 | 0.700 |
+| 0.7-0.8 | 46 | 0.739 | 0.826 |
+| 0.8-0.9 | 87 | 0.830 | 0.954 |
 | 0.9-1.0 | 57 | 0.952 | 1.000 |
 
 **claude-haiku-5-5**
@@ -224,9 +275,9 @@ Paired McNemar tests against the most accurate model, **claude-haiku-5-5** (95.0
 |---|---|---|---|
 | 0.3-0.4 | 2 | 0.365 | 1.000 |
 | 0.4-0.5 | 2 | 0.425 | 0.500 |
-| 0.5-0.6 | 16 | 0.529 | 0.688 |
-| 0.6-0.7 | 23 | 0.605 | 0.913 |
-| 0.7-0.8 | 30 | 0.726 | 0.933 |
+| 0.5-0.6 | 16 | 0.529 | 0.500 |
+| 0.6-0.7 | 23 | 0.605 | 0.826 |
+| 0.7-0.8 | 30 | 0.726 | 0.833 |
 | 0.8-0.9 | 103 | 0.829 | 1.000 |
 | 0.9-1.0 | 24 | 0.914 | 1.000 |
 
@@ -235,35 +286,35 @@ Paired McNemar tests against the most accurate model, **claude-haiku-5-5** (95.0
 | bin | n | mean confidence | accuracy |
 |---|---|---|---|
 | 0.3-0.4 | 5 | 0.366 | 0.200 |
-| 0.4-0.5 | 4 | 0.453 | 0.250 |
+| 0.4-0.5 | 4 | 0.453 | 0.500 |
 | 0.5-0.6 | 8 | 0.562 | 0.750 |
-| 0.6-0.7 | 14 | 0.654 | 0.786 |
+| 0.6-0.7 | 14 | 0.654 | 0.857 |
 | 0.7-0.8 | 24 | 0.746 | 0.792 |
-| 0.8-0.9 | 26 | 0.861 | 0.962 |
+| 0.8-0.9 | 26 | 0.861 | 0.923 |
 | 0.9-1.0 | 119 | 0.963 | 0.992 |
 
 **liquid/d1.2-ultra**
 
 | bin | n | mean confidence | accuracy |
 |---|---|---|---|
-| 0.3-0.4 | 2 | 0.348 | 0.500 |
-| 0.4-0.5 | 6 | 0.459 | 0.833 |
-| 0.5-0.6 | 13 | 0.545 | 0.538 |
+| 0.3-0.4 | 2 | 0.348 | 0.000 |
+| 0.4-0.5 | 6 | 0.459 | 0.667 |
+| 0.5-0.6 | 13 | 0.545 | 0.615 |
 | 0.6-0.7 | 17 | 0.645 | 0.824 |
 | 0.7-0.8 | 18 | 0.748 | 0.944 |
-| 0.8-0.9 | 41 | 0.861 | 0.951 |
-| 0.9-1.0 | 103 | 0.948 | 0.990 |
+| 0.8-0.9 | 41 | 0.861 | 0.976 |
+| 0.9-1.0 | 103 | 0.948 | 1.000 |
 
 **microsoft/microsoft-decision-1.1**
 
 | bin | n | mean confidence | accuracy |
 |---|---|---|---|
 | 0.2-0.3 | 1 | 0.278 | 0.000 |
-| 0.4-0.5 | 2 | 0.473 | 0.000 |
-| 0.5-0.6 | 9 | 0.546 | 0.333 |
+| 0.4-0.5 | 2 | 0.473 | 0.500 |
+| 0.5-0.6 | 9 | 0.546 | 0.667 |
 | 0.6-0.7 | 16 | 0.661 | 0.688 |
 | 0.7-0.8 | 12 | 0.748 | 0.833 |
-| 0.8-0.9 | 18 | 0.850 | 0.944 |
+| 0.8-0.9 | 18 | 0.850 | 1.000 |
 | 0.9-1.0 | 142 | 0.989 | 1.000 |
 
 **openai/gpt-6-luna-decisions**
@@ -271,11 +322,11 @@ Paired McNemar tests against the most accurate model, **claude-haiku-5-5** (95.0
 | bin | n | mean confidence | accuracy |
 |---|---|---|---|
 | 0.3-0.4 | 3 | 0.367 | 0.000 |
-| 0.4-0.5 | 5 | 0.436 | 0.800 |
-| 0.5-0.6 | 11 | 0.545 | 0.909 |
+| 0.4-0.5 | 5 | 0.436 | 0.600 |
+| 0.5-0.6 | 11 | 0.545 | 0.818 |
 | 0.6-0.7 | 19 | 0.642 | 0.737 |
-| 0.7-0.8 | 16 | 0.762 | 0.812 |
-| 0.8-0.9 | 17 | 0.846 | 0.882 |
+| 0.7-0.8 | 16 | 0.762 | 0.875 |
+| 0.8-0.9 | 17 | 0.846 | 0.824 |
 | 0.9-1.0 | 129 | 0.970 | 0.992 |
 
 **typesafe/jev-1.14**
@@ -285,13 +336,11 @@ Paired McNemar tests against the most accurate model, **claude-haiku-5-5** (95.0
 | 0.4-0.5 | 3 | 0.440 | 0.667 |
 | 0.5-0.6 | 10 | 0.553 | 0.500 |
 | 0.6-0.7 | 9 | 0.666 | 0.444 |
-| 0.7-0.8 | 10 | 0.738 | 0.900 |
+| 0.7-0.8 | 10 | 0.738 | 0.800 |
 | 0.8-0.9 | 19 | 0.861 | 1.000 |
-| 0.9-1.0 | 149 | 0.982 | 1.000 |
+| 0.9-1.0 | 149 | 0.982 | 0.993 |
 
 </details>
-
-
 
 ## Round 1 (superseded)
 
@@ -315,9 +364,8 @@ Counts exclude the 10 runs of the two cases still marked xfail; the provider-fai
 ## Limitations
 
 - **Labels.**
-  - Task B labels are generator-assigned until Tom's hand labels come back.
+  - Task B labels: Tom hand-checked 47 pairs (all 27 model-disagreement pairs, plus 20 random). The other 153 keep the generated label. On the random sample the generator was 20 for 20 correct.
   - On Task A, a "supported" item means the generating decomposer produced the atom and its quote is verbatim in the source. Decomposer errors therefore become "supported" positives. Example: one atom attributes Tom's "my CGM sensor" to Clio. Recall on supported items is a floor, and some "misses" are correct rejections.
   - A follow-up could generate positives with the Haiku 5.5 decomposer, which attributes better (see the fixtures), or hand-check the positives.
 - **Generative baselines' probabilities are stated, not sampled.** Their calibration is not like-for-like with the decision models; their accuracy and AUC are.
 - **Model versions.** Alpha API, date-stamped model builds. Re-run before Phase 2 relies on these numbers: `run` resumes, `report` regenerates.
-- **Local open-weight model: not run yet.** The mnemo host has no GPU, 4 cores and about 1 GB of free RAM, and it runs production. The open-weight decision models on Hugging Face (`LiquidAI/d1-2B`, `togethercomputer/Tev1-4B-experimental`) need roughly 4–8 GB, so loading one here risks production. Awaiting Tom: another machine, or a small open-weight NLI cross-encoder instead.
