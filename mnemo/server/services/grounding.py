@@ -63,16 +63,22 @@ def unsupported_term(atom_text: str, source: str) -> bool:
     return bool(_abbreviations(atom_text) - _abbreviations(source))
 
 
-def no_subject(atom_text: str) -> bool:
+def no_subject(atom_text: str, known_names: tuple[str, ...] = ()) -> bool:
     """Simple heuristic (record-only): the atom starts with a pronoun or
     demonstrative ("She moved…", "This is…"), or starts with a lowercase
     word, which in practice means a bare verb phrase with the subject
-    dropped ("went camping in July"). A leading number or code is fine."""
+    dropped ("went camping in July"). A leading number or code is fine, and
+    so is a known name in any case (agent names are often lowercase: "clio")."""
     stripped = (atom_text or "").lstrip(" \t\n\"'([{-*•")
     if not stripped:
         return True
     if stripped[0].isdigit():
         return False
+    low = stripped.casefold()
+    for name in known_names:
+        n = (name or "").strip().casefold()
+        if n and low.startswith(n) and (len(low) == len(n) or not low[len(n)].isalnum()):
+            return False
     words = _WORD_RE.findall(stripped)
     if not words:
         return True
@@ -80,8 +86,11 @@ def no_subject(atom_text: str) -> bool:
     return first.casefold() in _PRONOUNS or first[0].islower()
 
 
-def run_checks(atom_text: str, source_quote: str | None, source_text: str) -> list[str]:
-    """Return the flags for one atom, in a stable order."""
+def run_checks(
+    atom_text: str, source_quote: str | None, source_text: str, known_names: tuple[str, ...] = (),
+) -> list[str]:
+    """Return the flags for one atom, in a stable order. `known_names`:
+    speaker, addressee, agent and user names from the request."""
     quote = source_quote or ""
     flags: list[str] = []
     if not quote_grounded(quote, source_text):
@@ -90,7 +99,7 @@ def run_checks(atom_text: str, source_quote: str | None, source_text: str) -> li
         flags.append(ABBREVIATION_ALTERED)
     if unsupported_term(atom_text, source_text):
         flags.append(UNSUPPORTED_TERM)
-    if no_subject(atom_text):
+    if no_subject(atom_text, known_names):
         flags.append(NO_SUBJECT)
     return flags
 

@@ -523,7 +523,8 @@ async def prepare_atoms(req: DecomposeRequest) -> PreparedStore:
     t2 = time.monotonic()
     prepared: list[PreparedAtom] = []
     for cand, emb in zip(candidates, embeddings):
-        flags = grounding.run_checks(cand.text, cand.source_quote, req.text)
+        known = tuple(n for n in (req.speaker, req.addressee, req.agent_name, req.user_name) if n)
+        flags = grounding.run_checks(cand.text, cand.source_quote, req.text, known)
         alpha, beta = beta_for(cand)
         downgraded = False
         if grounding.lowers_band(flags):

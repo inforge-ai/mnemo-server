@@ -57,6 +57,16 @@ def test_no_subject(atom, flagged):
     assert g.no_subject(atom) is flagged
 
 
+@pytest.mark.parametrize("atom, names, flagged", [
+    ("clio prefers aisle seats.", ("clio",), False),
+    ("lat-adcf00 plans a trip to Lisbon.", ("lat-adcf00",), False),
+    ("clio prefers aisle seats.", (), True),
+    ("clioxyz prefers tea.", ("clio",), True),     # prefix of a longer word is not the name
+])
+def test_no_subject_known_names(atom, names, flagged):
+    assert g.no_subject(atom, names) is flagged
+
+
 def test_run_checks_order_and_band_rule():
     flags = g.run_checks("She held the VTIAX position.", "made up quote", SOURCE)
     assert flags == ["ungrounded_quote", "unsupported_term", "no_subject"]
