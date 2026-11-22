@@ -271,3 +271,17 @@ async def test_run_store_reports_timings(client, agent, pool):
     assert outcome["status"] == "complete"
     assert set(outcome["timings_ms"]) == {"decompose", "embed", "persist"}
     assert all(v >= 0 for v in outcome["timings_ms"].values())
+
+
+async def test_admin_purge_removes_sources(client, agent, pool):
+    text = "Clio rebalances the VXUS sleeve monthly."
+    fake.script([_atom(text, text, atom_type="semantic")])
+    body = (await _remember(client, agent, text=text)).json()
+    resp = await client.post(f"/v1/admin/agents/{agent['id']}/purge", headers=admin_headers(),
+                             json={"confirm": "purge"})
+    assert resp.status_code == 200, resp.text
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM atoms WHERE agent_id = $1", UUID(agent["id"])) == 0
+        assert await conn.fetchval("SELECT count(*) FROM sources WHERE agent_id = $1", UUID(agent["id"])) == 0
+        assert await conn.fetchval("SELECT count(*) FROM source_merges WHERE source_id = $1",
+                                   UUID(body["source_id"])) == 0

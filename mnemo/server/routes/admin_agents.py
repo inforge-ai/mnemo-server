@@ -249,6 +249,12 @@ async def admin_purge_agent(agent_id: str, body: PurgeConfirmation):
             )
             atoms_deleted = int(atoms_tag.split()[-1])
 
+            # g2) v2 Phase 1: the source notes (full text) go too; source_merges cascade.
+            await conn.execute(
+                "DELETE FROM sources WHERE agent_id = $1",
+                agent_uuid,
+            )
+
             # h) Set agent status to departed
             await conn.execute(
                 "UPDATE agents SET status = 'departed', departed_at = now(), "
