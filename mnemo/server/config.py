@@ -1,7 +1,7 @@
 import os
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -105,6 +105,27 @@ class Settings(BaseSettings):
     narrows_threshold: float = 0.65
     # Logging
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def _test_backends_need_test_db(self):
+        """Refuse test-only backends outside a test database.
+
+        The fake embedder and fake decomposer would silently store garbage
+        vectors / regex atoms; they are only allowed when MNEMO_DATABASE_URL
+        names a test database. Runs at Settings() construction, so the
+        server, CLI and scripts all refuse to start.
+        """
+        fakes = []
+        if self.embedding_backend == "fake":
+            fakes.append("MNEMO_EMBEDDING_BACKEND=fake")
+        if self.decomposer_provider == "fake":
+            fakes.append("MNEMO_DECOMPOSER_PROVIDER=fake")
+        if fakes and "test" not in self.database_url:
+            raise ValueError(
+                f"{', '.join(fakes)} is only allowed when MNEMO_DATABASE_URL "
+                "points at a test database (its URL must contain 'test')."
+            )
+        return self
 
     # MNEMO_ENV_FILE lets the test suite read .env.test instead of the
     # production .env.

@@ -70,3 +70,56 @@ async def test_fake_decomposer_scripts_and_raises():
     # Nothing queued: deterministic regex fallback.
     third = await _decompose("Postgres supports JSONB columns.")
     assert third.atoms
+
+
+# ── Startup guard: fake backends only against a test database ──────────────
+
+PROD_LIKE_URL = "postgresql://mnemo@localhost:5432/mnemo"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"embedding_backend": "fake"},
+    {"decomposer_provider": "fake"},
+    {"embedding_backend": "fake", "decomposer_provider": "fake"},
+])
+def test_fake_backends_refused_without_test_db(overrides):
+    from pydantic import ValidationError
+    from mnemo.server.config import Settings
+
+    with pytest.raises(ValidationError, match="only allowed when MNEMO_DATABASE_URL"):
+        Settings(database_url=PROD_LIKE_URL, **overrides)
+
+
+def test_real_backends_allowed_without_test_db():
+    from mnemo.server.config import Settings
+
+    s = Settings(database_url=PROD_LIKE_URL,
+                 embedding_backend="sentence_transformers", decomposer_provider="auto")
+    assert s.embedding_backend == "sentence_transformers"
+
+
+def test_fake_backends_allowed_with_test_db():
+    from mnemo.server.config import Settings
+
+    s = Settings(database_url="postgresql://mnemo@localhost:5433/mnemo_test",
+                 embedding_backend="fake", decomposer_provider="fake")
+    assert s.decomposer_provider == "fake"
+
+
+def test_server_process_refuses_to_start_with_fake_backend(tmp_path):
+    """End to end: importing the app (what uvicorn does) fails."""
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MNEMO_")}
+    env.update({
+        "MNEMO_DATABASE_URL": PROD_LIKE_URL,
+        "MNEMO_EMBEDDING_BACKEND": "fake",
+        "MNEMO_ENV_FILE": str(tmp_path / "none.env"),
+    })
+    proc = subprocess.run(
+        [sys.executable, "-c", "import mnemo.server.main"],
+        env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode != 0
+    assert "only allowed when MNEMO_DATABASE_URL" in proc.stderr
