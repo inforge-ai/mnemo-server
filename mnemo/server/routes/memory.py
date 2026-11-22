@@ -24,7 +24,7 @@ router = APIRouter(tags=["memory"])
 def _store_outcome_response(outcome: dict) -> JSONResponse:
     """Map a store_service outcome to the HTTP response (201 / 502 / 500)."""
     if outcome["status"] == "complete":
-        body = RememberResponse(**{k: v for k, v in outcome.items() if k != "http_status"})
+        body = RememberResponse(**{k: v for k, v in outcome.items() if k not in ("http_status", "timings_ms")})
         return JSONResponse(status_code=201, content=body.model_dump(mode="json"))
     return JSONResponse(
         status_code=outcome["http_status"],

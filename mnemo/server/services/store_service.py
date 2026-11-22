@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -214,6 +215,7 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         await _mark_failed(pool, src, "storage error", traceback.format_exc())
         return {**base, "status": "failed", "http_status": 500, "error": "storage error"}
 
+    t_persist = time.monotonic()
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
@@ -234,6 +236,16 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         await _mark_failed(pool, src, "storage error", traceback.format_exc())
         return {**base, "status": "failed", "http_status": 500, "error": "storage error"}
 
+    timings = dict(prepared.timings_ms or {})
+    timings["persist"] = round((time.monotonic() - t_persist) * 1000)
+    # Ids, counts and timings only — no text (spec rule 3).
+    logger.info(
+        "store_complete",
+        extra={"event": "store_complete", "store_id": str(src.store_id), "agent_id": str(src.agent_id),
+               "atoms_created": result["atoms_created"], "duplicates_merged": result["duplicates_merged"],
+               "parts": len(prepared.usage) or 1, "timings_ms": timings},
+    )
+
     if settings.lifecycle_detection_enabled and result["new_atom_ids"]:
         coro = _lifecycle(pool, src.agent_id, list(result["new_atom_ids"]))
         if settings.sync_store_for_tests:
@@ -249,6 +261,7 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         "duplicates_merged": result["duplicates_merged"],
         "atoms": result["atoms"],
         "warnings": prepared.warnings,
+        "timings_ms": timings,
     }
 
 

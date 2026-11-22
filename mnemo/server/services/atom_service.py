@@ -23,6 +23,7 @@ RETRIEVE FLOW (via /recall):
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -506,6 +507,7 @@ class PreparedStore:
     usage: list[dict]
     warnings: list[str]
     version: str
+    timings_ms: dict | None = None   # {"decompose": ms, "embed": ms}
 
 
 async def prepare_atoms(req: DecomposeRequest) -> PreparedStore:
@@ -513,9 +515,12 @@ async def prepare_atoms(req: DecomposeRequest) -> PreparedStore:
     model call and the embedding run before any connection is acquired.
 
     Raises DecomposerError (plain reason) if decomposition fails."""
+    t0 = time.monotonic()
     result = await decompose_note(req)
+    t1 = time.monotonic()
     candidates = result.atoms
     embeddings = await encode_batch([c.text for c in candidates])
+    t2 = time.monotonic()
     prepared: list[PreparedAtom] = []
     for cand, emb in zip(candidates, embeddings):
         flags = grounding.run_checks(cand.text, cand.source_quote, req.text)
@@ -526,7 +531,10 @@ async def prepare_atoms(req: DecomposeRequest) -> PreparedStore:
             downgraded = lowered != (alpha, beta)
             alpha, beta = lowered
         prepared.append(PreparedAtom(cand, emb, flags, alpha, beta, downgraded))
-    return PreparedStore(prepared, result.usage, result.warnings, result.version)
+    return PreparedStore(
+        prepared, result.usage, result.warnings, result.version,
+        timings_ms={"decompose": round((t1 - t0) * 1000), "embed": round((t2 - t1) * 1000)},
+    )
 
 
 async def persist_atoms(

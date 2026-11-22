@@ -254,3 +254,17 @@ async def test_sweep_marks_stuck_jobs_failed(client, agent, pool):
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT status FROM store_jobs WHERE store_id = $1", old) == "failed"
         assert await conn.fetchval("SELECT status FROM store_jobs WHERE store_id = $1", fresh) == "pending"
+
+
+async def test_run_store_reports_timings(client, agent, pool):
+    from mnemo.server.services import store_service
+    async with pool.acquire() as conn:
+        src = await store_service.create_store(
+            conn, agent_id=UUID(agent["id"]), operator_id=None, agent_name="test-agent", agent_metadata={},
+            text=NOTE, domain_tags=[], remembered_on=None, speaker=None, addressee=None, channel=None,
+            origin_class="unspecified",
+        )
+    outcome = await store_service.run_store(pool, src)
+    assert outcome["status"] == "complete"
+    assert set(outcome["timings_ms"]) == {"decompose", "embed", "persist"}
+    assert all(v >= 0 for v in outcome["timings_ms"].values())
