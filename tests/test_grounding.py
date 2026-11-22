@@ -23,18 +23,6 @@ def test_multi_sentence_contiguous_quote_is_grounded():
     assert g.quote_grounded("since the “Q3” review. The AAPL note", SOURCE)
 
 
-@pytest.mark.parametrize("quote, atom, altered", [
-    ("the VXUS position is down 3%", "Tom said the VXUS position is down 3%.", False),
-    ("the VXUS position is down 3%", "Tom said the Vanguard Total International position is down 3%.", True),
-    ("the VXUS position is down 3%", "Tom said the vxus position is down 3%.", True),  # case-sensitive
-    ("the S3 bucket", "The S3 bucket is full.", False),                              # digits allowed
-    ("the S3 bucket", "The storage bucket is full.", True),
-    ("no codes here", "Nothing to check.", False),
-])
-def test_abbreviation_altered(quote, atom, altered):
-    assert g.abbreviation_altered(quote, atom) is altered
-
-
 @pytest.mark.parametrize("atom, unsupported", [
     ("Tom said the VXUS position is down 3%.", False),
     ("Tom said the VTIAX position is down 3%.", True),   # model introduced a code
@@ -71,7 +59,7 @@ def test_run_checks_order_and_band_rule():
     flags = g.run_checks("She held the VTIAX position.", "made up quote", SOURCE)
     assert flags == ["ungrounded_quote", "unsupported_term", "no_subject"]
     assert g.lowers_band(flags)
-    assert not g.lowers_band(["abbreviation_altered", "unsupported_term", "no_subject"])
+    assert not g.lowers_band(["unsupported_term", "no_subject"])
 
 
 def test_verification_record():

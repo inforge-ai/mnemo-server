@@ -2,7 +2,8 @@
 
 Pure functions. Results go to atoms.verification and the response `flags`.
 Only `ungrounded_quote` changes anything (one confidence band lower);
-`abbreviation_altered`, `unsupported_term` and `no_subject` are record-only.
+`unsupported_term` and `no_subject` are record-only. (`abbreviation_altered`
+was removed after G2 review: it fired whenever a quote spanned two facts.)
 The store never expands or interprets an abbreviation.
 """
 
@@ -14,7 +15,6 @@ import unicodedata
 CHECKS_VERSION = "v1"
 
 UNGROUNDED_QUOTE = "ungrounded_quote"
-ABBREVIATION_ALTERED = "abbreviation_altered"
 UNSUPPORTED_TERM = "unsupported_term"
 NO_SUBJECT = "no_subject"
 
@@ -51,11 +51,6 @@ def _abbreviations(text: str) -> set[str]:
 def quote_grounded(quote: str, source: str) -> bool:
     q = normalise(quote)
     return bool(q) and q in normalise(source)
-
-
-def abbreviation_altered(quote: str, atom_text: str) -> bool:
-    """An abbreviation in the quote is missing (exact, whole word) from the atom."""
-    return bool(_abbreviations(quote) - _abbreviations(atom_text))
 
 
 def unsupported_term(atom_text: str, source: str) -> bool:
@@ -95,8 +90,6 @@ def run_checks(
     flags: list[str] = []
     if not quote_grounded(quote, source_text):
         flags.append(UNGROUNDED_QUOTE)
-    if abbreviation_altered(quote, atom_text):
-        flags.append(ABBREVIATION_ALTERED)
     if unsupported_term(atom_text, source_text):
         flags.append(UNSUPPORTED_TERM)
     if no_subject(atom_text, known_names):

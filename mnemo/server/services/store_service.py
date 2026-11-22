@@ -27,8 +27,6 @@ from . import atom_service
 
 logger = logging.getLogger(__name__)
 
-STUCK_AFTER_MINUTES = 10
-
 # ── Background tasks: keep a reference to each until it finishes ────────────
 
 _background: set[asyncio.Task] = set()
@@ -325,15 +323,15 @@ async def store_atoms(conn: asyncpg.Connection, source_id: UUID | None) -> list[
 
 
 async def sweep_stuck_jobs(pool: asyncpg.Pool) -> int:
-    """Startup: jobs left pending/decomposing for over 10 minutes (e.g. by a
-    restart mid-store) become failed and can be retried."""
+    """Startup: every job still pending/decomposing was interrupted by the
+    restart (stores run in-process; nothing survives it), so all of them
+    become failed and can be retried. Runs before the server takes requests."""
     async with pool.acquire() as conn:
         result = await conn.execute(
-            f"""
+            """
             UPDATE store_jobs
             SET status = 'failed', error = 'interrupted (server restart)', completed_at = now()
             WHERE status IN ('pending', 'decomposing')
-              AND created_at < now() - interval '{STUCK_AFTER_MINUTES} minutes'
             """
         )
     n = int(result.split()[-1])

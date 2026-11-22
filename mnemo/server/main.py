@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
     from .services.migration_service import run_migrations
     await run_migrations(pool)
 
+    # Before serving requests: any unfinished store was interrupted by the restart.
     from .services.store_service import drain_background, sweep_stuck_jobs
     await sweep_stuck_jobs(pool)
 

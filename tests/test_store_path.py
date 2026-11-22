@@ -219,13 +219,13 @@ async def test_only_ungrounded_quote_lowers_band(client, agent, pool):
     note = "Tom said the VXUS position is down 3% since the review."
     fake.script([
         _atom("Tom said the VXUS position is down 3%.", "the VXUS position is down 3%"),              # clean
-        _atom("Tom said the Vanguard fund is down 3%.", "the VXUS position is down 3%"),              # abbreviation_altered
-        _atom("Tom said the VTIAX position is down.", "the VXUS position is down 3%"),                # altered + unsupported
+        _atom("Tom said the Vanguard fund is down 3%.", "the VXUS position is down 3%"),              # no flag (check removed)
+        _atom("Tom said the VTIAX position is down.", "the VXUS position is down 3%"),                # unsupported_term
         _atom("Tom said it fell sharply.", "it fell sharply after lunch"),                            # ungrounded
     ])
     body = (await _remember(client, agent, text=note)).json()
     flags = [a["flags"] for a in body["atoms"]]
-    assert flags == [[], ["abbreviation_altered"], ["abbreviation_altered", "unsupported_term"], ["ungrounded_quote"]]
+    assert flags == [[], [], ["unsupported_term"], ["ungrounded_quote"]]
     async with pool.acquire() as conn:
         rows = [await conn.fetchrow("SELECT confidence_alpha, confidence_beta, text_content, verification "
                                     "FROM atoms WHERE id = $1", UUID(a["id"])) for a in body["atoms"]]
@@ -239,21 +239,23 @@ async def test_only_ungrounded_quote_lowers_band(client, agent, pool):
 
 # ── Startup sweep ───────────────────────────────────────────────────────────
 
-async def test_sweep_marks_stuck_jobs_failed(client, agent, pool):
+async def test_sweep_fails_all_unfinished_jobs(client, agent, pool):
     from mnemo.server.services.store_service import sweep_stuck_jobs
     async with pool.acquire() as conn:
         op = await conn.fetchval("SELECT operator_id FROM agents WHERE id = $1", UUID(agent["id"]))
-        old = await conn.fetchval(
-            "INSERT INTO store_jobs (store_id, agent_id, operator_id, status, created_at) "
-            "VALUES (gen_random_uuid(), $1, $2, 'decomposing', now() - interval '11 minutes') RETURNING store_id",
-            UUID(agent["id"]), op)
-        fresh = await conn.fetchval(
-            "INSERT INTO store_jobs (store_id, agent_id, operator_id, status) "
-            "VALUES (gen_random_uuid(), $1, $2, 'pending') RETURNING store_id", UUID(agent["id"]), op)
-    assert await sweep_stuck_jobs(pool) == 1
+        ids = {}
+        for status, age in (("decomposing", "11 minutes"), ("pending", "0 minutes"),
+                            ("decomposing", "0 minutes"), ("complete", "0 minutes"), ("failed", "1 hour")):
+            ids[(status, age)] = await conn.fetchval(
+                "INSERT INTO store_jobs (store_id, agent_id, operator_id, status, created_at) "
+                f"VALUES (gen_random_uuid(), $1, $2, '{status}', now() - interval '{age}') RETURNING store_id",
+                UUID(agent["id"]), op)
+    assert await sweep_stuck_jobs(pool) == 3
     async with pool.acquire() as conn:
-        assert await conn.fetchval("SELECT status FROM store_jobs WHERE store_id = $1", old) == "failed"
-        assert await conn.fetchval("SELECT status FROM store_jobs WHERE store_id = $1", fresh) == "pending"
+        got = {k: await conn.fetchval("SELECT status FROM store_jobs WHERE store_id = $1", v) for k, v in ids.items()}
+    assert got == {("decomposing", "11 minutes"): "failed", ("pending", "0 minutes"): "failed",
+                   ("decomposing", "0 minutes"): "failed", ("complete", "0 minutes"): "complete",
+                   ("failed", "1 hour"): "failed"}
 
 
 async def test_run_store_reports_timings(client, agent, pool):

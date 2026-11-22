@@ -6,7 +6,7 @@
 - status is visible only to the owning agent, its operator key or an admin;
 - the MCP output shows atom ids;
 - date and type filters go in the SQL;
-- only `ungrounded_quote` lowers the confidence band, and `abbreviation_altered` / `unsupported_term` are record-only;
+- only `ungrounded_quote` lowers the confidence band, and `abbreviation_altered` / `unsupported_term` are record-only (`abbreviation_altered` was later removed at G2 review);
 - a new `source_merges` table;
 - a ~90 s decomposition deadline;
 - `order_by` on recent;
@@ -75,7 +75,7 @@ GRANT SELECT, INSERT, DELETE ON source_merges TO mnemo;
 - `schema.sql` is not changed: fresh databases get 010 from `mnemo migrate`, as with 006–009. `tests/conftest.py _CLEAN` adds `DELETE FROM source_merges` and `DELETE FROM sources` (after atoms, before agents).
 - **Primary key on `source_merges`.** If two atoms of one note merge into the same existing atom, one row is kept: the first quote wins, via `ON CONFLICT DO NOTHING`.
 - **`verification` shape:**
-  `{"checks": "v1", "flags": ["abbreviation_altered"], "quote_found": true, "band_downgraded": true}`.
+  `{"checks": "v1", "flags": ["unsupported_term"], "quote_found": true, "band_downgraded": false}`.
   Empty `flags` means every check passed. NULL means the atom predates Phase 1.
 
 ## 2. `POST /v1/agents/{agent_id}/remember`
@@ -155,7 +155,7 @@ route ── tx1: store_jobs(pending) + sources row          (connection release
   - A decomposer failure sets `store_jobs.status='failed'` plus the error, inserts a `store_failures` row with `original_text = NULL` and the trace, and returns 502.
   - A database failure in tx2 rolls back every atom of the store, then follows the same failure handling with a 500.
 - **Background tasks.** A module-level `set[asyncio.Task]` holds references, and `task.add_done_callback(set.discard)`. On shutdown the lifespan waits up to 10 s for them and then cancels the rest.
-- **Stuck jobs.** On startup, `store_jobs` rows in `pending`/`decomposing` older than 10 minutes become `failed` with the error `"interrupted (server restart)"`. They can be retried.
+- **Stuck jobs.** On startup, before serving requests, every `store_jobs` row in `pending`/`decomposing` becomes `failed` with the error `"interrupted (server restart)"` (G2 review: all of them, not only those older than 10 minutes, since stores run in-process). They can be retried.
 - **Lifecycle detection does not hold a connection during its model call.** Production runs with `MNEMO_LIFECYCLE_DETECTION_ENABLED=true`. `detect_lifecycle_relationships` is restructured into:
   - fetch candidates (acquire, query, release);
   - call the model per candidate (no connection);
@@ -322,11 +322,11 @@ Pure functions, unit-tested on synthetic strings. They run on every decomposed a
 | flag | rule |
 |---|---|
 | `ungrounded_quote` | Normalise both strings: Unicode NFKC, casefold, curly quotes and dashes mapped to ASCII, whitespace runs collapsed to one space, trimmed. Flag if the quote is empty or is not a substring of the normalised source. |
-| `abbreviation_altered` | For each token in the quote matching the abbreviation pattern `\b[A-Z][A-Z0-9]{1,5}\b` (2–6 characters, starting with a capital), flag if that exact token, case-sensitive and whole-word, does not appear in the atom text. |
+| ~~`abbreviation_altered`~~ | **Removed at G2 review (2026-11-22).** It flagged an abbreviation in the quote that was missing from the atom, and fired whenever a quote spanned two facts, each atom carrying one (9 of 9 flags on the synthetic latency set were false positives). The prompt rule (copy abbreviations verbatim) and `unsupported_term` remain. |
 | `unsupported_term` | For each token in the atom text matching the same pattern, flag if it does not appear (case-sensitive, whole-word) anywhere in the source. This catches a code or ticker the model introduced, e.g. by "correcting" or expanding one. |
 | `no_subject` | Flag if the atom's first word (ignoring leading punctuation) is a pronoun or demonstrative: I, me, my, you, your, he, him, his, she, her, it, its, we, our, they, them, their, this, that, these, those. Also flag if the first word is lowercase, i.e. a bare verb phrase with the subject dropped ("went camping in July"). A leading number or code is not flagged, and neither is a leading known name (speaker, addressee, agent or user, in any case). Agent names are lowercase, e.g. `clio`. (Implementation note: an earlier draft also flagged atoms with "no capitalised word after the first", but that wrongly flagged "Tom prefers tea", so it was dropped.) |
 
-- **Effect.** Only `ungrounded_quote` changes anything: that atom is stored one band lower on the existing ladder, Beta(8,1) → (4,2) → (3,2) → (2,3) → (2,4), with the floor at (2,4). `abbreviation_altered`, `unsupported_term` and `no_subject` are **record-only**: the flag is set in `verification.flags` and returned in the response, and nothing else changes.
+- **Effect.** Only `ungrounded_quote` changes anything: that atom is stored one band lower on the existing ladder, Beta(8,1) → (4,2) → (3,2) → (2,3) → (2,4), with the floor at (2,4). `unsupported_term` and `no_subject` are **record-only**: the flag is set in `verification.flags` and returned in the response, and nothing else changes.
 - **Abbreviations are never interpreted.** The store never expands or interprets an abbreviation, and never asks the caller for clarification.
 - **Atoms are never dropped by a check.** Decomposer output that the prompt says should not exist (e.g. no supporting passage) shows up as `ungrounded_quote` rather than being filtered.
 - **Phase 2 data.** The share of atoms flagged, broken down by flag (Phase 2 question 1), comes from `verification` counts.
@@ -397,7 +397,7 @@ Example output. Every line of remember, recall and recent output carries the ful
 ```
 Stored 3 new, 1 merged (store_id 1f0c…).
 - 6b2e4c1a-… [episodic 2026-11-20] Tom moved the release to 2026-12-03.
-- 9a77d0f3-… [semantic] The billing service retries failed charges three times.  ⚑ abbreviation_altered
+- 9a77d0f3-… [semantic] The billing service retries failed charges three times.  ⚑ no_subject
 - 03c5be21-… [episodic, merged] …
 ```
 
