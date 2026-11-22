@@ -224,7 +224,7 @@ The alpha values have blown far past any sensible range. Alpha growth is unbound
 | commit | item |
 |---|---|
 | `9f1cd58` | 3: consolidation step flags and recall confidence floor flag, all default off |
-| `35e5cd1` | 4 and 5e (code): `mnemo migrate`, startup check, migrations 007 and 008, `ivfflat.probes` removed |
+| `35e5cd1` | 4 and 5e (code): `mnemo migrate`, startup check, migrations 007 and 008 (008 later renumbered to 009), `ivfflat.probes` removed |
 | `07f0f09` | 7: four small fixes |
 | `00f8676` | 6: v2 regression fixtures |
 
@@ -235,7 +235,7 @@ Notes:
   - `mnemo migrate [--dry-run] [--to VERSION] [--database-url URL]`. `--to` lets 5a apply only 007, leaving 008 for 5e.
   - Startup fails while migrations are pending (`MNEMO_REQUIRE_MIGRATIONS`, default true).
   - The legacy `002` and `003` rows came from those migrations recording themselves under short names.
-- **Item 5e (code):** `008_drop_ivfflat_index.sql`. `schema.sql` keeps the index as part of the 001–005 baseline, and 008 drops it.
+- **Item 5e (code):** `009_drop_ivfflat_index.sql` (first committed as 008). `schema.sql` keeps the index as part of the 001–005 baseline, and 009 drops it.
 
 ### Schema check (item 4)
 - Built a scratch database from `schema.sql` plus `mnemo migrate --to 006_lifecycle_edges`. Its `pg_dump --schema-only` matches production apart from **column order**:
@@ -244,7 +244,7 @@ Notes:
   - This is harmless.
 - Grants are identical.
 - 006 is idempotent. Re-running it on the production copy only raised "already exists, skipping" notices.
-- Dry run against production: pending `007_deactivation_tracking` and `008_drop_ivfflat_index`.
+- Dry run against production on 2026-11-21: pending `007_deactivation_tracking` and the index-drop migration (then numbered 008).
 - Rehearsal on the copy: 007 deleted 318 self-loops (edges 44,455 → 44,137), and 008 dropped the index.
 - The diff after 5a gets repeated against production itself.
 
@@ -335,14 +335,73 @@ Restore totals:
 
 ---
 
-## Needed from Tom before item 5
-1. **`mnemo_eval`:** run as a superuser:
-   ```
-   sudo -u postgres createdb -O postgres mnemo_eval
-   sudo -u postgres psql mnemo_eval -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; CREATE EXTENSION IF NOT EXISTS vector;'
-   sudo -u postgres pg_restore -d mnemo_eval --no-owner ~tompdavis/backups/mnemo-prod-2026-11-21.dump
-   ```
-   Or provide a role that can do it.
-2. **Migration role:** a `MNEMO_MIGRATION_DATABASE_URL` for a role that can run DDL on production, since the tables are owned by `postgres`. Otherwise run `mnemo migrate` with a superuser URL yourself.
-3. **Phase numbers** for the xfail fixtures (from `mnemo-v2-plan.md`).
-4. Whether `nels-*` and `eaara` are **in or out** of the 5c restore.
+## Pre-item-5 decisions (Tom, 2026-11-22)
+1. **`mnemo_eval`:** Tom ran the superuser restore (stdin redirect). Verified read-only:
+   - 39,672 atoms, 44,455 edges, 25 agents and 29,638 `access_log` rows, matching the dump.
+   - All 18 tables are owned by `postgres`.
+   - Its `vector` extension is **0.8.7** (created fresh), while production's extension is at **0.8.2**. The host binaries are newer than production's installed extension version. Not changed.
+2. **Migration role:** `scripts/phase0_create_migrator_role.sql` (commit `9b36a9d`). Tom runs it.
+   - It creates LOGIN role `mnemo_migrator` (no superuser, createdb or createrole), with the password prompted by psql.
+   - It transfers ownership of the non-extension tables, sequences, views and functions in `public` from `postgres` to `mnemo_migrator`.
+   - Rehearsed twice on a restored copy: 18 relations and 2 functions moved, nothing left with `postgres`. The app role's grants are unchanged, including insert-only on `access_log`. `mnemo migrate` then applied 007 through 009 as `mnemo_migrator`.
+3. **Fixture phases:**
+   - `read_your_writes`: phase 1.
+   - `validity_window`: phase 2.
+   - `planned_then_done`: phase 2, strict.
+   - `updated_number`: guard for phase 2 at any threshold. It now runs at 0.97 (passes) and at 0.90 (strict xfail, phase 2).
+   - **Consequence:** as a strict xfail, `planned_then_done` passed (so reported FAILED) in 3 of 3 runs. The eval suite is red most of the time until phase 2, or until the case goes back to non-strict.
+4. **Restore:** include `nels-*` and `eaara`. The approved total is 2,956.
+5. **5c-bis:** approved. Deactivate the 56 active consolidation atoms (`deactivation_reason='consolidation_copy'`).
+6. **Merged atoms:** the 430 merged `direct_experience` atoms stay inactive.
+   - Their (kept_id, absorbed_id) pairs go into the new table `merge_pairs`, migration `008_merge_pairs`, holding ids and timestamps only.
+   - Merge log rows store the kept atom in `access_log.target_id` and the absorbed atom in `metadata.absorbed_atom_id`.
+   - **Renumbering:** the merge-pair table had to be applied before the index drop, so `008_drop_ivfflat_index` became `009_drop_ivfflat_index`. It had not been applied to production.
+
+## Data-window runbook (`scripts/phase0/`)
+Each execute script runs in one transaction and **rolls back unless the affected count equals the gate-approved `-v expected`**. All steps run as `mnemo_migrator` with the server stopped.
+
+**Rehearsal** on a fresh restore of the 2026-11-21 dump, as `mnemo_migrator`:
+
+| step | result |
+|---|---|
+| 5a `mnemo migrate --to 008_merge_pairs` | applied 007 and 008 |
+| 5b classify | 0 unclassified; same split as the earlier rehearsal |
+| 5c restore, `expected=1` | **rolled back** (guard test) |
+| 5c restore, `expected=2956` | 2,956 restored |
+| 5c-bis, `expected=56` | 56 deactivated |
+| 5c-ter, `expected=430` | 430 pairs exported. 241 distinct kept atoms; for 378 of the 430 pairs the kept atom is active; no kept atom is missing |
+| 5d production delete, 11 agents / 26,802 atoms | atoms 39,672 → 12,870; 0 non-eval agents changed atom count |
+| 5d keep-only-eval (on a second copy) | 11 agents and 26,802 atoms left; 0 non-eval atoms |
+| 5e `mnemo migrate`, VACUUM ANALYZE, latency | applied 009; vacuum OK |
+
+**5e latency:** EXPLAIN ANALYZE per agent, after the restore, with no vector index. Each query is a bitmap heap scan on `idx_atoms_active` plus a sort.
+
+| agent | rows | ms |
+|---|---:|---:|
+| eaara | 20 | 10.4 |
+| clio | 20 | 7.7 |
+| toms-claude-desktop | 20 | 7.6 |
+| tapio | 20 | 5.8 |
+| nels-claude-desktop | 20 | 3.5 |
+| illmarinen | 20 | 2.5 |
+| amphion | 20 | 1.2 |
+| agent1 | 3 | 1.0 |
+| inforge-researcher | 20 | 0.4 |
+| lloyd | 20 | 0.3 |
+| toms-claude-code | 20 | 0.2 |
+| nels-hermes-agent | 20 | 0.2 |
+| zethus | 2 | 0.0 |
+
+## G3 candidate list (production, read-only, 2026-11-22)
+- **Proposed for deletion:** the 11 `locomo-conv-*` agents (operator `tom`, created 2026-03-30/31), holding **26,802 atoms**. They have 0 capabilities, 0 views, 0 cross-agent edges, and 0 snapshot rows in other agents' views.
+- **Cascade side effect:** **143 `agent_trust` rows** owned by 13 non-eval agents would be removed. Each of those agents trusts all 11 eval agents, apparently from automatic all-to-all trust at agent creation. 532 trust rows in total today.
+- **Possible extra:**
+  - `agent1`: operator `test`, created 2026-03-29, 3 atoms, never active.
+  - `mimir`: operator `tom`, 0 atoms. Not benchmark data on its face.
+- **Live drift since the baseline:** clio has grown 2,005 → 2,033 atoms. The old server is still running the hourly destructive consolidation, so the G2 counts will be re-run on production at the start of the window and checked against the approved numbers.
+
+## Needed from Tom before the data window
+1. **Run** `sudo -u postgres psql -d mnemo -v ON_ERROR_STOP=1 -f scripts/phase0_create_migrator_role.sql`, then add `MNEMO_MIGRATION_DATABASE_URL` to `.env`.
+2. **G3:** confirm the eval list: the 11 `locomo-conv-*` agents, and whether `agent1` goes too. Confirm the 143 trust rows may cascade.
+3. **Go-ahead** to stop the production server for the window (`docker compose stop mnemo-server`) and restart on `v2/phase0` afterwards.
+4. **Whether `planned_then_done` stays strict** given the 3/3 XPASS.
