@@ -1,11 +1,20 @@
+import os
+from typing import Literal
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     database_url: str  # required — set MNEMO_DATABASE_URL in env or .env file
-    test_database_url: str = ""  # set MNEMO_TEST_DATABASE_URL for test suite
     embedding_model: str = "google/embeddinggemma-300m"
+    # "fake" is a deterministic hashed bag-of-words embedder for the unit
+    # test suite (no model download, no network). Never use it in production.
+    embedding_backend: Literal["sentence_transformers", "fake"] = "sentence_transformers"
+    # Decomposer selection. "auto" = Anthropic when ANTHROPIC_API_KEY is set,
+    # else regex (pre-Phase-1 behaviour). "fake" = scripted test decomposer
+    # (tests/conftest.py), regex when nothing is scripted.
+    decomposer_provider: Literal["auto", "anthropic", "regex", "fake"] = "auto"
     embedding_dim: int = 768
     max_retrieval_results: int = 50
     default_retrieval_limit: int = 10
@@ -97,7 +106,13 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
-    model_config = {"env_prefix": "MNEMO_", "env_file": ".env", "extra": "ignore"}
+    # MNEMO_ENV_FILE lets the test suite read .env.test instead of the
+    # production .env.
+    model_config = {
+        "env_prefix": "MNEMO_",
+        "env_file": os.environ.get("MNEMO_ENV_FILE", ".env"),
+        "extra": "ignore",
+    }
 
 
 settings = Settings()

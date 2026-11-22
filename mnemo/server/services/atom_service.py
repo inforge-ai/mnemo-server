@@ -51,9 +51,15 @@ async def _decompose(
     domain_tags: list[str] | None = None,
     remembered_on: datetime | None = None,
 ):
-    """Use LLM decomposer if ANTHROPIC_API_KEY is set, else fall back to regex.
+    """Dispatch on settings.decomposer_provider.
+
+    auto: Anthropic when ANTHROPIC_API_KEY is set, else regex.
     Returns DecomposerResult (atoms + optional usage metadata)."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    provider = settings.decomposer_provider
+    if provider == "fake":
+        from ..fake_decomposer import fake_decompose
+        return await fake_decompose(text, remembered_on=remembered_on, domain_tags=domain_tags)
+    if provider == "anthropic" or (provider == "auto" and os.environ.get("ANTHROPIC_API_KEY")):
         from ..llm_decomposer import llm_decompose
         return await llm_decompose(text, remembered_on=remembered_on, domain_tags=domain_tags)
     from ..llm_decomposer import DecomposerResult
