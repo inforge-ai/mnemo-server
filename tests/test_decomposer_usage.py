@@ -101,7 +101,9 @@ class TestDecomposerUsageLogging:
         mock_client = AsyncMock()
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
+        from mnemo.server.config import settings
         with patch("mnemo.server.llm_decomposer._get_client", return_value=mock_client), \
+             patch.object(settings, "decomposer_provider", "auto"), \
              patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
             await remember(client, agent["id"], "PostgreSQL supports JSONB", headers=ag_headers)
 

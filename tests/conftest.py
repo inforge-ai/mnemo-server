@@ -15,20 +15,26 @@ Strategy:
 
 import os
 
-# Override database_url with test_database_url so the test suite uses the test DB.
-# MNEMO_TEST_DATABASE_URL must be set in .env or environment.
+# Tests never read the production .env. Settings come from .env.test (local,
+# git-ignored; see .env.test.example) or from the environment (CI). The
+# values in .env.test override the shell so a production MNEMO_DATABASE_URL
+# exported in the shell cannot leak in.
+os.environ["MNEMO_ENV_FILE"] = ".env.test"
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(".env.test", override=True)
 
-_test_url = os.environ.get("MNEMO_TEST_DATABASE_URL", "")
-if not _test_url:
+if "test" not in os.environ.get("MNEMO_DATABASE_URL", ""):
     raise RuntimeError(
-        "MNEMO_TEST_DATABASE_URL is not set. "
-        "Add it to your .env file, e.g.: MNEMO_TEST_DATABASE_URL=postgresql://mnemo:pw@localhost:5432/mnemo_test"
+        "MNEMO_DATABASE_URL must point at a database with 'test' in its name. "
+        "Copy .env.test.example to .env.test (scripts/test/build_test_db.sh builds the DB)."
     )
-os.environ["MNEMO_DATABASE_URL"] = _test_url
 os.environ.setdefault("MNEMO_SYNC_STORE_FOR_TESTS", "true")
-os.environ.setdefault("MNEMO_LIFECYCLE_DETECTION_ENABLED", "true")
+# Post-store lifecycle detection calls an LLM; tests that need it enable it.
+os.environ.setdefault("MNEMO_LIFECYCLE_DETECTION_ENABLED", "false")
+# Unit tests: no gated embedding model, no live LLM. `-m eval` switches both
+# to the real thing in pytest_configure.
+os.environ.setdefault("MNEMO_EMBEDDING_BACKEND", "fake")
+os.environ.setdefault("MNEMO_DECOMPOSER_PROVIDER", "fake")
 
 # Set a known admin key for tests
 TEST_ADMIN_KEY = "test-admin-key-for-rbac-tests"
@@ -44,8 +50,8 @@ from mnemo.server.config import settings
 
 # Hard guard: refuse to run if somehow pointed at a non-test database.
 assert "test" in settings.database_url, (
-    f"Refusing to run tests against non-test database: {settings.database_url}\n"
-    "Set MNEMO_TEST_DATABASE_URL to a database with 'test' in the name."
+    "Refusing to run tests against a non-test database. "
+    "Set MNEMO_DATABASE_URL in .env.test to a database with 'test' in the name."
 )
 
 # Ensure admin key is set for tests
@@ -77,15 +83,60 @@ DELETE FROM platform_config;
 """
 
 
-def pytest_configure(config):
-    """Pre-load the embedding model synchronously before any tests run.
+_LIVE_KEYS = ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY")
 
-    encode() uses a ThreadPoolExecutor — calling it async before the first test
-    doesn't block test startup. Calling the sync warmup() here guarantees the
-    model is fully loaded before any background store task runs.
+
+def _is_eval_run(config) -> bool:
+    expr = (config.option.markexpr or "").replace(" ", "")
+    return "eval" in expr and "noteval" not in expr
+
+
+def pytest_configure(config):
+    """Non-eval runs: strip live-model credentials so nothing can call out.
+    Eval runs (`-m eval`): real embedder + real decomposer, keys from the
+    shell environment (never from the production .env).
     """
-    from mnemo.server.embeddings import warmup
-    warmup()
+    config._mnemo_eval = _is_eval_run(config)
+    if config._mnemo_eval:
+        settings.embedding_backend = "sentence_transformers"
+        settings.decomposer_provider = "auto"
+        from mnemo.server.embeddings import warmup
+        warmup()
+    else:
+        for key in _LIVE_KEYS:
+            os.environ.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_llm(request, monkeypatch):
+    """Outside eval runs, constructing a real Anthropic client fails the test.
+
+    Tests that exercise the LLM paths patch `_get_client` (or the client
+    class) with a mock, which never reaches this constructor.
+    """
+    if request.config._mnemo_eval:
+        yield
+        return
+    import anthropic
+    from mnemo.server import fake_decomposer, llm_decomposer
+    from mnemo.server.services import lifecycle_service
+
+    attempts: list[str] = []
+    request.node._live_llm_attempts = attempts
+
+    def _refuse(self, *args, **kwargs):
+        attempts.append(request.node.nodeid)
+        raise RuntimeError("live Anthropic client constructed in a non-eval test")
+
+    monkeypatch.setattr(anthropic.AsyncAnthropic, "__init__", _refuse)
+    llm_decomposer._get_client.cache_clear()
+    if hasattr(lifecycle_service._get_client, "cache_clear"):
+        lifecycle_service._get_client.cache_clear()
+    fake_decomposer.reset()
+    yield
+    fake_decomposer.reset()
+    if attempts:
+        pytest.fail("test tried to construct a live Anthropic client; mock it or mark it eval")
 
 
 @pytest_asyncio.fixture(scope="session")

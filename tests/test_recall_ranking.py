@@ -124,7 +124,7 @@ class TestNoTypeFiltering:
         }, headers=ag_headers)
 
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
-            "query": "sky color",
+            "query": "check the sky color, the sky is blue",
             "max_results": 10,
             "expand_graph": False,
             "similarity_drop_threshold": None,

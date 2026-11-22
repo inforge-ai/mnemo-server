@@ -6,11 +6,13 @@ import pytest
 
 from mnemo.server.decomposer import DecomposedAtom
 from mnemo.server.embeddings import encode
+from tests.helpers import vector_at_cosine
 
 
-async def _insert(conn, agent_id, text, atom_type="semantic"):
+async def _insert(conn, agent_id, text, atom_type="semantic", emb=None):
     from mnemo.server.services.atom_service import _insert_atom
-    emb = await encode(text)
+    if emb is None:
+        emb = await encode(text)
     row = await _insert_atom(
         conn, agent_id,
         DecomposedAtom(text=text, atom_type=atom_type,
@@ -29,8 +31,10 @@ async def test_get_candidates_filters_to_band(pool, agent_with_address):
     agent_id = agent_with_address["id"]
     async with pool.acquire() as conn:
         new_id, new_emb = await _insert(conn, agent_id, "Zulip integration is complete and in daily use")
-        same_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task")
-        off_id, _ = await _insert(conn, agent_id, "Pluto is a dwarf planet in the Kuiper belt")
+        same_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task",
+                                   emb=vector_at_cosine(new_emb, 0.70, seed=1))
+        off_id, _ = await _insert(conn, agent_id, "Pluto is a dwarf planet in the Kuiper belt",
+                                  emb=vector_at_cosine(new_emb, 0.10, seed=2))
 
         candidates = await _get_candidates(conn, agent_id, new_id, new_emb)
 
@@ -265,8 +269,9 @@ async def test_writes_supersedes_at_or_above_threshold(pool, agent_with_address)
 
     agent_id = agent_with_address["id"]
     async with pool.acquire() as conn:
-        old_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
-        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        old_id, old_emb = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic",
+                                  emb=vector_at_cosine(old_emb, 0.70, seed=3))
 
         payload = {
             "relationship": "supersedes",
@@ -298,8 +303,9 @@ async def test_writes_tension_with_at_or_above_threshold(pool, agent_with_addres
 
     agent_id = agent_with_address["id"]
     async with pool.acquire() as conn:
-        old_id, _ = await _insert(conn, agent_id, "Newtonian gravity accurately predicts orbits", "semantic")
-        new_id, _ = await _insert(conn, agent_id, "Mercury's perihelion precesses anomalously", "semantic")
+        old_id, old_emb = await _insert(conn, agent_id, "Newtonian gravity accurately predicts orbits", "semantic")
+        new_id, _ = await _insert(conn, agent_id, "Mercury's perihelion precesses anomalously", "semantic",
+                                  emb=vector_at_cosine(old_emb, 0.70, seed=5))
 
         payload = {
             "relationship": "tension_with",
@@ -413,8 +419,9 @@ async def test_pair_with_existing_lifecycle_edge_skips_llm(pool, agent_with_addr
 
     agent_id = agent_with_address["id"]
     async with pool.acquire() as conn:
-        old_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
-        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        old_id, old_emb = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic",
+                                  emb=vector_at_cosine(old_emb, 0.70, seed=3))
         # Pre-existing tension_with edge between the pair (reverse direction).
         await atom_service.create_edge(
             conn=conn, source_id=old_id, target_id=new_id,
@@ -438,8 +445,9 @@ async def test_llm_permanent_failure_writes_dlq(pool, agent_with_address):
 
     agent_id = agent_with_address["id"]
     async with pool.acquire() as conn:
-        cand_id, _ = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
-        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        cand_id, cand_emb = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id, _ = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic",
+                                  emb=vector_at_cosine(cand_emb, 0.70, seed=4))
 
         # _evaluate_pair returns None (permanent failure post-retry).
         async def _eval_none(**kw):
@@ -459,9 +467,12 @@ async def test_llm_permanent_failure_writes_dlq(pool, agent_with_address):
 # ── store_background integration ─────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_store_background_invokes_lifecycle_when_enabled(pool, agent_with_address):
+async def test_store_background_invokes_lifecycle_when_enabled(pool, agent_with_address, monkeypatch):
     from uuid import uuid4
+    from mnemo.server.config import settings
     from mnemo.server.services import atom_service, lifecycle_service
+
+    monkeypatch.setattr(settings, "lifecycle_detection_enabled", True)
 
     agent_id = agent_with_address["id"]
     operator_id = agent_with_address["operator"]["id"]
