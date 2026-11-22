@@ -112,3 +112,16 @@ async def test_no_self_loop_edges_allowed(pool):
             "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'edges_no_self_loop'"
         )
     assert defn is not None and "source_id <> target_id" in defn
+
+
+async def test_run_migrations_fails_when_directory_missing(pool, tmp_path, monkeypatch):
+    from mnemo.server.config import settings
+    missing = tmp_path / "no-such-dir"
+    monkeypatch.setattr(ms, "MIGRATIONS_DIR", missing)
+
+    monkeypatch.setattr(settings, "require_migrations", True)
+    with pytest.raises(ms.MigrationsDirectoryMissingError):
+        await ms.run_migrations(pool)
+
+    monkeypatch.setattr(settings, "require_migrations", False)
+    assert await ms.run_migrations(pool) == []

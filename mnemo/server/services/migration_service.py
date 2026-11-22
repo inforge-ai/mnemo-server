@@ -25,6 +25,12 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "migrations"
 _MIGRATIONS_DIR = MIGRATIONS_DIR  # backward-compatible alias
 
 
+class MigrationsDirectoryMissingError(RuntimeError):
+    def __init__(self, directory: Path):
+        self.directory = directory
+        super().__init__(f"Migrations directory not found: {directory}")
+
+
 class PendingMigrationsError(RuntimeError):
     def __init__(self, pending: list[str]):
         self.pending = pending
@@ -113,6 +119,14 @@ async def run_migrations(pool: asyncpg.Pool) -> list[str]:
     Does not apply anything.
     """
     from ..config import settings
+
+    # A missing directory means the check cannot be done at all (e.g. the
+    # image was built without migrations/). Never report that as "all applied".
+    if not MIGRATIONS_DIR.is_dir():
+        logger.error("Migrations directory not found: %s", MIGRATIONS_DIR)
+        if settings.require_migrations:
+            raise MigrationsDirectoryMissingError(MIGRATIONS_DIR)
+        return []
 
     async with pool.acquire() as conn:
         pending = await list_pending(conn)
