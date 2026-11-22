@@ -64,11 +64,14 @@ DECISION_MODELS = [
     "liquid/d1.2-ultra",
     "microsoft/microsoft-decision-1.1",
 ]
-GENERATIVE_BASELINE = "claude-haiku-4-5-20251001"   # the production decomposer model
+# Generative baselines answer the same questions as JSON: Haiku 4.5 (the
+# Phase 1 production decomposer) and Haiku 5.5 (the decomposer from G2).
+GENERATIVE_BASELINES = ["claude-haiku-4-5-20251001", "claude-haiku-5-5"]
 GENERATOR_MODEL = "claude-haiku-4-5-20251001"       # builds negatives / relation pairs
 # $ per 1M tokens (input, output), from the Anthropic model table, 2026-11-22.
 ANTHROPIC_PRICE = {"claude-haiku-4-5-20251001": (1.00, 5.00), "claude-haiku-5-5": (0.10, 0.50)}
 
+RESULTS_FILE = os.environ.get("MNEMO_BAKEOFF_RESULTS", "results_r2.jsonl")
 RELATIONS = ["same", "update", "contradicts", "narrows", "unrelated"]
 PERTURBATIONS = ["number", "abbreviation", "subject", "negation"]
 VARIANTS = ["base", "order", "wording"]
@@ -190,13 +193,17 @@ PERTURB_SYSTEM = (
     "You edit one short factual statement to make a minimally different statement that is NOT "
     "supported by its source quote. Make exactly the requested kind of change and nothing else; "
     "keep the rest of the wording identical. Kinds: abbreviation = replace an abbreviation, ticker "
-    "or code with a plausible but different expansion or name (e.g. NQ -> Nasdaq); subject = "
+    "or code with something it does NOT mean here: a wrong expansion (e.g. NQ options -> Nasdaq options) "
+    "or a different, similar-looking code (e.g. SCHD -> SCHF, P3 -> P4). Never write the correct "
+    "expansion, and report in correct_expansion whether your edit is the correct expansion; subject = "
     "attribute the claim to a different person, team or system than the source does; negation = "
     "negate or reverse the claim. If the requested kind is impossible for this statement, set "
     "possible to false."
 )
 PERTURB_SCHEMA = {"type": "object", "required": ["possible", "statement"], "properties": {
-    "possible": {"type": "boolean"}, "statement": {"type": "string"}}}
+    "possible": {"type": "boolean"}, "statement": {"type": "string"},
+    "correct_expansion": {"type": "boolean",
+                          "description": "abbreviation kind only: true if the edit is the abbreviation's correct expansion"}}}
 
 
 async def build_grounding(args) -> None:
@@ -206,6 +213,7 @@ async def build_grounding(args) -> None:
 
     rng = random.Random(args.seed)
     notes = json.loads((DATA / "synthetic_notes.json").read_text())
+    notes += json.loads((DATA / "synthetic_abbrev_notes.json").read_text())
     for n in notes:
         n["origin"] = "synthetic"
     loco = await locomo_passages(args.locomo, rng)
@@ -232,36 +240,60 @@ async def build_grounding(args) -> None:
                               "context": _context(n)})
     rng.shuffle(positives)
     positives = positives[: args.max_positives]
+    print(f"  {len(positives)} grounded positives")
 
     client = anthropic_client()
 
-    async def negative(i, pos):
-        # Rotate the primary kind for balance; fall back to the others in random order.
-        rng_i = random.Random(args.seed * 1000 + i)
-        primary = PERTURBATIONS[i % len(PERTURBATIONS)]
-        rest = [k for k in PERTURBATIONS if k != primary]
-        rng_i.shuffle(rest)
-        kinds = [primary] + rest
-        for kind in kinds:
-            if kind == "number":
-                new = perturb_number(pos["atom"], rng_i)
-            else:
-                if kind == "abbreviation" and not ABBREVIATION_RE.search(pos["atom"]):
-                    continue
-                async with sem:
-                    try:
-                        out, _ = await tool_call(
-                            client, GENERATOR_MODEL, PERTURB_SYSTEM,
-                            f"Kind: {kind}\nSource quote: {pos['quote']}\nStatement: {pos['atom']}",
-                            "edited_statement", PERTURB_SCHEMA, max_tokens=512)
-                    except Exception:
-                        continue
-                new = out.get("statement") if out.get("possible") else None
-            if new and new.strip() and new.strip() != pos["atom"].strip():
-                return {**pos, "atom": new.strip(), "perturbation": kind}
+    async def make(pos, kind, rng_i):
+        """One negative of `kind` from a positive, or None if not possible."""
+        if kind == "number":
+            new = perturb_number(pos["atom"], rng_i)
+        else:
+            async with sem:
+                try:
+                    out, _ = await tool_call(
+                        client, GENERATOR_MODEL, PERTURB_SYSTEM,
+                        f"Kind: {kind}\nSource quote: {pos['quote']}\nStatement: {pos['atom']}",
+                        "edited_statement", PERTURB_SCHEMA, max_tokens=512)
+                except Exception:
+                    return None
+            new = out.get("statement") if out.get("possible") else None
+            if new and kind == "abbreviation" and out.get("correct_expansion") is not False:
+                return None   # a correct expansion is arguably still supported; keep only wrong ones
+            if new and kind == "abbreviation":
+                # Must actually remove one of the atom's abbreviations.
+                if not (set(ABBREVIATION_RE.findall(pos["atom"])) - set(ABBREVIATION_RE.findall(new))):
+                    return None
+        if new and new.strip() and new.strip() != pos["atom"].strip():
+            return {**pos, "atom": new.strip(), "perturbation": kind}
         return None
 
-    negs = [n for n in await asyncio.gather(*(negative(i, p) for i, p in enumerate(positives))) if n]
+    # Balanced: `per_type` negatives of each kind, each from a distinct positive.
+    # Eligibility: abbreviation needs an abbreviation in both atom and quote;
+    # number needs a digit; subject and negation take any positive.
+    def eligible(kind, pos):
+        if kind == "abbreviation":
+            return bool(set(ABBREVIATION_RE.findall(pos["atom"])) & set(ABBREVIATION_RE.findall(pos["quote"])))
+        if kind == "number":
+            return bool(re.search(r"\d", pos["atom"]))
+        return True
+
+    used: set[int] = set()
+    negs = []
+    for kind in ["abbreviation", "number", "subject", "negation"]:   # scarcest first
+        pool_idx = [i for i, p in enumerate(positives) if i not in used and eligible(kind, p)]
+        rng.shuffle(pool_idx)
+        got = 0
+        for start in range(0, len(pool_idx), 8):
+            if got >= args.per_type:
+                break
+            batch_idx = pool_idx[start:start + 8]
+            outs = await asyncio.gather(*(make(positives[i], kind, random.Random(args.seed * 1000 + i))
+                                          for i in batch_idx))
+            for i, o in zip(batch_idx, outs):
+                if o and got < args.per_type:
+                    negs.append(o); used.add(i); got += 1
+        print(f"  {kind}: {got} negatives")
     items = []
     for i, p in enumerate(positives):
         items.append({"id": f"A{i:04d}", "label": True, "perturbation": None, **p})
@@ -424,8 +456,15 @@ async def ask_decision_model(http, model, state, question):
     return None, None, time.monotonic() - t0, err
 
 
-GEN_GROUND_SCHEMA = {"type": "object", "required": ["answer", "probability_true"], "properties": {
-    "answer": {"type": "boolean"}, "probability_true": {"type": "number", "minimum": 0, "maximum": 1}}}
+# Round 1 asked for "probability_true" ("the probability that the answer is
+# true"); Haiku read that as confidence in its own answer, so confident
+# "false" answers came back as 0.99 and were scored as P(supported). The field
+# now names the event explicitly, and the boolean answer is kept for audit.
+GEN_GROUND_SCHEMA = {"type": "object", "required": ["supported", "p_supported"], "properties": {
+    "supported": {"type": "boolean", "description": "true if the ATOM is fully supported by the QUOTE"},
+    "p_supported": {"type": "number", "minimum": 0, "maximum": 1,
+                    "description": "Probability that the ATOM is fully supported (that 'supported' should be true). "
+                                   "Near 0 when the atom is not supported. This is not your confidence in your answer."}}}
 
 
 async def ask_generative(client, model, state, question):
@@ -434,7 +473,7 @@ async def ask_generative(client, model, state, question):
         crit = question["criteria"]
         user = (f"{state}\n\nQuestion: {question['instructions']}\n"
                 f"true: {crit['true']}\nfalse: {crit['false']}\n"
-                "Give your answer and the probability that the answer is true.")
+                "Give `supported` (true/false) and `p_supported`, the probability that the atom is supported.")
         schema = GEN_GROUND_SCHEMA
     else:
         keys = list(question["criteria"])
@@ -454,8 +493,8 @@ async def ask_generative(client, model, state, question):
     pin, pout = ANTHROPIC_PRICE.get(model, (0.0, 0.0))
     cost = (usage["input_tokens"] * pin + usage["output_tokens"] * pout) / 1e6
     if question["type"] == "noul":
-        p = float(out.get("probability_true", 1.0 if out.get("answer") else 0.0))
-        ans = {"type": "noul", "noul": min(max(p, 0.0), 1.0)}
+        p = float(out.get("p_supported", 1.0 if out.get("supported") else 0.0))
+        ans = {"type": "noul", "noul": min(max(p, 0.0), 1.0), "answer": bool(out.get("supported"))}
     else:
         probs = {k: max(float(v), 0.0) for k, v in (out.get("probabilities") or {}).items()}
         s = sum(probs.values()) or 1.0
@@ -466,13 +505,13 @@ async def ask_generative(client, model, state, question):
 async def run(args) -> None:
     import httpx
     load_env_file(Path(args.env_file).expanduser())
-    models = args.models.split(",") if args.models else DECISION_MODELS + [GENERATIVE_BASELINE]
+    models = args.models.split(",") if args.models else DECISION_MODELS + GENERATIVE_BASELINES
     if any("/" in m for m in models) and not os.environ.get("OPENROUTER_API_KEY"):
         raise SystemExit("OPENROUTER_API_KEY not found (pass --env-file)")
     tasks = {"A": read_jsonl(CACHE / "grounding_items.jsonl"), "B": read_jsonl(DATA / "relation_pairs.jsonl")}
     if args.limit:
         tasks = {k: v[: args.limit] for k, v in tasks.items()}
-    out_path = CACHE / "results.jsonl"
+    out_path = CACHE / RESULTS_FILE
     done = {(r["model"], r["task"], r["item"], r["variant"]) for r in read_jsonl(out_path)}
     sem = asyncio.Semaphore(CONCURRENCY)
     client = anthropic_client()
@@ -528,6 +567,36 @@ def ece_and_table(conf_correct: list[tuple[float, bool]], bins: int = 10):
     return ece, table
 
 
+def roc_auc(scores: list[float], labels: list[bool]) -> float:
+    """Mann-Whitney AUC with average ranks for ties."""
+    pairs = sorted(zip(scores, labels))
+    ranks = [0.0] * len(pairs)
+    i = 0
+    while i < len(pairs):
+        j = i
+        while j + 1 < len(pairs) and pairs[j + 1][0] == pairs[i][0]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[k] = (i + j) / 2 + 1
+        i = j + 1
+    pos = sum(1 for _, y in pairs if y)
+    neg = len(pairs) - pos
+    if not pos or not neg:
+        return float("nan")
+    rsum = sum(r for r, (_, y) in zip(ranks, pairs) if y)
+    return (rsum - pos * (pos + 1) / 2) / (pos * neg)
+
+
+def mcnemar_exact(b: int, c: int) -> float:
+    """Two-sided exact McNemar p-value on discordant counts b, c."""
+    n = b + c
+    if n == 0:
+        return 1.0
+    k = min(b, c)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n
+    return min(1.0, 2 * tail)
+
+
 def quantile(xs, q):
     xs = sorted(xs)
     if not xs:
@@ -538,7 +607,7 @@ def quantile(xs, q):
 
 
 def report(args) -> None:
-    rows = read_jsonl(CACHE / "results.jsonl")
+    rows = read_jsonl(CACHE / RESULTS_FILE)
     items = {"A": {i["id"]: i for i in read_jsonl(CACHE / "grounding_items.jsonl")},
              "B": {i["id"]: i for i in read_jsonl(DATA / "relation_pairs.jsonl")}}
     by = defaultdict(dict)   # (model, task) -> {(item, variant): row}
@@ -553,14 +622,16 @@ def report(args) -> None:
         print(f"### {title}\n")
         n_items = len(items[task])
         if task == "A":
-            print("| model | n | answered | accuracy | recall supported | recall unsupported | Brier | ECE | flip: order | flip: wording | mean abs Δp (order / wording) | p50 s | p95 s | $ / 1k |")
-            print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+            print("| model | n | answered | accuracy | ROC AUC | recall supported | recall unsupported | Brier | ECE | flip: order | flip: wording | mean abs Δp (order / wording) | p50 s | p95 s | $ / 1k |")
+            print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         else:
-            print("| model | n | answered | accuracy | " + " | ".join(f"recall {c}" for c in RELATIONS)
+            print("| model | n | answered | accuracy | macro ROC AUC | " + " | ".join(f"recall {c}" for c in RELATIONS)
                   + " | Brier | ECE | flip: order | flip: wording | p50 s | p95 s | $ / 1k |")
-            print("|---|---|---|---|" + "---|" * len(RELATIONS) + "---|---|---|---|---|---|---|")
+            print("|---|---|---|---|---|" + "---|" * len(RELATIONS) + "---|---|---|---|---|---|---|")
         reliab = {}
         extra = {}
+        correct_by = {}      # model -> {item: bool}, unanswered counts as wrong
+        inconsistent = {}    # generative baselines: boolean answer vs p >= 0.5
         for m in models:
             res = by.get((m, task))
             if not res:
@@ -570,6 +641,10 @@ def report(args) -> None:
             per_class = defaultdict(lambda: [0, 0])
             per_pert = defaultdict(lambda: [0, 0])
             pred = {}
+            auc_scores, auc_labels = [], []
+            class_scores = defaultdict(list)
+            correct_by[m] = {}
+            incons = 0
             for iid, r in base.items():
                 it = items[task].get(iid)
                 if not it:
@@ -585,6 +660,9 @@ def report(args) -> None:
                     p = float(a["noul"])
                     yhat = p >= 0.5
                     ok = yhat == y
+                    auc_scores.append(p); auc_labels.append(bool(y))
+                    if "answer" in a and bool(a["answer"]) != yhat:
+                        incons += 1
                     brier.append((p - (1.0 if y else 0.0)) ** 2)
                     cc.append((max(p, 1 - p), ok))
                     pred[iid] = (yhat, p)
@@ -599,12 +677,15 @@ def report(args) -> None:
                         continue
                     yhat = max(probs, key=probs.get)
                     ok = yhat == y
+                    for c in RELATIONS:
+                        class_scores[c].append((probs.get(c, 0.0), c == y))
                     brier.append(sum((probs.get(c, 0.0) - (1.0 if c == y else 0.0)) ** 2 for c in RELATIONS))
                     cc.append((probs[yhat], ok))
                     pred[iid] = (yhat, probs)
                     per_class[y][0] += ok; per_class[y][1] += 1
                 answered += 1
                 correct += ok
+                correct_by[m][iid] = bool(ok)
             total = len([i for i in base if i in items[task]])
             flips, dps = {}, {}
             for var in ("order", "wording"):
@@ -625,17 +706,25 @@ def report(args) -> None:
             costs = [r["cost"] for r in res.values() if r.get("cost") is not None]
             cost_k = 1000 * statistics.mean(costs) if costs else float("nan")
             ece, table = ece_and_table(cc)
+            if task == "A":
+                auc = roc_auc(auc_scores, auc_labels)
+            else:
+                aucs = [roc_auc([x for x, _ in v], [y for _, y in v]) for v in class_scores.values()]
+                aucs = [a_ for a_ in aucs if not math.isnan(a_)]
+                auc = statistics.mean(aucs) if aucs else float("nan")
+            if incons:
+                inconsistent[m] = incons
             reliab[m] = table
             acc = correct / answered if answered else float("nan")
             rec = lambda k: (per_class[k][0] / per_class[k][1]) if per_class[k][1] else float("nan")
             if task == "A":
-                print(f"| {m} | {total} | {pct(answered/total) if total else '-'} | {pct(acc)} | {pct(rec(True))} | "
+                print(f"| {m} | {total} | {pct(answered/total) if total else '-'} | {pct(acc)} | {auc:.3f} | {pct(rec(True))} | "
                       f"{pct(rec(False))} | {statistics.mean(brier):.3f} | {ece:.3f} | {pct(flips['order'])} | "
                       f"{pct(flips['wording'])} | {dps['order']:.3f} / {dps['wording']:.3f} | "
                       f"{quantile(lat, .5):.2f} | {quantile(lat, .95):.2f} | {cost_k:.4f} |")
                 extra[m] = {k: (v[0] / v[1] if v[1] else float('nan'), v[1]) for k, v in per_pert.items()}
             else:
-                print(f"| {m} | {total} | {pct(answered/total) if total else '-'} | {pct(acc)} | "
+                print(f"| {m} | {total} | {pct(answered/total) if total else '-'} | {pct(acc)} | {auc:.3f} | "
                       + " | ".join(pct(rec(c)) for c in RELATIONS)
                       + f" | {statistics.mean(brier) if brier else float('nan'):.3f} | {ece:.3f} | "
                       f"{pct(flips['order'])} | {pct(flips['wording'])} | {quantile(lat, .5):.2f} | "
@@ -644,6 +733,26 @@ def report(args) -> None:
               "variant; unanswered items (refusal, missing answer, error) count against recall and the "
               "answered rate, not accuracy. Flip = share of answered items whose predicted label changes "
               "under the variant.\n")
+        if inconsistent:
+            print("Generative baselines whose boolean answer disagreed with their own probability: "
+                  + ", ".join(f"{m} {n}" for m, n in inconsistent.items()) + ".\n")
+        # Paired comparison (McNemar, exact) of every model against the most accurate one,
+        # on the same base-variant items; unanswered counts as wrong.
+        ids = sorted(items[task])
+        acc_of = {m: sum(correct_by[m].get(i, False) for i in ids) / len(ids) for m in correct_by}
+        if acc_of:
+            best = max(acc_of, key=acc_of.get)
+            print(f"Paired McNemar tests against the most accurate model, **{best}** "
+                  f"({pct(acc_of[best])}); b = best right / other wrong, c = the reverse:\n")
+            print("| model | accuracy | b | c | exact p |\n|---|---|---|---|---|")
+            for m in sorted(acc_of, key=acc_of.get, reverse=True):
+                if m == best:
+                    continue
+                b_ = sum(1 for i in ids if correct_by[best].get(i, False) and not correct_by[m].get(i, False))
+                c_ = sum(1 for i in ids if correct_by[m].get(i, False) and not correct_by[best].get(i, False))
+                print(f"| {m} | {pct(acc_of[m])} | {b_} | {c_} | {mcnemar_exact(b_, c_):.3g} |")
+            print(f"\n{len(acc_of) - 1} comparisons; at a Bonferroni-adjusted 0.05 the threshold is "
+                  f"p < {0.05 / max(len(acc_of) - 1, 1):.3g}.\n")
         if task == "A" and extra:
             print("Recall on unsupported items, by perturbation:\n")
             print("| model | " + " | ".join(PERTURBATIONS) + " |")
@@ -661,12 +770,45 @@ def report(args) -> None:
         print("</details>\n")
 
 
+def label_check(args) -> None:
+    """Relation pairs for Tom to hand-label: every pair where at least
+    `min_disagree` models' base answers differ from the generated label, plus
+    `random_n` random others. Labels hidden; the key stays outside the repo."""
+    rows = [r for r in read_jsonl(CACHE / RESULTS_FILE) if r["task"] == "B" and r["variant"] == "base"]
+    pairs = {i["id"]: i for i in read_jsonl(DATA / "relation_pairs.jsonl")}
+    disagree = Counter()
+    for r in rows:
+        a = r["answer"] or {}
+        probs = a.get("probabilities") or {}
+        pred = max(probs, key=probs.get) if probs else None
+        if r["item"] in pairs and pred != pairs[r["item"]]["label"]:
+            disagree[r["item"]] += 1
+    flagged = sorted(i for i, n in disagree.items() if n >= args.min_disagree)
+    rng = random.Random(args.seed)
+    rest = sorted(set(pairs) - set(flagged))
+    extra = rng.sample(rest, min(args.random_n, len(rest)))
+    chosen = flagged + extra
+    rng.shuffle(chosen)
+    with (DATA / "relation_label_check.csv").open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "existing", "new", "your_label (same|update|contradicts|narrows|unrelated)", "notes"])
+        for i in chosen:
+            w.writerow([i, pairs[i]["existing"], pairs[i]["new"], "", ""])
+    write_jsonl(CACHE / "relation_label_check_key.jsonl",
+                [{"id": i, "generated_label": pairs[i]["label"], "models_disagreeing": disagree.get(i, 0),
+                  "reason": "disagreement" if i in flagged else "random"} for i in chosen])
+    print(f"label check: {len(flagged)} pairs with >= {args.min_disagree} models disagreeing + "
+          f"{len(extra)} random = {len(chosen)} rows -> {DATA / 'relation_label_check.csv'} "
+          f"(key: {CACHE / 'relation_label_check_key.jsonl'})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("build-grounding")
     g.add_argument("--locomo", type=int, default=24, help="LoCoMo passages from mnemo_eval")
-    g.add_argument("--max-positives", type=int, default=160)
+    g.add_argument("--max-positives", type=int, default=260)
+    g.add_argument("--per-type", type=int, default=45, help="negatives per perturbation kind")
     g.add_argument("--seed", type=int, default=7)
     r = sub.add_parser("build-relation")
     r.add_argument("--per-class", type=int, default=40)
@@ -676,6 +818,10 @@ def main() -> None:
     x.add_argument("--models", default="", help="comma-separated; default: all")
     x.add_argument("--limit", type=int, default=0, help="first N items per task (pilot)")
     sub.add_parser("report")
+    lc = sub.add_parser("label-check")
+    lc.add_argument("--min-disagree", type=int, default=2)
+    lc.add_argument("--random-n", type=int, default=20)
+    lc.add_argument("--seed", type=int, default=11)
     args = ap.parse_args()
     if args.cmd == "build-grounding":
         asyncio.run(build_grounding(args))
@@ -683,6 +829,8 @@ def main() -> None:
         asyncio.run(build_relation(args))
     elif args.cmd == "run":
         asyncio.run(run(args))
+    elif args.cmd == "label-check":
+        label_check(args)
     else:
         report(args)
 

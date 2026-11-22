@@ -1,0 +1,282 @@
+[
+ {
+  "id": "abbr01",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-02",
+  "text": "Rebalance: sell half the IEFA lot and add to VXUS; keep the SGOV ladder untouched."
+ },
+ {
+  "id": "abbr02",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-03",
+  "text": "The ETL job on the DWH cluster now writes Parquet to the S3 bucket via the VPC endpoint."
+ },
+ {
+  "id": "abbr03",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-03",
+  "text": "My ISA allowance resets on 6 April; the SIPP contribution goes in before then."
+ },
+ {
+  "id": "abbr04",
+  "speaker": "Priya",
+  "addressee": "Clio",
+  "date": "2026-11-04",
+  "text": "The SRE rota changes on Monday: Priya covers P1 pages, Omar covers P2 and P3."
+ },
+ {
+  "id": "abbr05",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-04",
+  "text": "The CDN purge for the EU POPs took 14 minutes; the US POPs cleared in 3."
+ },
+ {
+  "id": "abbr06",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-05",
+  "text": "Put the RSU tax estimate in the ESPP sheet, not the HSA one."
+ },
+ {
+  "id": "abbr07",
+  "speaker": "Lena",
+  "addressee": "Clio",
+  "date": "2026-11-05",
+  "text": "Lena said the SLA for Tier 2 is 4 business hours and the RPO for the billing DB is 15 minutes."
+ },
+ {
+  "id": "abbr08",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-06",
+  "text": "The JWT signing key moved from HS256 to ES256; the old KID is retired on 2026-12-01."
+ },
+ {
+  "id": "abbr09",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-06",
+  "text": "Book the GP appointment for after the MRI results come back."
+ },
+ {
+  "id": "abbr10",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-07",
+  "text": "Kestrel's p99 on the GQL gateway is 820 ms; the REST API sits at 310 ms."
+ },
+ {
+  "id": "abbr11",
+  "speaker": "Omar",
+  "addressee": "Clio",
+  "date": "2026-11-07",
+  "text": "Omar confirmed the NDA with Shrike is signed but the MSA is still with legal."
+ },
+ {
+  "id": "abbr12",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-08",
+  "text": "The QQQM position stays; I'm closing the TQQQ trade on Friday."
+ },
+ {
+  "id": "abbr13",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-08",
+  "text": "Corvid's CI uses GHA runners with 4 vCPU; the ARM build runs on a self-hosted M2."
+ },
+ {
+  "id": "abbr14",
+  "speaker": "Ines",
+  "addressee": "Clio",
+  "date": "2026-11-09",
+  "text": "Ines asked for the Q4 OKR draft by 2026-11-20, with the NPS target at 45."
+ },
+ {
+  "id": "abbr15",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-10",
+  "text": "Move the HELOC payment to the 5th; the 401k loan repayment stays on the 15th."
+ },
+ {
+  "id": "abbr16",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-10",
+  "text": "The DNS TTL for api.plover.example is 300 s; the MX records still point at the old ESP."
+ },
+ {
+  "id": "abbr17",
+  "speaker": "Wren",
+  "addressee": "Tom",
+  "date": "2026-11-11",
+  "text": "Wren said the K8s upgrade to 1.31 is blocked by the CNI plugin, not by the CSI driver."
+ },
+ {
+  "id": "abbr18",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-12",
+  "text": "My CGM sensor needs replacing every 14 days; the next one is due Sunday."
+ },
+ {
+  "id": "abbr19",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-12",
+  "text": "The Petrel DR drill restored 2.1 TB in 47 minutes, inside the 60-minute RTO."
+ },
+ {
+  "id": "abbr20",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-13",
+  "text": "The VAT return for Q3 is filed; the PAYE run happens on the 25th."
+ },
+ {
+  "id": "abbr21",
+  "speaker": "Nadia",
+  "addressee": "Clio",
+  "date": "2026-11-14",
+  "text": "Nadia flagged that the PO for the GPU nodes references the wrong SKU."
+ },
+ {
+  "id": "abbr22",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-15",
+  "text": "Harrow's ORM emits N+1 queries on the invoices page; the fix is behind the FF invoice_prefetch."
+ },
+ {
+  "id": "abbr23",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-16",
+  "text": "Keep the BND allocation at 20% and the TIP sleeve at 5% through year end."
+ },
+ {
+  "id": "abbr24",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-17",
+  "text": "The SMTP relay rejects mail without SPF alignment; DKIM is passing for all three domains."
+ },
+ {
+  "id": "abbr25",
+  "speaker": "Sam",
+  "addressee": "Clio",
+  "date": "2026-11-18",
+  "text": "Sam said the UAT sign-off for the CRM migration slipped to 2026-12-04."
+ },
+ {
+  "id": "abbr26",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-19",
+  "text": "The EV charger install needs an RCD upgrade on the CU first."
+ },
+ {
+  "id": "abbr27",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-20",
+  "text": "Gannet's OCR pipeline misreads the IBAN field on 3% of scanned forms."
+ },
+ {
+  "id": "abbr28",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-21",
+  "text": "Cancel the AMEX annual fee card before the renewal on 2026-12-09; keep the MC for travel."
+ },
+ {
+  "id": "abbr29",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-03",
+  "text": "Switch the EUR cash to GBP before the FX window closes; leave the CHF balance."
+ },
+ {
+  "id": "abbr30",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-04",
+  "text": "The LB health check on the API tier uses HTTP 200 from /healthz every 10 s."
+ },
+ {
+  "id": "abbr31",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-05",
+  "text": "My BP readings go in the PHR app, not the GP portal."
+ },
+ {
+  "id": "abbr32",
+  "speaker": "Lena",
+  "addressee": "Clio",
+  "date": "2026-11-06",
+  "text": "Lena said the ARR target for FY27 is set; the CAC payback goal is 14 months."
+ },
+ {
+  "id": "abbr33",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-07",
+  "text": "The WAF blocked 1,840 requests from one ASN overnight; the IDS raised no alerts."
+ },
+ {
+  "id": "abbr34",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-08",
+  "text": "Ship the UPS return label with the NAS, not with the KVM switch."
+ },
+ {
+  "id": "abbr35",
+  "speaker": "Omar",
+  "addressee": "Clio",
+  "date": "2026-11-09",
+  "text": "Omar said the SOW for the ERP rollout caps T&M hours at 600."
+ },
+ {
+  "id": "abbr36",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-10",
+  "text": "Plover's SDK pins TLS 1.3; the CLI still accepts TLS 1.2 behind a flag."
+ },
+ {
+  "id": "abbr37",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-11",
+  "text": "Hold the SCHD shares; set a stop on the ARKK position at 10% below cost."
+ },
+ {
+  "id": "abbr38",
+  "speaker": "Ines",
+  "addressee": "Clio",
+  "date": "2026-11-12",
+  "text": "Ines confirmed the GDPR DPA is signed and the SCC annex is attached."
+ },
+ {
+  "id": "abbr39",
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-13",
+  "text": "The BGP session to the ISP flapped twice; OSPF inside the DC stayed stable."
+ },
+ {
+  "id": "abbr40",
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-14",
+  "text": "Renew the UK EHIC as a GHIC before the trip; my passport is fine until 2031."
+ }
+]

@@ -24,7 +24,7 @@ The Phase 0 prerequisite (24-hour consolidation check) is not yet due. The first
 | 6 Read side | `atom_service.retrieve/recent`, `graph_service`, `routes/agents.py` | `since` / `until` / `atom_types` in the SQL `WHERE` before `LIMIT`, graph expansion included. `POST /recent` with `order_by` `stored`/`event`. `GET /agents/me`. Bare agent names resolve within the caller's operator. `source_id` and `origin_class` appear in responses. |
 | 7 MCP (mnemo-client) | `~/mnemo-client` `v2/phase1`, 0.6.0, **not published** | `agent_id` is optional (UUID, name or address; defaults to `/agents/me`). Every output line starts with the atom id. Remember gains speaker / addressee / channel / origin_class, plus the description text Tom specified. Recall gains since / until / atom_types and full verbosity with a 600-character cap per atom. New tools `mnemo_recent`, `mnemo_forget`, `mnemo_store_status`. 120 s remember timeout. 133 client tests. Smoke test registers 10 tools. Checked end-to-end against a local Phase 1 server. |
 | 8 Harder fixtures | `tests/fixtures/v2/` | 8 new synthetic cases: no-label attribution, third-system attribution, ticker abbreviation, long note, provider failure, reported speech, temporary state, correction. 5× repeats. `read_your_writes` and `updated_number@0.90` flipped to pass. |
-| 9 Bake-off | `scripts/eval/decision_bakeoff.py`, `docs/phase1-bakeoff.md` | 5 decision models plus a generative baseline, 2 tasks, 8,820 requests. Recommends `liquid/d1.2-ultra` (one model for both tasks), with `typesafe/jev-1.14` for relation if the tasks are split. |
+| 9 Bake-off | `scripts/eval/decision_bakeoff.py`, `docs/phase1-bakeoff.md` | Round 2: 5 decision models, 2 generative baselines, 12,390 requests. No model chosen yet (G2 review). The round 1 Haiku 4.5 negation result was a harness bug, now fixed. Grounding ranking (AUC) is a tie across most models; relation shows no significant differences. The hand-label CSV was rebuilt from disagreements. The local open-weight run is pending a decision on hardware. |
 
 **Tests:** 503 non-eval tests pass locally, offline (0 non-loopback connections) and in CI. CI is green on every commit except `2c4b505` and `ce07b78` (see deviations).
 
@@ -82,14 +82,13 @@ The deploy steps are unchanged from the spec: backup, migrate, rebuild, restart,
    - All 9 `abbreviation_altered` flags were false positives of one kind: the quote spans two facts ("the ARR bridge and the NRR figure"), and each atom carries one of them. The flag is record-only, so it does no harm, but it is noise.
    - Options for Tom: keep it as is; or flag only when the atom contains a different abbreviation-shaped token, or a known expansion, in place of the missing one. Production shares can be measured after deploy from `atoms.verification`.
 2. **How does `remember` latency split?** With Haiku 4.5 the model call takes 94% of the time (median 2.26 s), embedding 6% (145 ms) and the database under 1% (5 ms). With Haiku 5.5 the model call is 1.20 s.
-3. **Which decision model wins each task, and is one good enough for both?**
-   - Grounding: four models are tied at 90–91%. `liquid/d1.2-ultra` is the cheapest and fastest of them.
-   - Relation: `typesafe/jev-1.14` wins at 94.5% and is best calibrated. Haiku 4.5 reaches 95.0% at about 70× the cost.
-   - One model, `liquid/d1.2-ultra` (90.0% / 93.0%), is good enough for both, unless Phase 2 leans on contradiction detection (72.5% for it; Jev 85%).
+3. **Which decision model wins each task, and is one good enough for both?** Round 2: no decision yet, per the G2 review.
+   - **Grounding:** a statistical tie on ranking. ROC AUC is 0.954–0.966 for all but `microsoft/microsoft-decision-1.1` (0.913). At a 0.5 threshold `openai/gpt-6-luna-decisions` leads (89.7%), but it is not significantly ahead of Gemini, Liquid or Haiku 4.5. The differences that are significant come from threshold placement, not ranking.
+   - **Relation:** no significant differences (90.5–95.0%; every McNemar p ≥ 0.06). `typesafe/jev-1.14` has the best AUC (0.999) and Brier score.
+   - **One model for both:** looks feasible (Liquid or Jev), pending Tom's relation labels and the local open-weight run.
 4. **How sensitive are the candidates to option order and label wording?**
    - Option order hardly matters: 0–1.5% of labels flip, except `openai/gpt-6-luna-decisions` at 6.5% on relation.
-   - Rewording matters more: 2.4–4.8% flips on grounding and 5.5–10.5% on relation.
-   - The generative baseline is the most wording-sensitive on grounding (17.9%).
+   - Rewording matters more: 1.3–6.7% flips on grounding and 4.0–10.5% on relation.
 5. **How many of the 430 `merge_pairs` have an inactive kept atom (merge chains)?** **52.** In 47 of them the kept atom was itself merged away (`deactivation_reason = 'merged'`); the other 5 kept atoms are inactive arcs. None is missing. This is a read-only aggregate on production, 2026-11-22.
 
 ## Open items
