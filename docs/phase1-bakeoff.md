@@ -3,7 +3,7 @@
 **Date:** 2026-11-22. **Spec:** `docs/mnemo-v2-phas1-spec.md` item 9. **Script:** `scripts/eval/decision_bakeoff.py`.
 No production integration: nothing here runs in the write or read path (spec rule 6).
 
-**Status: round 2.** Per Tom's G2 review, no model is chosen yet. Round 2:
+**Status: round 2.** Model choice recorded below (Jev, with Liquid as fallback). Round 2:
 - fixes a harness bug in the generative baseline;
 - adds `claude-haiku-5-5` as a second baseline;
 - balances the Task A perturbations, with 45 abbreviation cases;
@@ -12,6 +12,22 @@ No production integration: nothing here runs in the write or read path (spec rul
 - scores Task B against Tom's hand labels.
 
 A **data-policy screen** marks two candidates ineligible for mnemo data. Benchmarking a local open-weight model is out of scope (Tom, 2026-11-22).
+
+## Phase 2 model choice (Tom, 2026-11-22)
+
+**`typesafe/jev-1.14` for both tasks (grounding and relation), with `liquid/d1.2-ultra` as the fallback.** Both are on OpenRouter's ZDR list. Every request must send `provider: {"zdr": true}` (see the data-policy table).
+
+**Caveat: the differences are not statistically significant.**
+- On relation, scored against Tom's labels, Jev (93.0%) and Liquid (93.0%) are tied with every other model under paired McNemar (all p ≥ 0.14).
+- On grounding, Jev with a held-out tuned threshold (89.5%) and Liquid (88.4%) cannot be told apart from each other or from the best untuned model (89.7%). Each half has about 195 items, ±4.5 points.
+
+The choice rests on secondary properties:
+- eligibility under the data policy;
+- Jev's stable tuned threshold (about 0.09 on both folds);
+- Jev's best contradiction recall (90.9%) and low Brier score;
+- latency (p50 0.17–0.20 s) and cost ($0.018–0.021 per 1,000 decisions; Liquid $0.007–0.008).
+
+Phase 2 should tune Jev's grounding threshold on its own held-out data, not use 0.5, and re-check against Liquid before relying on either.
 
 ## Round 2 findings
 
@@ -27,6 +43,20 @@ A **data-policy screen** marks two candidates ineligible for mnemo data. Benchma
    - Every model catches 100% of negations and about 87–100% of number and abbreviation changes. Subject swaps are the hardest (82–89%).
 3. **Task B, relation, scored against Tom's hand labels: no model is significantly better than any other.**
    - Tom labelled 47 pairs: the 27 where at least two models disagreed with the generated label, plus 20 random. All 20 random pairs matched the generated label. He changed 12 of the 27 disagreements, 8 of them away from `contradicts` (to `update` ×4, `unrelated` ×2, `narrows`, `same`). So part of round 2's weak contradiction recall was label error.
+   - Where Tom's label differs from the generated one (counts only):
+
+     | generated label → Tom's label | pairs |
+     |---|---|
+     | `contradicts` → `update` | 4 |
+     | `contradicts` → `unrelated` | 2 |
+     | `contradicts` → `narrows` | 1 |
+     | `contradicts` → `same` | 1 |
+     | `same` → `contradicts` | 1 |
+     | `same` → `narrows` | 1 |
+     | `same` → `unrelated` | 1 |
+     | `unrelated` → `narrows` | 1 |
+     | **total** | **12** |
+
    - With his labels, accuracy is 91.0–94.0%: `microsoft/microsoft-decision-1.1` 94.0%; `typesafe/jev-1.14` and `liquid/d1.2-ultra` 93.0%. Every McNemar p ≥ 0.14.
    - Macro AUC is 0.977–0.994.
    - Jev has the best contradiction recall (90.9%) and a low Brier score (0.104; Microsoft 0.098).
