@@ -1031,7 +1031,7 @@ async def soft_delete_atom(
 ) -> bool:
     result = await conn.execute(
         """
-        UPDATE atoms SET is_active = false
+        UPDATE atoms SET is_active = false, deactivation_reason = 'deleted_by_agent'
         WHERE id = $1 AND agent_id = $2 AND is_active = true
         """,
         atom_id,
