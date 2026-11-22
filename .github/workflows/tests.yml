@@ -1,0 +1,42 @@
+name: tests
+
+on:
+  push:
+    branches: [main, "v2/**"]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # No secrets: fake embedder + fake decomposer, no API keys.
+      MNEMO_DATABASE_URL: postgresql://mnemo:mnemo_test_pw@localhost:5432/mnemo_test
+      MNEMO_EMBEDDING_BACKEND: fake
+      MNEMO_DECOMPOSER_PROVIDER: fake
+      UV_FROZEN: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - name: Build test database (schema.sql + mnemo migrate)
+        env:
+          PGPASSWORD: postgres
+        run: scripts/test/build_test_db.sh localhost 5432
+      - name: Unit suite (non-eval)
+        run: uv run pytest -q
