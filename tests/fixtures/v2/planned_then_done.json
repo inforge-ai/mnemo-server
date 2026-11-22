@@ -23,6 +23,7 @@
   },
   "xfail": {
     "phase": "phase 2",
-    "fix": "deterministic planned->done supersession"
+    "fix": "deterministic planned->done supersession; fails ~1 in 4 runs today",
+    "strict": false
   }
 }
