@@ -151,6 +151,12 @@ Runbook `scripts/phase1/README.md`. Counts and ids only.
 
 **Rollback images:** `scripts/deploy/image_tags.sh` (pre / post / list / rollback) is now in both runbooks. The running image is tagged `mnemo-server:2e09f2b`.
 
+**Date repair, last part (2026-11-23 22:17 UTC):** the 32 waiting tier-2 atoms (clio) went to the January just past (2026), under the same safe rule as the 83. Plan `-v which=next -v target=past`: 32 in scope (at most 32, as Tom required); every new date precedes `created_at`. **21 replace** (year next to the same day and month: text, date and embedding changed), **11 flag** (`date_suspect`). Planned, embedded in the container (old-text check: minimum cosine 1.0), and applied in one transaction: `applied 21 replace, 11 flag`. No repair candidates remain. Totals: `repair_remembered_on_2026_11` 227 rows; `repair_date_text_2026_11` 217 rows (104 replace, 113 flag), none reverted. `date_suspect` atoms per agent: clio 103, tapio 7, nels-claude-desktop 3.
+
+**Tapio on 0.6.0rc1 (2026-11-23 22:18 UTC):** idle beforehand (no log entries in the previous hour; last session 21:14; last mnemo operation 2026-10-31). `~/.hermes/profiles/tapio/config.yaml` pinned to `mnemo-ai[mcp]==0.6.0rc1` (backup `config.yaml.bak-2026-11-23-pre-rc1`); `hermes-tapio.service` restarted at 22:18:01; its MCP process runs 0.6.0rc1, with no errors in its log. Watching for its first store. **Clio waits for the 24-hour report.**
+
+**PR #25 merged** into `main` (`b70d521`) with CI green. Production runs `2e09f2b`; since then only docs and scripts changed.
+
 **Still to do after G2:**
 - 24 hours after the 21:05 restart: stores attempted, complete and failed; `remember` latency p50 and p95; flag counts on new atoms by flag; decomposer and lifecycle errors in the logs.
 - Disk: at Tom's request the unused April image `mnemo-mnemo-server:latest` (`8f0e5b51ce2b`, 23.9 GB, no container) was removed at ~21:09. Free space is now 49 GB. The previous image `63af8ab7674b` (`7a0c676`) was untagged by the rebuild and is **gone** (removed outside this work within minutes). Rolling back now means rebuilding from `7a0c676`. 12.4 GB of build cache is still on disk.
