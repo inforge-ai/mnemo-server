@@ -115,7 +115,7 @@ Runbook `scripts/phase1/README.md`. Counts and ids only.
 **Still to do after G2:**
 - The first real store from an existing 0.5.0 client on the new server (ids, counts, timings). 0.6.0rc1 is not published until then.
 - 24 hours after the 21:05 restart: stores attempted, complete and failed; `remember` latency p50 and p95; flag counts on new atoms by flag; decomposer and lifecycle errors in the logs.
-- Disk: 24 GB free. Two 23.9 GB mnemo images are on disk (the new one, and `mnemo-mnemo-server:latest` from April), plus the previous image `63af8ab7674b`, kept for rollback, and 12.4 GB of build cache. Nothing is deleted without Tom.
+- Disk: at Tom's request the unused April image `mnemo-mnemo-server:latest` (`8f0e5b51ce2b`, 23.9 GB, no container) was removed at ~21:09. Free space is now 49 GB. The previous image `63af8ab7674b` (`7a0c676`) was untagged by the rebuild and is **gone** (removed outside this work within minutes). Rolling back now means rebuilding from `7a0c676`. 12.4 GB of build cache is still on disk.
 
 ## Open items
 
