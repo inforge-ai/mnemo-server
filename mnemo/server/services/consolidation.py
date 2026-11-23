@@ -52,17 +52,25 @@ async def run_consolidation(pool: asyncpg.Pool) -> dict:
             return {"skipped": True, "decayed": 0, "clustered": 0, "merged": 0, "pruned": 0, "purged": 0}
 
         try:
-            async with conn.transaction():
-                decayed = await _deactivate_faded_atoms(conn)
+            # Destructive steps are gated by settings (all off by default,
+            # v2 Phase 0). A disabled step reports 0.
+            decayed = clustered = merged = pruned = 0
 
-            async with conn.transaction():
-                clustered = await _cluster_and_generalise(conn)
+            if settings.consolidation_decay_enabled:
+                async with conn.transaction():
+                    decayed = await _deactivate_faded_atoms(conn)
 
-            async with conn.transaction():
-                merged = await _merge_duplicates(conn)
+            if settings.consolidation_generalise_enabled:
+                async with conn.transaction():
+                    clustered = await _cluster_and_generalise(conn)
 
-            async with conn.transaction():
-                pruned = await _prune_dead_edges(conn)
+            if settings.consolidation_merge_enabled:
+                async with conn.transaction():
+                    merged = await _merge_duplicates(conn)
+
+            if settings.consolidation_prune_edges_enabled:
+                async with conn.transaction():
+                    pruned = await _prune_dead_edges(conn)
 
             async with conn.transaction():
                 purged = await _purge_departed_agents(conn)
@@ -116,7 +124,7 @@ async def consolidation_loop(pool: asyncpg.Pool) -> None:
 async def _deactivate_faded_atoms(conn: asyncpg.Connection) -> int:
     result = await conn.execute(
         """
-        UPDATE atoms SET is_active = false
+        UPDATE atoms SET is_active = false, deactivation_reason = 'decay'
         WHERE is_active = true
           AND effective_confidence(
               confidence_alpha, confidence_beta,
@@ -396,7 +404,7 @@ async def _merge_duplicates(conn: asyncpg.Connection) -> int:
 
         # Deactivate the newer (merged) atom
         await conn.execute(
-            "UPDATE atoms SET is_active = false WHERE id = $1",
+            "UPDATE atoms SET is_active = false, deactivation_reason = 'merged' WHERE id = $1",
             newer_id,
         )
 

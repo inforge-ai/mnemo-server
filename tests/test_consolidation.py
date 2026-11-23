@@ -18,6 +18,23 @@ from mnemo.server.embeddings import encode
 from tests.conftest import remember
 
 
+# ── Fixtures ───────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _enable_destructive_steps(monkeypatch):
+    """These tests exercise the decay / generalise / merge / prune steps, which
+    are disabled by default since v2 Phase 0. Enable them for this module;
+    default (all-off) behaviour is covered in test_consolidation_defaults.py."""
+    from mnemo.server.config import settings
+    for flag in (
+        "consolidation_decay_enabled",
+        "consolidation_generalise_enabled",
+        "consolidation_merge_enabled",
+        "consolidation_prune_edges_enabled",
+    ):
+        monkeypatch.setattr(settings, flag, True)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 async def _insert_atom_sql(

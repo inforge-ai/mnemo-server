@@ -1,0 +1,15 @@
+{
+  "id": "negation_pair",
+  "description": "'X uses A' then 'X no longer uses A': recall for X's tool returns the second and not the first.",
+  "failure_pattern": "stale fact competes with its negation",
+  "steps": [
+    {"text": "The Kestrel team uses Jenkins for continuous integration.", "remembered_on": "2026-09-02T09:00:00Z"},
+    {"text": "The Kestrel team no longer uses Jenkins for continuous integration.", "remembered_on": "2026-10-14T09:00:00Z"}
+  ],
+  "recall": {"query": "What CI tool does the Kestrel team use?"},
+  "assert": {
+    "recall_any_match": ["(no longer|stopped|not) us(e|es|ing) jenkins"],
+    "recall_none_match": ["^(?!.*(no longer|stopped|not us|previously|used to|moved|replaced|dropped)).*\\bjenkins\\b"]
+  },
+  "xfail": null
+}

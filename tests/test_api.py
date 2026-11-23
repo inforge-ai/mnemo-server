@@ -564,14 +564,20 @@ class TestSnapshotSemantics:
             )
 
         # Run consolidation — decay step deactivates the faded atoms
-        await run_consolidation(pool)
+        # (decay and the recall confidence floor are disabled by default since
+        # v2 Phase 0; this test documents the behaviour when both are on)
+        from unittest.mock import patch
+        from mnemo.server.config import settings
+        with patch.object(settings, "consolidation_decay_enabled", True):
+            await run_consolidation(pool)
 
         # Bob can no longer recall those atoms through the shared view
-        after = (await client.post(
-            f"/v1/agents/{bob['id']}/shared_views/{view['id']}/recall",
-            json={"query": "asyncio concurrent coroutines"},
-            headers=bob_headers,
-        )).json()
+        with patch.object(settings, "recall_confidence_floor_enabled", True):
+            after = (await client.post(
+                f"/v1/agents/{bob['id']}/shared_views/{view['id']}/recall",
+                json={"query": "asyncio concurrent coroutines"},
+                headers=bob_headers,
+            )).json()
         assert after["total_retrieved"] == 0
 
     async def test_snapshot_atom_ids_survive_deactivation(self, client, pool, operator_with_key):

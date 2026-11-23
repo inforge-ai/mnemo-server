@@ -12,6 +12,27 @@ class Settings(BaseSettings):
     graph_expansion_max_depth: int = 3
     consolidation_interval_minutes: int = 60
     min_effective_confidence: float = 0.05
+
+    # v2 Phase 0: destructive consolidation steps are OFF by default. Each
+    # step soft-deletes or rewrites memories (decay deactivation, generalised
+    # copies, newer-of-pair merges, edge deletion); enable explicitly only
+    # when the data loss is intended. Departed-agent purge is unaffected.
+    # WARNING: do not enable before Phase 3. Phase 0 restored ~3k atoms
+    # whose decayed confidence is below min_effective_confidence; re-enabling
+    # decay would deactivate all of them again on the next run.
+    consolidation_decay_enabled: bool = False
+    consolidation_generalise_enabled: bool = False
+    consolidation_merge_enabled: bool = False
+    consolidation_prune_edges_enabled: bool = False
+
+    # v2 Phase 0: when False, recall ignores the min_confidence floor (clients
+    # send 0.1 explicitly, which hides restored and older atoms). Confidence
+    # still affects ranking through composite_score.
+    recall_confidence_floor_enabled: bool = False
+
+    # v2 Phase 0: refuse to start when migrations/*.sql has unapplied files.
+    # Apply them with `mnemo migrate`.
+    require_migrations: bool = True
     duplicate_similarity_threshold: float = 0.90
     cross_call_edge_threshold: float = 0.55
 

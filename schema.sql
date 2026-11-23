@@ -9,6 +9,16 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- This file already contains the effects of migrations 001–005. Record them
+-- so `mnemo migrate` applies only 006 onwards on a fresh database.
+INSERT INTO schema_migrations (version) VALUES
+    ('001_admin_schema'),
+    ('002_rbac_lite'),
+    ('003_sharing_scope'),
+    ('004_fix_effective_confidence_volatility'),
+    ('005_remembered_on')
+ON CONFLICT DO NOTHING;
+
 -- platform_config table
 CREATE TABLE IF NOT EXISTS platform_config (
     key VARCHAR(64) PRIMARY KEY,
@@ -130,6 +140,7 @@ CREATE TABLE atoms (
 CREATE INDEX idx_atoms_agent_id ON atoms (agent_id);
 CREATE INDEX idx_atoms_agent_type ON atoms (agent_id, atom_type);
 CREATE INDEX idx_atoms_domain_tags ON atoms USING GIN (domain_tags);
+-- Baseline (001–005) state; dropped by migrations/009_drop_ivfflat_index.sql.
 CREATE INDEX idx_atoms_embedding ON atoms USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 CREATE INDEX idx_atoms_active ON atoms (agent_id, is_active) WHERE is_active = true;

@@ -1,0 +1,20 @@
+{
+  "id": "attribution_own_state",
+  "description": "The agent's own state ('I am not connected to X') is not stored as the user's state.",
+  "failure_pattern": "speaker/subject attribution",
+  "steps": [
+    {
+      "text": "[Orion to user] I am not connected to the Tidewell scheduler at the moment, so I cannot see your bookings."
+    }
+  ],
+  "assert": {
+    "atoms_none_match": [
+      "(user|tom|they) (is|are|was|were) not connected",
+      "user.{0,20}not connected"
+    ],
+    "atoms_any_match": [
+      "(orion|agent|assistant|\\bi\\b).{0,40}(not (currently )?connected|no connection|lack of connection)"
+    ]
+  },
+  "xfail": null
+}

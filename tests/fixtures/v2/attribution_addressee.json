@@ -1,0 +1,13 @@
+{
+  "id": "attribution_addressee",
+  "description": "A remark addressed to the agent about the agent is stored as a property of the agent, not of the system being discussed.",
+  "failure_pattern": "speaker/subject attribution",
+  "steps": [
+    {"text": "[User to Orion] Orion, you are the heaviest user of the Tidewell scheduler by a wide margin."}
+  ],
+  "assert": {
+    "atoms_any_match": ["orion.*heaviest|heaviest.*orion|(the agent|this agent).*heaviest"],
+    "atoms_none_match": ["tidewell( scheduler)? (is|was) the heaviest"]
+  },
+  "xfail": null
+}

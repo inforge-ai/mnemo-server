@@ -1,0 +1,36 @@
+{
+  "id": "updated_number",
+  "description": "'score is 76.1%' then 'score is 82.1%, the earlier figure was wrong': recall returns 82.1%.",
+  "failure_pattern": "corrected value does not supersede the old one",
+  "steps": [
+    {
+      "text": "The Halyard model's benchmark score is 76.1%.",
+      "remembered_on": "2026-10-01T12:00:00Z"
+    },
+    {
+      "text": "The Halyard model's benchmark score is 82.1%; the earlier 76.1% figure was wrong.",
+      "remembered_on": "2026-10-08T12:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "What is the Halyard model's benchmark score?"
+  },
+  "assert": {
+    "recall_top_match": "82\\.1",
+    "recall_none_match": [
+      "^(?!.*(wrong|incorrect|earlier|previous|correct|82\\.1)).*76\\.1"
+    ]
+  },
+  "xfail": null,
+  "dedup_thresholds": [
+    0.97,
+    0.9
+  ],
+  "xfail_at_threshold": {
+    "0.9": {
+      "phase": "phase 2",
+      "fix": "store-time dedup must not merge a corrected value into the value it corrects, at any threshold"
+    }
+  },
+  "note": "Guard for phase 2 at any dedup threshold. Passes at the Phase 0 production setting 0.97; at 0.90 the corrected atom merges into the old one."
+}

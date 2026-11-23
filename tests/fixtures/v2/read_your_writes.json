@@ -1,0 +1,23 @@
+{
+  "id": "read_your_writes",
+  "description": "A recall immediately after remember finds the memory (production async store path, not the test-only synchronous one).",
+  "failure_pattern": "async write invisibility",
+  "sync_store": false,
+  "steps": [
+    {
+      "text": "The Marlin deploy key was rotated this morning after the contractor offboarding."
+    }
+  ],
+  "recall": {
+    "query": "Marlin deploy key rotation"
+  },
+  "assert": {
+    "recall_any_match": [
+      "marlin"
+    ]
+  },
+  "xfail": {
+    "phase": "phase 1",
+    "fix": "synchronous or inspectable writes: remember returns the stored atoms, or recall waits on pending stores for the agent"
+  }
+}

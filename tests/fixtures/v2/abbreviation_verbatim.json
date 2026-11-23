@@ -1,0 +1,13 @@
+{
+  "id": "abbreviation_verbatim",
+  "description": "A domain abbreviation appears verbatim in the atom and is not expanded.",
+  "failure_pattern": "hallucinated abbreviation expansion",
+  "steps": [
+    {"text": "Equity note: 1,200 KTP NQ options from the Brightwater grant vest next March."}
+  ],
+  "assert": {
+    "atoms_any_match": ["\\bnq\\b"],
+    "atoms_none_match": ["nasdaq", "non[- ]?qualified"]
+  },
+  "xfail": null
+}

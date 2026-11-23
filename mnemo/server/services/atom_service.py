@@ -416,6 +416,10 @@ async def _create_similarity_edges(
     edges_created = 0
     for i in range(len(stored_ids)):
         for j in range(i + 1, len(stored_ids)):
+            # Two decomposed atoms can dedup into the same existing atom;
+            # never link an atom to itself.
+            if stored_ids[i] == stored_ids[j]:
+                continue
             sim = _cosine_sim(embeddings[i], embeddings[j])
             if sim > threshold:
                 try:
@@ -530,7 +534,9 @@ async def store_from_text(
         except Exception:
             logger.warning("Failed to log decomposer usage for store %s", store_id, exc_info=True)
 
-    decomposer_version = "haiku_v1" if os.environ.get("ANTHROPIC_API_KEY") else "regex_v1"
+    # Record what actually ran: the LLM path returns usage; the regex fallback
+    # (no API key, API error or unparseable response) does not.
+    decomposer_version = "haiku_v1" if decomposer_result.usage else "regex_v1"
 
     stored_ids: list[UUID] = []
     stored_rows: list[asyncpg.Record] = []
@@ -721,7 +727,7 @@ async def store_explicit(
         alpha, beta = (4.0, 2.0)
 
     embedding = await encode(text_content)
-    duplicate = await _check_duplicate(conn, agent_id, embedding)
+    duplicate = await _check_duplicate(conn, agent_id, embedding, atom_type)
 
     if duplicate:
         await _merge_duplicate(
@@ -775,7 +781,7 @@ async def retrieve(
     embedding = await encode(query, prompt_name="query")
     over_fetch = max_results * 2
 
-    # Fetch top candidates using the ivfflat index (ORDER BY distance ASC).
+    # Fetch top candidates by exact cosine distance over the agent's atoms.
     # Similarity floor, confidence filter, and composite ranking are applied
     # in Python to avoid naming conflicts with pg_trgm's similarity() function.
     rows = await conn.fetch(
@@ -807,7 +813,8 @@ async def retrieve(
 
     # Apply similarity floor, confidence filter, compute composite score, sort.
     rows = [r for r in rows if r["cosine_sim"] >= min_similarity]
-    rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
+    if settings.recall_confidence_floor_enabled:
+        rows = [r for r in rows if r["confidence_effective"] >= min_confidence]
 
     # Filter superseded atoms unless requested
     if not include_superseded:
@@ -1024,7 +1031,7 @@ async def soft_delete_atom(
 ) -> bool:
     result = await conn.execute(
         """
-        UPDATE atoms SET is_active = false
+        UPDATE atoms SET is_active = false, deactivation_reason = 'deleted_by_agent'
         WHERE id = $1 AND agent_id = $2 AND is_active = true
         """,
         atom_id,

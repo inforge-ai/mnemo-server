@@ -1,0 +1,2 @@
+VACUUM ANALYZE atoms;
+VACUUM ANALYZE edges;
