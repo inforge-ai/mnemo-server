@@ -93,7 +93,10 @@ Defaults already in effect, so nothing else to set:
 
 ## 5. Rebuild, restart, check
 
+**Free space first.** The image is about 24 GB, and a rebuild needs roughly twice that while it runs. `scripts/deploy/check_free_space.sh` aborts unless the Docker filesystem has max(30 GiB, 2 × current image + 10 GiB) free. The 10 GiB keeps Postgres and Zulip, which share the disk, writable at the build's peak. On 2026-11-23 a build started with 17 GB free and filled the disk, and Zulip's RabbitMQ was down for about 8 minutes. If it aborts, prune unused build cache and images (`docker builder prune`, `docker image prune`) after checking what they hold, and never prune volumes without looking.
+
 ```bash
+scripts/deploy/check_free_space.sh || exit 1   # aborts below max(30 GiB, 2 x image + 10 GiB)
 BUILD_COMMIT=$(git rev-parse --short HEAD) docker compose build mnemo-server
 docker compose up -d mnemo-server
 curl -s http://127.0.0.1:8000/v1/health
