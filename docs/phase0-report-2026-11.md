@@ -563,10 +563,25 @@ One recall per active agent through the API, using the admin key and the query "
 ## Exit criteria
 | criterion | status |
 |---|---|
-| Default consolidation run deactivates, merges, creates and deletes nothing | covered by `test_consolidation_defaults.py`. **Production check pending:** the `access_log` consolidation rows should show zeros 24 hours after 14:31 UTC |
+| Default consolidation run deactivates, merges, creates and deletes nothing | covered by `test_consolidation_defaults.py`. **Production: passed** (checked 2026-11-23 20:47 UTC, see below) |
 | Restored counts match the G2 dry run | yes: 2,957 = dry run (approved 2,956 + 1 decay, under Tom's rule) |
 | No eval agents in production; `mnemo_eval` holds only eval agents | yes |
 | Fresh `schema.sql` + `mnemo migrate` matches production | yes, apart from `remembered_on` column order |
 | Vector index | dropped, not HNSW, per Tom's G1 amendment; recall works for every active agent |
 | Full suite passes; fixtures exist with expected xfails | 439 passed, 1 known LLM-flaky failure; fixtures in place |
 | Report complete | this document; PR still to open |
+
+## 24-hour consolidation check (2026-11-23 20:47 UTC)
+Read-only, on production, `access_log` rows with `action='consolidation'` since the 2026-11-22 14:31 UTC restart:
+
+| check | result |
+|---|---|
+| runs | 30 (first 2026-11-22 15:31:26 UTC, last 2026-11-23 20:31:27 UTC) |
+| runs with any non-zero `decayed`/`clustered`/`merged`/`pruned`/`purged` | **0** |
+| runs missing any of those keys | 0 |
+| largest gap between runs | 1 h 00 min |
+| `Consolidation run failed` lines in the container logs since the restart | 0 |
+| container restarts since 2026-11-22 14:31:10 UTC | 0 |
+
+**Passed.** The Phase 0 default consolidation run changes nothing in production.
+
