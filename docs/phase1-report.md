@@ -1,7 +1,7 @@
 # Mnemo v2 Phase 1 report — trustworthy writes
 
 **Branch:** `v2/phase1` (off `v2/phase0`), mnemo-client `v2/phase1`. **Spec:** `docs/mnemo-v2-phas1-spec.md`. **Design:** `docs/phase1-design.md`. **Bake-off:** `docs/phase1-bakeoff.md`.
-**Status, 2026-11-22:** items 1–9 are built. **Stopped at G2 (deploy) and G3 (publish the client).** Production is unchanged: it still runs `v2/phase0` @ `7a0c676` with schema 009.
+**Status, 2026-11-23:** G2 deployed. Production runs `v2/phase1` @ `e3eec95` (`0.2.0+e3eec95`), schema `010_sources`, decomposer `anthropic claude-haiku-5-5`, since 21:05 UTC. **G3 (client 0.6.0rc1) waits** for a real store from an existing 0.5.0 client to complete on the new server.
 
 ## Gates
 
@@ -9,9 +9,9 @@
 |---|---|---|
 | G1 design note | 2026-11-22 | Approved with amendments. All are in `docs/phase1-design.md`: status auth; atom ids in MCP output; SQL-side filters; only `ungrounded_quote` lowers the band; `abbreviation_altered` and `unsupported_term` are record-only; `source_merges`; 90 s deadline; `order_by`; prompt rules for reported speech, temporary state, corrections, note-as-data and contiguous quotes; preamble line for `user_name`. Open questions: 1 keep, 2 moot, 3 no default addressee, 4 subject in `structured`, 5 Haiku 4.5, 6 name resolution server-side. |
 | G3 client publish | — | **Pending.** See the questions at the end. |
-| G2 deploy | — | **Pending.** The package is below. |
+| G2 deploy | 2026-11-22 approved; 2026-11-23 deployed | Approved after the 24-hour check, with `claude-haiku-5-5`. Deployed 2026-11-23; record below. |
 
-The Phase 0 prerequisite (24-hour consolidation check) is not yet due. The first consolidation run after the 14:31 UTC restart was all zeros (`decayed/clustered/merged/pruned/purged` = 0). The full check is due after 2026-11-23 14:31 UTC and is required before the G2 deploy.
+The Phase 0 prerequisite, the 24-hour consolidation check, **passed** on 2026-11-23 at 20:47 UTC: 30 runs, 0 with a non-zero count, 0 failures (`docs/phase0-report-2026-11.md`, PR #23 ticked).
 
 ## What was built
 
@@ -92,13 +92,36 @@ The deploy steps are unchanged from the spec: backup, migrate, rebuild, restart,
    - Rewording matters more: 1.3–6.7% flips on grounding and 4.0–10.5% on relation.
 5. **How many of the 430 `merge_pairs` have an inactive kept atom (merge chains)?** **52.** In 47 of them the kept atom was itself merged away (`deactivation_reason = 'merged'`); the other 5 kept atoms are inactive arcs. None is missing. This is a read-only aggregate on production, 2026-11-22.
 
+## G2 deploy record (2026-11-23)
+
+Runbook `scripts/phase1/README.md`. Counts and ids only.
+
+| UTC | step | result |
+|---|---|---|
+| 20:47 | 24-hour check | passed (above) |
+| ~20:50 | PR #23 → `main` | merged, merge commit `2217bb0`; PR #24 retargeted to `main` |
+| 20:5x | preconditions | `mnemo migrate --dry-run`: `Pending: 010_sources` only; checkout `e3eec95`, clean apart from Tom's local files; 13,061 atoms |
+| 20:56:52–57 | backup | `~/backups/mnemo-prod-2026-11-23.dump`, 40,282,836 B, sha256 `3ffcdab2bc8df2b0bc17f533dd216e5d5db2f11ff8956ffed0563aa606119b35`, 154 TOC entries. Row counts in the dump = live (atoms 13,061, agents 14, edges 26,224, store_jobs 727). Phase 0 backup kept: `~/backups/mnemo-prod-2026-11-21.dump`, 139,474,330 B, sha256 `46a93f4433d4ccd873db0c491a21add89c78408dd4b0a059bf696ef7531ae7ac`. Both mode 600. |
+| 20:57:18 | stop, migrate | `Applied: 010_sources`. Tables `sources` and `source_merges` exist; `atoms` has `source_id`, `source_quote` and `verification`; `mnemo` has INSERT and SELECT on `sources` and INSERT on `source_merges`; 13,061 atoms. |
+| 20:57:19 | old container restarted | **Deviation:** the old server (`7a0c676`) was restarted on schema 010 while Tom reviewed `user_name`, so the server was down for ~15 s instead of for the review. Safe because 010 only adds tables, columns that may be NULL, and one dropped NOT NULL. Old code has no `SELECT *` and no startup schema check. Health was `ok`. No stores arrived before the rebuild. |
+| ~20:58 | `user_name` dry run | 10 CSV rows; each name 1 active match and 1 overall; none set; `would_update` 10 |
+| ~20:59 | `user_name` exec (Tom's go) | `updated 10 (expected 10)`, committed; 10 agents with a non-empty `user_name` |
+| 20:59 | `.env` | appended `MNEMO_DECOMPOSER_MODEL=claude-haiku-5-5` (previous copy `~/backups/env-2026-11-23.bak`, mode 600) |
+| 20:59–21:04 | build | image `420f4d794b09`, `BUILD_COMMIT=e3eec95`. **The disk filled** during the build (the image is 23.9 GB; 17 GB was free). The image finished; only compose's metadata file in `/tmp` failed. Free space recovered to 24 GB. Server health stayed `ok`, and no store jobs were created in the window. |
+| 21:05:06 | restart | health `ok`, `0.2.0+e3eec95`, schema `010_sources`. Log: `Decomposer: anthropic claude-haiku-5-5`. Stuck jobs: none (727 `complete`, 0 pending or decomposing). |
+| ~21:07 | smoke test | Scratch operator and agent `ebf6b766-…`. `remember` → 201 `complete`, store `b774b7e9-…`, 1 atom with a `source_quote`, no flags, 2.30 s wall (first call after start). `recall` → 200, 0.18 s, stored atom found, `source_id` set, `origin_class` `unspecified`. `GET /stores/{id}/status` → `complete`, 1 atom. `GET /agents/me` → the scratch agent. Purge → 1 atom deleted. The departed agent row, its store job, address and operator (with API key) were deleted in a guarded transaction. Back to 14 agents and 13,061 atoms. |
+| ~21:08 | per-agent recall | `scripts/phase0/5e_latency.sql`: all 13 active agents with atoms return their candidates (2–20 rows), 0.0–199 ms execution, cold cache |
+
+**Still to do after G2:**
+- The first real store from an existing 0.5.0 client on the new server (ids, counts, timings). 0.6.0rc1 is not published until then.
+- 24 hours after the 21:05 restart: stores attempted, complete and failed; `remember` latency p50 and p95; flag counts on new atoms by flag; decomposer and lifecycle errors in the logs.
+- Disk: 24 GB free. Two 23.9 GB mnemo images are on disk (the new one, and `mnemo-mnemo-server:latest` from April), plus the previous image `63af8ab7674b`, kept for rollback, and 12.4 GB of build cache. Nothing is deleted without Tom.
+
 ## Open items
 
-- 24-hour consolidation check (after 2026-11-23 14:31 UTC), then tick PR #23.
-- **G2:** approved after the 24-hour check, with `MNEMO_DECOMPOSER_MODEL=claude-haiku-5-5` (runbook `scripts/phase1/README.md`). `user_name` CSV (`~/backups/user_names.csv`, mode 600): 10 rows. Production dry run, 2026-11-22: each name matches exactly one active agent, none already set, `would_update` = 10. The guarded update runs at deploy with `-v expected=10`.
 - **G3:** client publish questions (below).
 - Done: Tom hand-labelled the 47-row relation check (`ccbd8ef`), and the bake-off is rescored against those labels.
-- PRs: `mnemo-server` `v2/phase1` → `v2/phase0`; `mnemo-client` `v2/phase1` → `main`; and the `inforge-ai/mnemo-mcp` "superseded" README notice. None is opened yet; awaiting the go-ahead.
+- PRs (open, not merged): `mnemo-server` #24 `v2/phase1` → `main` (retargeted after #23 merged); `mnemo-client` #2 `v2/phase1` → `main`; `inforge-ai/mnemo-mcp` #1, the "superseded" README notice.
 
 ### G3 questions (client publish)
 
