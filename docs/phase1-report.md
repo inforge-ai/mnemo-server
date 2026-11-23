@@ -139,6 +139,18 @@ Runbook `scripts/phase1/README.md`. Counts and ids only.
 
 **Tier 2 proposal, dry run only** (`scripts/phase1/remembered_on_tier2_dryrun.sql`): 217 atoms. A (wrong year appears exactly once → replace it, fix the date, save old text and date to an undo table, re-embed): 195, of which 104 have the year next to the same day and month. B (more than once → set `verification.date_suspect` only): 22. Per agent: clio 187 A / 20 B; tapio 6 / 1; nels-claude-desktop 2 / 1. 109 A atoms have lifecycle edges. Not run.
 
+**Agent consent note:** eaara and nels-claude-desktop are Nels's agents. eaara's 11 tier-1 atoms were repaired at 21:58:33 UTC on 2026-11-23, **before Nels's OK was recorded**. He has since agreed, and asked for the same rules on nels-claude-desktop.
+
+**Date repair, continued (2026-11-23, Tom's approval):**
+- **nels-claude-desktop, tier 1, same year (22:09:11 UTC):** dry run 4 (2025-04-16 → 2026-04-16), `repaired 4`.
+- **Held clio 144 → the January just past (22:09:17 UTC):** `-v agents=clio,tapio -v which=next -v target=past -v expected=144`. 2024/2025-01-xx → 2026-01-xx, every one before its `created_at`. `repaired 144`. tapio had none.
+- `repair_remembered_on_2026_11` now holds 227 rows (79 + 4 + 144), all matching their atoms, none reverted. Candidates now exclude any atom already in either undo table.
+- **Backup before the text edits:** `~/backups/mnemo-prod-2026-11-23-pre-tier2.dump`, 40,374,058 B, sha256 `16d91c3ec5d7c65474969e86a858ae9a7196e3fc9bcebf5034aefe82b34e4f2a`.
+- **Tier 2** (`remembered_on_tier2_plan.sql` → `_embed.py` → `_apply.sql`; undo `_undo.sql`; undo table `repair_date_text_2026_11`). The plan dry run reproduced the approved table exactly (217 / once 195 / next to the date 104 / same year 164, following year 31 / more than once 22, and per agent). Plan: **replace 83** (clio): the wrong year appears once, next to the same day and month, and the corrected date is in `created_at`'s own year. **flag 102** (clio 92, tapio 7, nels-claude-desktop 3): `date_suspect` added to `verification.flags`. **wait 32** (clio, corrected date in the following year): untouched. Plan recorded 22:09; 83 new texts embedded in the container 22:09:43–22:10:00 (re-embedding 8 old texts reproduced their stored embeddings, minimum cosine 1.0); applied 22:10:09 in one transaction: `applied 83 replace, 102 flag`. Verified: 83 atoms have the new text, date and embedding; 102 carry the flag with the date unchanged.
+- Remaining candidates: the 32 waiting tier-2 atoms.
+
+**Rollback images:** `scripts/deploy/image_tags.sh` (pre / post / list / rollback) is now in both runbooks. The running image is tagged `mnemo-server:2e09f2b`.
+
 **Still to do after G2:**
 - 24 hours after the 21:05 restart: stores attempted, complete and failed; `remember` latency p50 and p95; flag counts on new atoms by flag; decomposer and lifecycle errors in the logs.
 - Disk: at Tom's request the unused April image `mnemo-mnemo-server:latest` (`8f0e5b51ce2b`, 23.9 GB, no container) was removed at ~21:09. Free space is now 49 GB. The previous image `63af8ab7674b` (`7a0c676`) was untagged by the rebuild and is **gone** (removed outside this work within minutes). Rolling back now means rebuilding from `7a0c676`. 12.4 GB of build cache is still on disk.
