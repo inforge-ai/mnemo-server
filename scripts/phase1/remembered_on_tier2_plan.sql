@@ -10,10 +10,14 @@
 --            AND the corrected date is in created_at's own year.
 --            → new text = that one year replaced by the corrected year;
 --              new remembered_on = the corrected date; re-embedded in step 2.
---   wait:    the corrected date is in the following year. Not planned (held with
---            the following-year tier-1 decision).
---   flag:    everything else (same-year corrections only): verification.flags gets
---            "date_suspect"; text, date and embedding unchanged.
+--   wait:    outside -v which (not planned, not changed).
+--   flag:    everything else in scope: verification.flags gets "date_suspect";
+--            text, date and embedding unchanged.
+-- Scope options (defaults reproduce the first run, 2026-11-23 22:09):
+--   -v which=same|next   corrected date in created_at's own year (default) or the following year
+--   -v target=nearest|past  new date = nearest correction (default), or the same
+--            month-day in created_at's own year (the occurrence just past). A "past"
+--            date after created_at is not a fit: that atom is flagged instead.
 -- Steps 2 (remembered_on_tier2_embed.py) and 3 (remembered_on_tier2_apply.sql) follow.
 -- Counts and ids only; no text leaves the database.
 \set ON_ERROR_STOP on
@@ -22,12 +26,27 @@
   \echo 'usage: -v agents=a,b [-v expected_replace=N -v expected_flag=M]'
   \quit
 \endif
+\if :{?which}
+\else
+\set which same
+\endif
+\if :{?target}
+\else
+\set target nearest
+\endif
+SELECT :'which' IN ('same', 'next') AND :'target' IN ('nearest', 'past') AS args_ok \gset
+\if :args_ok
+\else
+  \echo 'bad -v which / -v target'
+  \quit
+\endif
 BEGIN;
 \ir remembered_on_candidates.sql
 CREATE TEMP TABLE t2 ON COMMIT DROP AS
 SELECT c.*, a.text_content, a.embedding, a.verification,
        extract(year FROM c.old_remembered_on)::int AS wy,
-       extract(year FROM c.new_remembered_on)::int AS ny,
+       CASE WHEN :'target' = 'past' THEN c.past_remembered_on ELSE c.new_remembered_on END AS target_remembered_on,
+       extract(year FROM CASE WHEN :'target' = 'past' THEN c.past_remembered_on ELSE c.new_remembered_on END)::int AS ny,
        regexp_count(a.text_content, '\m' || extract(year FROM c.old_remembered_on)::int || '\M') AS occurrences,
        c.iso_in_text
          OR a.text_content ~* ('\m' || to_char(c.old_remembered_on, 'FMDD') || '(st|nd|rd|th)?\s+'
@@ -52,10 +71,11 @@ FROM t2 GROUP BY ROLLUP(agent_name) ORDER BY agent_name NULLS LAST;
 -- 2. This plan.
 CREATE TEMP TABLE plan ON COMMIT DROP AS
 SELECT atom_id, agent_id, agent_name,
-       CASE WHEN occurrences = 1 AND next_to_date AND same_year THEN 'replace'
-            WHEN NOT same_year THEN 'wait'
+       CASE WHEN same_year <> (:'which' = 'same') THEN 'wait'
+            WHEN occurrences = 1 AND next_to_date
+                 AND (:'target' = 'nearest' OR target_remembered_on <= created_at) THEN 'replace'
             ELSE 'flag' END AS action,
-       old_remembered_on, new_remembered_on, text_content AS old_text,
+       old_remembered_on, target_remembered_on AS new_remembered_on, created_at, text_content AS old_text,
        regexp_replace(text_content, '\m' || wy || '\M', ny::text) AS new_text,
        embedding AS old_embedding, verification AS old_verification
 FROM t2;
@@ -67,8 +87,13 @@ SELECT action, count(*) AS atoms FROM plan GROUP BY ROLLUP(action) ORDER BY acti
 SELECT 'replace sanity' AS q, count(*) AS rows,
        count(*) FILTER (WHERE new_text = old_text) AS unchanged_text,
        count(*) FILTER (WHERE length(new_text) <> length(old_text)) AS length_changed,
-       count(*) FILTER (WHERE new_text ~ ('\m' || extract(year FROM old_remembered_on)::int || '\M')) AS wrong_year_left
+       count(*) FILTER (WHERE new_text ~ ('\m' || extract(year FROM old_remembered_on)::int || '\M')) AS wrong_year_left,
+       count(*) FILTER (WHERE new_remembered_on > created_at) AS new_date_after_created
 FROM plan WHERE action = 'replace';
+SELECT 'scope' AS q, :'which' AS which, :'target' AS target,
+       count(*) FILTER (WHERE action <> 'wait') AS in_scope,
+       count(*) FILTER (WHERE action = 'replace' AND new_remembered_on <= created_at) AS replace_new_date_precedes_created
+FROM plan;
 
 \if :{?expected_replace}
 \if :{?expected_flag}
