@@ -126,6 +126,19 @@ Runbook `scripts/phase1/README.md`. Counts and ids only.
 
 **G3 rollout:** Tom published `0.6.0rc1`; the PyPI files match the local build's sha256. **Lloyd** (`a95391ed-…`): `~/.hermes/profiles/lloyd/config.yaml` now uses `mnemo-ai[mcp]==0.6.0rc1` (backup `config.yaml.bak-2026-11-23-pre-rc1`); `hermes-lloyd.service` was restarted at 21:32:39 UTC and its MCP process runs 0.6.0rc1, with no errors in its log. `~/pantheon/lloyd/config.yaml` (Tom's repo, with uncommitted changes) is untouched. Next: Tapio, then Clio.
 
+**Disk and second deploy (2026-11-23, Tom's approval):**
+- **Pruned:** build cache (12.4 GB) and the unused volume `mnemo_hf-cache` (1.27 GB). Free space went from 48 to 61 GB. Everything sampo was left alone. `scripts/deploy/check_free_space.sh` is now in the runbooks: it aborts below max(30 GiB, 2 × image + 10 GiB).
+- **PR #24 merged into `main`** (`bdb1e9d`). `v2/phase1-lifecycle-fixes` was brought up to date with `main` and opened as PR #25.
+- **Dockerfile:** the app user is now created before `uv sync` (`2e09f2b`). The image went from 23.9 GB to 12.1 GB.
+- **`.env`:** added `MNEMO_TENSION_THRESHOLD=0.80` and `MNEMO_NARROWS_THRESHOLD=0.80` (previous copy `~/backups/env-2026-11-23b.bak`).
+- **One restart, 21:56:57 UTC:** health `0.2.0+2e09f2b`, schema 010, `Decomposer: anthropic claude-haiku-5-5`. In the container: tension 0.8, narrows 0.8, supersedes 0.75, lifecycle concurrency 4. 0 jobs were pending at the restart.
+- **Smoke test:** scratch agent; `remember` 201 complete, 1 atom with a quote, 1.94 s; `recall` found it in 0.10 s; status, `/agents/me` and purge ok. The scratch operator was deleted in a guarded transaction. 14 agents, 13,063 atoms.
+- **The previous image was removed automatically** after being untagged, as at the first deploy. Rollback means a rebuild. 64 GB free after the deploy.
+
+**Date repair, tier 1, first part (2026-11-23 21:58:33 UTC):** `scripts/phase1/remembered_on_exec.sql -v agents=clio,tapio,eaara -v same_year_only=true -v expected=79`. The dry run with that filter gave 79 (clio 65, eaara 11, tapio 3) and the run committed `repaired 79`. The undo table `repair_remembered_on_2026_11` has 79 rows, none reverted; shifts were 365 or 730 days. **Held:** 144 clio tier-1 atoms whose corrected date falls in the following year (2024/2025-01-xx → 2027-01-xx), and nels-claude-desktop's 4 tier-1 atoms (outside the scope).
+
+**Tier 2 proposal, dry run only** (`scripts/phase1/remembered_on_tier2_dryrun.sql`): 217 atoms. A (wrong year appears exactly once → replace it, fix the date, save old text and date to an undo table, re-embed): 195, of which 104 have the year next to the same day and month. B (more than once → set `verification.date_suspect` only): 22. Per agent: clio 187 A / 20 B; tapio 6 / 1; nels-claude-desktop 2 / 1. 109 A atoms have lifecycle edges. Not run.
+
 **Still to do after G2:**
 - 24 hours after the 21:05 restart: stores attempted, complete and failed; `remember` latency p50 and p95; flag counts on new atoms by flag; decomposer and lifecycle errors in the logs.
 - Disk: at Tom's request the unused April image `mnemo-mnemo-server:latest` (`8f0e5b51ce2b`, 23.9 GB, no container) was removed at ~21:09. Free space is now 49 GB. The previous image `63af8ab7674b` (`7a0c676`) was untagged by the rebuild and is **gone** (removed outside this work within minutes). Rolling back now means rebuilding from `7a0c676`. 12.4 GB of build cache is still on disk.
