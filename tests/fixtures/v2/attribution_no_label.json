@@ -1,0 +1,23 @@
+{
+  "id": "attribution_no_label",
+  "description": "No speaker label in the text: who 'you' is comes only from the request's speaker/addressee. The remark is about the addressee, not the speaker.",
+  "failure_pattern": "speaker/subject attribution",
+  "steps": [
+    {
+      "text": "You've been running the overnight reindex far more often than anyone else this month.",
+      "speaker": "Tom",
+      "addressee": "Orion",
+      "remembered_on": "2026-11-18"
+    }
+  ],
+  "assert": {
+    "atoms_any_match": [
+      "orion.*(reindex|overnight)"
+    ],
+    "atoms_none_match": [
+      "\\btom\\b (has been|is|was) running the overnight reindex",
+      "the addressee"
+    ]
+  },
+  "xfail": null
+}

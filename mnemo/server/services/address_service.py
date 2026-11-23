@@ -34,14 +34,39 @@ async def resolve_address(pool_or_conn, address: str) -> UUID | None:
     return row["agent_id"] if row else None
 
 
-async def resolve_agent_identifier(pool_or_conn, identifier: str) -> UUID:
+IDENTIFIER_FORMS = (
+    "use the agent's UUID, its name (e.g. clio) or its address (e.g. clio:tom.inforge)"
+)
+
+
+async def _fetchval(pool_or_conn, query: str, *args):
+    if isinstance(pool_or_conn, asyncpg.Pool):
+        async with pool_or_conn.acquire() as conn:
+            return await conn.fetchval(query, *args)
+    return await pool_or_conn.fetchval(query, *args)
+
+
+async def resolve_agent_identifier(pool_or_conn, identifier: str, operator_id: UUID | None = None) -> UUID:
+    """UUID, address (name:user.org) or — v2 Phase 1 — a bare agent name,
+    resolved within the caller's operator. Names are unique per operator
+    (agents_operator_name_unique), so a name resolves to at most one agent."""
     try:
         return UUID(identifier)
     except ValueError:
+        pass
+    if ":" in identifier:
         agent_id = await resolve_address(pool_or_conn, identifier)
-        if not agent_id:
-            raise HTTPException(404, f"Agent not found: {identifier}")
-        return agent_id
+    elif operator_id is not None:
+        agent_id = await _fetchval(
+            pool_or_conn,
+            "SELECT id FROM agents WHERE operator_id = $1 AND name = $2",
+            operator_id, identifier,
+        )
+    else:
+        agent_id = None
+    if not agent_id:
+        raise HTTPException(404, f"Agent not found: {identifier!r}; {IDENTIFIER_FORMS}")
+    return agent_id
 
 
 async def create_address(conn: asyncpg.Connection, agent_id: UUID, agent_name: str,

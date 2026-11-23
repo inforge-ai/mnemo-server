@@ -15,17 +15,28 @@ from .logging_config import configure_logging
 logger = logging.getLogger(__name__)
 
 
+def check_decomposer_config() -> None:
+    """Refuse to start with a decomposer that cannot work. There is no
+    silent regex fallback in v2: regex runs only when chosen explicitly."""
+    provider = settings.decomposer_provider
+    if provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError(
+            "MNEMO_DECOMPOSER_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set. "
+            "Set the key, or set MNEMO_DECOMPOSER_PROVIDER=regex explicitly."
+        )
+    if provider == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
+        raise RuntimeError("MNEMO_DECOMPOSER_PROVIDER=openrouter but OPENROUTER_API_KEY is not set.")
+    logger.info("Decomposer: %s %s", provider, settings.decomposer_model if provider in ("anthropic", "openrouter") else "")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging(level=settings.log_level)
 
+    check_decomposer_config()
+
     from .embeddings import warmup
     await asyncio.get_event_loop().run_in_executor(None, warmup)
-
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        logger.info("LLM decomposer active (Haiku)")
-    else:
-        logger.warning("ANTHROPIC_API_KEY not set — falling back to regex decomposer")
 
     if not settings.admin_key:
         logger.warning("MNEMO_ADMIN_KEY not set — admin endpoints will be inaccessible")
@@ -35,6 +46,10 @@ async def lifespan(app: FastAPI):
 
     from .services.migration_service import run_migrations
     await run_migrations(pool)
+
+    # Before serving requests: any unfinished store was interrupted by the restart.
+    from .services.store_service import drain_background, sweep_stuck_jobs
+    await sweep_stuck_jobs(pool)
 
     from .services.consolidation import consolidation_loop
     task = asyncio.create_task(consolidation_loop(pool))
@@ -48,6 +63,7 @@ async def lifespan(app: FastAPI):
         await task
     except asyncio.CancelledError:
         pass
+    await drain_background(timeout=10.0)
     await close_pool()
 
 

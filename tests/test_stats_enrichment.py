@@ -24,14 +24,27 @@ async def test_stats_includes_topics(client, agent):
 
 
 async def test_stats_includes_date_range(client, agent):
-    """Stats should include the date range of stored atoms."""
+    """Stats should include the date range of stored atoms.
+
+    Was flaky when it ran against the live decomposer (which could return no
+    atoms for this text); the scripted fake decomposer makes it deterministic.
+    """
+    from mnemo.server.decomposers import fake as fake_decomposer
+    from mnemo.server.decomposer import DecomposedAtom
+
+    fake_decomposer.script([DecomposedAtom(
+        text="First memory stored today.", atom_type="episodic",
+        confidence_alpha=8.0, confidence_beta=1.0,
+    )])
     agent_id = agent["id"]
     ag_headers = {"X-Agent-Key": agent["agent_key"]}
-    await client.post(
+    resp = await client.post(
         f"/v1/agents/{agent_id}/remember",
         json={"text": "First memory stored today."},
         headers=ag_headers,
     )
+    assert resp.status_code == 201, resp.text
+    assert len(fake_decomposer.calls) == 1
 
     resp = await client.get(f"/v1/agents/{agent_id}/stats", headers=ag_headers)
     assert resp.status_code == 200

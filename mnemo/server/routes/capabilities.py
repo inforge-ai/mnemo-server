@@ -21,7 +21,7 @@ async def grant_capability(agent_id: str, body: GrantCreate, auth: AuthContext =
     grantor must own the view.
     """
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -160,7 +160,7 @@ async def revoke_shared_view(
 ):
     """Revoke a shared view capability. Idempotent — revoking already-revoked returns success."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)
@@ -185,7 +185,7 @@ async def list_outbound_capabilities(
 ):
     """List capabilities granted by this agent (outbound)."""
     pool = await get_pool()
-    agent_uuid = await resolve_agent_identifier(pool, agent_id)
+    agent_uuid = await resolve_agent_identifier(pool, agent_id, operator_id=auth.operator_id)
     require_agent_match(agent_uuid, auth)
     async with get_conn() as conn:
         await _require_active_agent(conn, agent_uuid)

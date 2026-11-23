@@ -1,11 +1,24 @@
-from pydantic import AliasChoices, Field
+import os
+from typing import Literal
+
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     database_url: str  # required — set MNEMO_DATABASE_URL in env or .env file
-    test_database_url: str = ""  # set MNEMO_TEST_DATABASE_URL for test suite
     embedding_model: str = "google/embeddinggemma-300m"
+    # "fake" is a deterministic hashed bag-of-words embedder for the unit
+    # test suite (no model download, no network). Never use it in production.
+    embedding_backend: Literal["sentence_transformers", "fake"] = "sentence_transformers"
+    # Decomposer v2 (docs/phase1-design.md §4). No silent fallback: the
+    # server refuses to start with "anthropic" and no ANTHROPIC_API_KEY.
+    # "regex" only when chosen explicitly; "fake" = scripted test decomposer.
+    # "openrouter" is for the bake-off against mnemo_eval / test DBs only.
+    decomposer_provider: Literal["anthropic", "openrouter", "regex", "fake"] = "anthropic"
+    decomposer_model: str = "claude-haiku-4-5-20251001"
+    decomposer_deadline_seconds: float = 90.0  # whole decomposition, attempts included
+    allow_non_anthropic_decomposer: bool = False
     embedding_dim: int = 768
     max_retrieval_results: int = 50
     default_retrieval_limit: int = 10
@@ -97,7 +110,43 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
-    model_config = {"env_prefix": "MNEMO_", "env_file": ".env", "extra": "ignore"}
+    @model_validator(mode="after")
+    def _test_backends_need_test_db(self):
+        """Refuse test-only backends outside a test database.
+
+        The fake embedder and fake decomposer would silently store garbage
+        vectors / regex atoms; they are only allowed when MNEMO_DATABASE_URL
+        names a test database. Runs at Settings() construction, so the
+        server, CLI and scripts all refuse to start.
+        """
+        fakes = []
+        if self.embedding_backend == "fake":
+            fakes.append("MNEMO_EMBEDDING_BACKEND=fake")
+        if self.decomposer_provider == "fake":
+            fakes.append("MNEMO_DECOMPOSER_PROVIDER=fake")
+        if fakes and "test" not in self.database_url:
+            raise ValueError(
+                f"{', '.join(fakes)} is only allowed when MNEMO_DATABASE_URL "
+                "points at a test database (its URL must contain 'test')."
+            )
+        # Spec rule 4: no production memory text to a non-Anthropic provider.
+        if self.decomposer_provider == "openrouter" and not (
+            self.allow_non_anthropic_decomposer
+            and ("mnemo_eval" in self.database_url or "test" in self.database_url)
+        ):
+            raise ValueError(
+                "MNEMO_DECOMPOSER_PROVIDER=openrouter requires "
+                "MNEMO_ALLOW_NON_ANTHROPIC_DECOMPOSER=true and a mnemo_eval or test database."
+            )
+        return self
+
+    # MNEMO_ENV_FILE lets the test suite read .env.test instead of the
+    # production .env.
+    model_config = {
+        "env_prefix": "MNEMO_",
+        "env_file": os.environ.get("MNEMO_ENV_FILE", ".env"),
+        "extra": "ignore",
+    }
 
 
 settings = Settings()

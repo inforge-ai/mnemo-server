@@ -23,8 +23,8 @@ RETRIEVE FLOW (via /recall):
 import json
 import logging
 import math
-import os
-import traceback
+import time
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -32,8 +32,11 @@ import asyncpg
 import numpy as np
 
 from ..config import settings
-from ..embeddings import encode
-from ..decomposer import decompose as regex_decompose, infer_edges, DecomposedAtom
+from ..embeddings import encode, encode_batch
+from ..decomposer import DecomposedAtom
+from ..decomposers import CandidateAtom, DecomposeRequest, beta_for, decompose_note
+from ..decomposers.base import lower_one_band
+from . import grounding
 
 logger = logging.getLogger(__name__)
 
@@ -44,20 +47,6 @@ HALF_LIVES: dict[str, float] = {
     "procedural": settings.decay_procedural,
     "relational": settings.decay_relational,
 }
-
-
-async def _decompose(
-    text: str,
-    domain_tags: list[str] | None = None,
-    remembered_on: datetime | None = None,
-):
-    """Use LLM decomposer if ANTHROPIC_API_KEY is set, else fall back to regex.
-    Returns DecomposerResult (atoms + optional usage metadata)."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        from ..llm_decomposer import llm_decompose
-        return await llm_decompose(text, remembered_on=remembered_on, domain_tags=domain_tags)
-    from ..llm_decomposer import DecomposerResult
-    return DecomposerResult(atoms=regex_decompose(text, domain_tags))
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -163,6 +152,9 @@ async def _insert_atom(
     source_type: str = "direct_experience",
     source_ref: UUID | None = None,
     decomposer_version: str = "regex_v1",
+    source_id: UUID | None = None,
+    source_quote: str | None = None,
+    verification: dict | None = None,
 ) -> asyncpg.Record:
     half_life = HALF_LIVES.get(atom.atom_type, 30.0)
     row = await conn.fetchrow(
@@ -172,13 +164,13 @@ async def _insert_atom(
             confidence_alpha, confidence_beta,
             source_type, source_ref,
             domain_tags, decay_half_life_days, decay_type, decomposer_version,
-            remembered_on
-        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12,$13)
+            remembered_on, source_id, source_quote, verification
+        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12,$13,$14,$15,$16)
         RETURNING
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
             source_type, domain_tags, created_at, last_accessed, access_count, is_active,
-            remembered_on,
+            remembered_on, source_id, source_quote,
             effective_confidence(
                 confidence_alpha, confidence_beta,
                 decay_type, decay_half_life_days,
@@ -198,6 +190,9 @@ async def _insert_atom(
         half_life,
         decomposer_version,
         atom.remembered_on,
+        source_id,
+        source_quote,
+        json.dumps(verification) if verification is not None else None,
     )
     return row
 
@@ -210,17 +205,18 @@ async def _get_atom_row(
     return await conn.fetchrow(
         """
         SELECT
-            id, agent_id, atom_type, text_content, structured,
-            confidence_alpha, confidence_beta,
-            source_type, domain_tags, created_at, last_accessed, access_count, is_active,
-            remembered_on,
+            a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
+            a.confidence_alpha, a.confidence_beta,
+            a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on, a.source_id, s.origin_class,
             effective_confidence(
-                confidence_alpha, confidence_beta,
-                decay_type, decay_half_life_days,
-                created_at, last_accessed, access_count
+                a.confidence_alpha, a.confidence_beta,
+                a.decay_type, a.decay_half_life_days,
+                a.created_at, a.last_accessed, a.access_count
             ) AS confidence_effective
-        FROM atoms
-        WHERE id = $1 AND agent_id = $2 AND is_active = true
+        FROM atoms a
+        LEFT JOIN sources s ON s.id = a.source_id
+        WHERE a.id = $1 AND a.agent_id = $2 AND a.is_active = true
         """,
         atom_id,
         agent_id,
@@ -392,6 +388,9 @@ def _row_to_atom_response(
         # remembered_on is present on rows from atom inserts/gets/retrieves
         # and graph expansions; other SELECT paths may omit it — fall back to None.
         "remembered_on": _safe_get(row, "remembered_on"),
+        # v2 Phase 1 provenance (NULL for atoms stored before Phase 1).
+        "source_id": _safe_get(row, "source_id"),
+        "origin_class": _safe_get(row, "origin_class"),
     }
 
 
@@ -492,28 +491,70 @@ async def _create_cross_call_edges(
     return edges_created
 
 
-async def store_from_text(
+@dataclass
+class PreparedAtom:
+    candidate: CandidateAtom
+    embedding: list[float]
+    flags: list[str]
+    alpha: float
+    beta: float
+    band_downgraded: bool
+
+
+@dataclass
+class PreparedStore:
+    atoms: list[PreparedAtom]
+    usage: list[dict]
+    warnings: list[str]
+    version: str
+    timings_ms: dict | None = None   # {"decompose": ms, "embed": ms}
+
+
+async def prepare_atoms(req: DecomposeRequest) -> PreparedStore:
+    """Decompose, check and embed a note. Holds NO database connection: the
+    model call and the embedding run before any connection is acquired.
+
+    Raises DecomposerError (plain reason) if decomposition fails."""
+    t0 = time.monotonic()
+    result = await decompose_note(req)
+    t1 = time.monotonic()
+    candidates = result.atoms
+    embeddings = await encode_batch([c.text for c in candidates])
+    t2 = time.monotonic()
+    prepared: list[PreparedAtom] = []
+    for cand, emb in zip(candidates, embeddings):
+        known = tuple(n for n in (req.speaker, req.addressee, req.agent_name, req.user_name) if n)
+        flags = grounding.run_checks(cand.text, cand.source_quote, req.text, known)
+        alpha, beta = beta_for(cand)
+        downgraded = False
+        if grounding.lowers_band(flags):
+            lowered = lower_one_band(alpha, beta)
+            downgraded = lowered != (alpha, beta)
+            alpha, beta = lowered
+        prepared.append(PreparedAtom(cand, emb, flags, alpha, beta, downgraded))
+    return PreparedStore(
+        prepared, result.usage, result.warnings, result.version,
+        timings_ms={"decompose": round((t1 - t0) * 1000), "embed": round((t2 - t1) * 1000)},
+    )
+
+
+async def persist_atoms(
     conn: asyncpg.Connection,
     agent_id: UUID,
-    text: str,
+    prepared: PreparedStore,
     domain_tags: list[str],
+    source_id: UUID | None = None,
     store_id: UUID | None = None,
     operator_id: UUID | None = None,
-    remembered_on: datetime | None = None,
 ) -> dict:
-    """
-    Decompose free text into atoms, deduplicate, store, and link.
-    Returns {"atoms": [...], "atoms_created": N, "edges_created": N, "duplicates_merged": N, "new_atom_ids": [UUID, ...]}
-    """
-    decomposer_result = await _decompose(text, domain_tags, remembered_on=remembered_on)
-    decomposed = decomposer_result.atoms
-    if not decomposed:
-        return {"atoms": [], "atoms_created": 0, "edges_created": 0, "duplicates_merged": 0, "new_atom_ids": []}
+    """Write a prepared store. The caller wraps this in ONE transaction:
+    dedup checks, inserts, source_merges, edges and usage rows commit or
+    roll back together.
 
-    # Log decomposer token usage if available
-    if decomposer_result.usage and store_id and operator_id:
-        usage = decomposer_result.usage
-        try:
+    Returns {"atoms": [store item], "atoms_created", "duplicates_merged",
+    "edges_created", "new_atom_ids"}."""
+    if store_id and operator_id:
+        for usage in prepared.usage:
             await conn.execute(
                 """
                 INSERT INTO decomposer_usage (
@@ -522,183 +563,110 @@ async def store_from_text(
                     cache_read_input_tokens, output_tokens
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                store_id,
-                operator_id,
-                agent_id,
-                usage["model"],
-                usage["input_tokens"],
-                usage.get("cache_creation_input_tokens"),
-                usage.get("cache_read_input_tokens"),
-                usage["output_tokens"],
+                store_id, operator_id, agent_id, usage["model"],
+                usage["input_tokens"], usage.get("cache_creation_input_tokens"),
+                usage.get("cache_read_input_tokens"), usage["output_tokens"],
             )
-        except Exception:
-            logger.warning("Failed to log decomposer usage for store %s", store_id, exc_info=True)
-
-    # Record what actually ran: the LLM path returns usage; the regex fallback
-    # (no API key, API error or unparseable response) does not.
-    decomposer_version = "haiku_v1" if decomposer_result.usage else "regex_v1"
 
     stored_ids: list[UUID] = []
-    stored_rows: list[asyncpg.Record] = []
     stored_embeddings: list[list[float]] = []
-    new_atom_indices: list[int] = []  # indices of newly inserted (not merged) atoms
+    items: list[dict] = []
+    new_atom_indices: list[int] = []
     atoms_created = 0
     duplicates_merged = 0
 
-    for atom in decomposed:
-        embedding = await encode(atom.text)
+    for p in prepared.atoms:
+        cand = p.candidate
         # Arc atoms are synthetic summaries — never deduplicate them against
         # their component sentences (their embeddings overlap by design).
-        duplicate = None if atom.source_type == "arc" else await _check_duplicate(conn, agent_id, embedding, atom.atom_type)
-
+        duplicate = None if cand.source_type == "arc" else await _check_duplicate(
+            conn, agent_id, p.embedding, cand.atom_type,
+        )
         if duplicate:
             await _merge_duplicate(
-                conn,
-                duplicate["id"],
-                duplicate["confidence_alpha"],
-                duplicate["confidence_beta"],
-                atom.confidence_alpha,
-                atom.confidence_beta,
+                conn, duplicate["id"], duplicate["confidence_alpha"], duplicate["confidence_beta"],
+                p.alpha, p.beta,
             )
-            stored_ids.append(duplicate["id"])
             row = await _get_atom_row(conn, duplicate["id"], agent_id)
-            stored_rows.append(row)
-            stored_embeddings.append(embedding)
+            if source_id is not None:
+                await conn.execute(
+                    """
+                    INSERT INTO source_merges (source_id, atom_id, source_quote)
+                    VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
+                    """,
+                    source_id, duplicate["id"], cand.source_quote,
+                )
+            stored_ids.append(duplicate["id"])
+            stored_embeddings.append(p.embedding)
+            items.append(_store_item(row, cand.source_quote, merged=True, flags=p.flags))
             duplicates_merged += 1
         else:
+            structured = {"subject": cand.subject} if cand.subject else {}
+            atom = DecomposedAtom(
+                text=cand.text, atom_type=cand.atom_type,
+                confidence_alpha=p.alpha, confidence_beta=p.beta,
+                structured=structured, source_type=cand.source_type,
+                remembered_on=cand.remembered_on,
+            )
             row = await _insert_atom(
-                conn, agent_id, atom, embedding, domain_tags,
-                atom.source_type, decomposer_version=decomposer_version,
+                conn, agent_id, atom, p.embedding, domain_tags, cand.source_type,
+                decomposer_version=prepared.version or "unknown",
+                source_id=source_id, source_quote=cand.source_quote,
+                verification=grounding.verification_record(p.flags, p.band_downgraded),
             )
             stored_ids.append(row["id"])
-            stored_rows.append(row)
-            stored_embeddings.append(embedding)
+            stored_embeddings.append(p.embedding)
+            items.append(_store_item(row, cand.source_quote, merged=False, flags=p.flags))
             new_atom_indices.append(len(stored_ids) - 1)
             atoms_created += 1
 
-    # Create similarity-based edges between atoms in this /remember call
     edges_created = await _create_similarity_edges(conn, stored_ids, stored_embeddings)
 
-    # Also create arc→non-arc 'summarises' edges (arc atoms need structural links)
-    arc_idxs = [i for i, a in enumerate(decomposed) if a.source_type == "arc"]
-    non_arc_idxs = [i for i, a in enumerate(decomposed) if a.source_type != "arc"]
+    # Arc → non-arc 'summarises' edges (arc atoms come from the regex provider).
+    arc_idxs = [i for i, p in enumerate(prepared.atoms) if p.candidate.source_type == "arc"]
+    non_arc_idxs = [i for i, p in enumerate(prepared.atoms) if p.candidate.source_type != "arc"]
     for arc_idx in arc_idxs:
         for other_idx in non_arc_idxs:
-            src_id = stored_ids[arc_idx]
-            tgt_id = stored_ids[other_idx]
+            src_id, tgt_id = stored_ids[arc_idx], stored_ids[other_idx]
             if src_id == tgt_id:
                 continue
-            try:
-                await conn.execute(
-                    """
-                    INSERT INTO edges (source_id, target_id, edge_type, weight)
-                    VALUES ($1, $2, 'summarises', 1.0)
-                    ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
-                    """,
-                    src_id,
-                    tgt_id,
-                )
-                edges_created += 1
-            except Exception:
-                pass  # best-effort: skip duplicate/constraint violations
+            await conn.execute(
+                """
+                INSERT INTO edges (source_id, target_id, edge_type, weight)
+                VALUES ($1, $2, 'summarises', 1.0)
+                ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
+                """,
+                src_id, tgt_id,
+            )
+            edges_created += 1
 
-    # Cross-call edge inference: link NEW atoms to existing similar atoms
-    # from previous /remember calls. Edges only — no merging.
-    # Skip merged duplicates — they already exist in the DB and have their own edges.
+    # Cross-call edges: link NEW atoms to similar atoms from earlier stores.
     current_call_ids = set(stored_ids)
     for i in new_atom_indices:
-        cross_edges = await _create_cross_call_edges(
+        edges_created += await _create_cross_call_edges(
             conn, agent_id, stored_ids[i], stored_embeddings[i], current_call_ids,
         )
-        edges_created += cross_edges
-
-    new_atom_ids = [stored_ids[i] for i in new_atom_indices]
 
     return {
-        "atoms": [_row_to_atom_response(r) for r in stored_rows],
+        "atoms": items,
         "atoms_created": atoms_created,
-        "edges_created": edges_created,
         "duplicates_merged": duplicates_merged,
-        "new_atom_ids": new_atom_ids,
+        "edges_created": edges_created,
+        "new_atom_ids": [stored_ids[i] for i in new_atom_indices],
     }
 
 
-async def store_background(
-    pool: asyncpg.Pool,
-    store_id: UUID,
-    agent_id: UUID,
-    text: str,
-    domain_tags: list[str],
-    operator_id: UUID | None = None,
-    remembered_on: datetime | None = None,
-) -> None:
-    """Background task: decompose, embed, store atoms, and create edges.
-
-    Runs as an asyncio.create_task — not on the request path.
-    Operation logging is handled by the route handler before this task is spawned.
-    On failure, logs to store_failures table (operator visibility, not agent-facing).
-    """
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE store_jobs SET status = 'decomposing' WHERE store_id = $1",
-                store_id,
-            )
-            async with conn.transaction():
-                result = await store_from_text(
-                    conn, agent_id, text, domain_tags,
-                    store_id=store_id, operator_id=operator_id,
-                    remembered_on=remembered_on,
-                )
-            await conn.execute(
-                """
-                UPDATE store_jobs
-                SET status = 'complete', atoms_created = $1, completed_at = now()
-                WHERE store_id = $2
-                """,
-                result["atoms_created"],
-                store_id,
-            )
-            # Post-store: lifecycle relationship detection. Best-effort,
-            # never raises, gated by feature flag.
-            from ..config import settings as _settings
-            if _settings.lifecycle_detection_enabled:
-                from .lifecycle_service import detect_lifecycle_relationships
-                for new_atom_id in result.get("new_atom_ids", []):
-                    try:
-                        await detect_lifecycle_relationships(conn, agent_id, new_atom_id)
-                    except Exception:
-                        logger.warning(
-                            "detect_lifecycle_relationships failed for atom %s", new_atom_id,
-                            exc_info=True,
-                        )
-    except Exception:
-        error_msg = traceback.format_exc()
-        logger.error("Background store %s failed: %s", store_id, error_msg)
-        # Store generic message in DB (visible via API); full trace stays in logs only
-        safe_error = "Memory processing failed. Check server logs for details."
-        try:
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE store_jobs
-                    SET status = 'failed', error = $1, completed_at = now()
-                    WHERE store_id = $2
-                    """,
-                    safe_error, store_id,
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO store_failures (id, agent_id, original_text, error)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                    store_id,
-                    agent_id,
-                    text,
-                    error_msg,  # full trace in store_failures (admin-only table)
-                )
-        except Exception:
-            logger.error("Failed to log store failure %s", store_id)
+def _store_item(row: asyncpg.Record, source_quote: str | None, merged: bool, flags: list[str]) -> dict:
+    """One entry of the remember / store-status `atoms` list."""
+    return {
+        "id": row["id"],
+        "atom_type": row["atom_type"],
+        "text_content": row["text_content"],
+        "remembered_on": row["remembered_on"],
+        "source_quote": source_quote,
+        "merged_into_existing": merged,
+        "flags": list(flags),
+    }
 
 
 async def store_explicit(
@@ -769,9 +737,16 @@ async def retrieve(
     verbosity: str = "full",
     max_content_chars: int = 200,
     max_total_tokens: int | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    atom_types: list[str] | None = None,
 ) -> dict:
     """
     Semantic retrieval with decay filtering, access updates, optional graph expansion.
+
+    since/until (on COALESCE(remembered_on, created_at); since inclusive,
+    until exclusive) and atom_types are SQL WHERE filters applied before
+    LIMIT, for both the vector candidates and graph-expanded atoms.
 
     Ranking: composite score = similarity * (0.7 + 0.3 * effective_confidence),
     with a 15% specificity penalty for consolidated atoms.
@@ -787,28 +762,35 @@ async def retrieve(
     rows = await conn.fetch(
         """
         SELECT
-            id, agent_id, atom_type, text_content, structured,
-            confidence_alpha, confidence_beta,
-            source_type, domain_tags, created_at, last_accessed, access_count, is_active,
-            remembered_on,
-            embedding,
-            1 - (embedding <=> $1::vector) AS cosine_sim,
+            a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
+            a.confidence_alpha, a.confidence_beta,
+            a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on, a.source_id, s.origin_class,
+            a.embedding,
+            1 - (a.embedding <=> $1::vector) AS cosine_sim,
             effective_confidence(
-                confidence_alpha, confidence_beta,
-                decay_type, decay_half_life_days,
-                created_at, last_accessed, access_count
+                a.confidence_alpha, a.confidence_beta,
+                a.decay_type, a.decay_half_life_days,
+                a.created_at, a.last_accessed, a.access_count
             ) AS confidence_effective
-        FROM atoms
-        WHERE agent_id = $2
-          AND is_active = true
-          AND ($3::text[] IS NULL OR domain_tags && $3)
-        ORDER BY embedding <=> $1::vector ASC
+        FROM atoms a
+        LEFT JOIN sources s ON s.id = a.source_id
+        WHERE a.agent_id = $2
+          AND a.is_active = true
+          AND ($3::text[] IS NULL OR a.domain_tags && $3)
+          AND ($5::text[] IS NULL OR a.atom_type = ANY($5))
+          AND ($6::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) >= $6)
+          AND ($7::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) < $7)
+        ORDER BY a.embedding <=> $1::vector ASC
         LIMIT $4
         """,
         embedding,
         agent_id,
         domain_tags,
         over_fetch,
+        atom_types,
+        since,
+        until,
     )
 
     # Apply similarity floor, confidence filter, compute composite score, sort.
@@ -871,8 +853,10 @@ async def retrieve(
             agent_id=agent_id,
             seed_ids=kept_id_list,
             depth=expansion_depth,
-            scope_filter=None,
+            scope_filter={"atom_types": atom_types} if atom_types else None,
             exclude_ids=kept_ids,  # only exclude surviving primary atoms from expanded results
+            since=since,
+            until=until,
         )
 
         # Score graph atoms as source_score * edge_weight * discount. Guarantees
@@ -1022,6 +1006,57 @@ async def get_atom(
     if row is None:
         return None
     return _row_to_atom_response(row)
+
+
+async def recent(
+    conn: asyncpg.Connection,
+    agent_id: UUID,
+    limit: int = 20,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    atom_types: list[str] | None = None,
+    domain_tags: list[str] | None = None,
+    include_superseded: bool = False,
+    order_by: str = "stored",
+) -> list[dict]:
+    """Newest active atoms. No embedding, no access-count update.
+
+    order_by="stored": created_at DESC (default). "event":
+    COALESCE(remembered_on, created_at) DESC. All filters are in the WHERE
+    clause, before LIMIT."""
+    order = (
+        "COALESCE(a.remembered_on, a.created_at) DESC, a.created_at DESC"
+        if order_by == "event" else "a.created_at DESC"
+    )
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
+            a.confidence_alpha, a.confidence_beta,
+            a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
+            a.remembered_on, a.source_id, s.origin_class,
+            effective_confidence(
+                a.confidence_alpha, a.confidence_beta,
+                a.decay_type, a.decay_half_life_days,
+                a.created_at, a.last_accessed, a.access_count
+            ) AS confidence_effective
+        FROM atoms a
+        LEFT JOIN sources s ON s.id = a.source_id
+        WHERE a.agent_id = $1
+          AND a.is_active = true
+          AND ($2::text[] IS NULL OR a.atom_type = ANY($2))
+          AND ($3::text[] IS NULL OR a.domain_tags && $3)
+          AND ($4::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) >= $4)
+          AND ($5::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) < $5)
+          AND ($6 OR NOT EXISTS (
+                SELECT 1 FROM edges e JOIN atoms src ON src.id = e.source_id
+                WHERE e.target_id = a.id AND e.edge_type = 'supersedes' AND src.is_active = true))
+        ORDER BY {order}
+        LIMIT $7
+        """,
+        agent_id, atom_types, domain_tags, since, until, include_superseded, limit,
+    )
+    return [_row_to_atom_response(r) for r in rows]
 
 
 async def soft_delete_atom(

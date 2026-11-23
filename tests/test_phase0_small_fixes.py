@@ -1,13 +1,11 @@
 """v2 Phase 0 item 7: small safe fixes."""
 
-from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
 
 from mnemo.server.decomposer import DecomposedAtom
 from mnemo.server.embeddings import encode
-from mnemo.server.llm_decomposer import DecomposerResult
 from mnemo.server.services import atom_service
 from tests.test_consolidation import _insert_atom_sql
 
@@ -34,34 +32,26 @@ async def test_store_explicit_does_not_merge_across_types(client, agent, pool):
     assert body["atom_type"] == "procedural"
 
 
-# ── decomposer_version reflects what actually ran ────────────────────────────
+# ── decomposer_version records provider:model:prompt_version (v2 Phase 1) ──
 
-def _result(usage):
-    return DecomposerResult(
-        atoms=[DecomposedAtom(
+async def test_decomposer_version_from_result(agent, pool):
+    from mnemo.server.decomposers import CandidateAtom, DecomposeResult, fake
+    from tests.helpers import store_text
+
+    fake.script(DecomposeResult(
+        atoms=[CandidateAtom(
             text="The nightly backup job writes to the cold storage bucket.",
-            atom_type="semantic", confidence_alpha=4.0, confidence_beta=2.0,
+            atom_type="semantic", confidence=0.7,
+            source_quote="The nightly backup job writes to the cold storage bucket.",
         )],
-        usage=usage,
-    )
-
-
-@pytest.mark.parametrize("usage, expected", [
-    (None, "regex_v1"),
-    ({"model": "m", "input_tokens": 1, "output_tokens": 1}, "haiku_v1"),
-])
-async def test_decomposer_version_from_result(agent, pool, monkeypatch, usage, expected):
-    # API key present in both cases: the version must not depend on it.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-used")
+        version="anthropic:claude-haiku-4-5-20251001:prompt_v2",
+    ))
     agent_id = UUID(agent["id"])
-    with patch.object(atom_service, "_decompose", AsyncMock(return_value=_result(usage))):
-        async with pool.acquire() as conn:
-            out = await atom_service.store_from_text(conn, agent_id, "irrelevant", ["ops"])
-            assert out["atoms_created"] == 1
-            version = await conn.fetchval(
-                "SELECT decomposer_version FROM atoms WHERE id = $1", out["new_atom_ids"][0],
-            )
-    assert version == expected
+    async with pool.acquire() as conn:
+        out = await store_text(conn, agent_id, "The nightly backup job writes to the cold storage bucket.", ["ops"])
+        assert out["atoms_created"] == 1
+        version = await conn.fetchval("SELECT decomposer_version FROM atoms WHERE id = $1", out["new_atom_ids"][0])
+    assert version == "anthropic:claude-haiku-4-5-20251001:prompt_v2"
 
 
 # ── RetrieveRequest bounds ───────────────────────────────────────────────────

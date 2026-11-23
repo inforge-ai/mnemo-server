@@ -995,4 +995,27 @@ All settings via `MNEMO_` environment prefix. Source: environment variables or `
 | `MNEMO_DEFAULT_RETRIEVAL_LIMIT` | `10` | Default max_results |
 | `MNEMO_GRAPH_EXPANSION_MAX_DEPTH` | `3` | Maximum graph expansion depth |
 | `MNEMO_SYNC_STORE_FOR_TESTS` | `false` | If true, /remember awaits inline (for tests) |
-| `MNEMO_TEST_DATABASE_URL` | | Test database connection |
+| `MNEMO_EMBEDDING_BACKEND` | `sentence_transformers` | `fake` = deterministic hashed bag-of-words embedder (unit tests only) |
+| `MNEMO_DECOMPOSER_PROVIDER` | `auto` | `auto` (Anthropic if `ANTHROPIC_API_KEY` set, else regex), `anthropic`, `regex`, `fake` (tests) |
+| `MNEMO_ENV_FILE` | `.env` | Settings file; the test suite sets `.env.test` |
+
+### Running the tests
+
+The unit suite never reads the production `.env`, never calls a live model and
+never downloads the embedding model. `tests/conftest.py` loads `.env.test`
+(copy `.env.test.example`), refuses any `MNEMO_DATABASE_URL` without `test` in
+it, strips `ANTHROPIC_API_KEY`/`OPENROUTER_API_KEY`, and uses the fake
+embedder and the scripted fake decomposer (`mnemo/server/fake_decomposer.py`).
+Constructing a real Anthropic client in a non-eval test fails that test.
+
+```bash
+docker run -d --name mnemo-test-pg -p 127.0.0.1:5433:5432 \
+  -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg16
+scripts/test/build_test_db.sh            # schema.sql + mnemo migrate
+cp .env.test.example .env.test
+UV_FROZEN=1 uv run pytest                # non-eval, offline
+```
+
+`-m eval` runs the live cases (real embedder, real decomposer). Export
+`ANTHROPIC_API_KEY` in the shell for those; they do not read `.env`.
+CI (`.github/workflows/tests.yml`) runs the non-eval suite with no secrets.

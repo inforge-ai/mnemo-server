@@ -107,16 +107,27 @@ class TestAgents:
 # ── Remember endpoint ─────────────────────────────────────────────────────────
 
 class TestRemember:
-    async def test_remember_returns_queued_status(self, client, agent):
+    async def test_remember_wait_false_returns_queued_status(self, client, agent):
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
         resp = await client.post(f"/v1/agents/{agent['id']}/remember", json={
             "text": "pandas.read_csv silently coerces mixed-type columns.",
             "domain_tags": ["python", "pandas"],
+            "wait": False,
         }, headers=ag_headers)
         assert resp.status_code == 201
         data = resp.json()
         assert data["status"] == "queued"
-        assert "store_id" in data
+        assert "store_id" in data and "source_id" in data
+
+    async def test_remember_default_waits_and_returns_atoms(self, client, agent):
+        ag_headers = {"X-Agent-Key": agent["agent_key"]}
+        resp = await client.post(f"/v1/agents/{agent['id']}/remember", json={
+            "text": "pandas.read_csv silently coerces mixed-type columns.",
+        }, headers=ag_headers)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["status"] == "complete"
+        assert data["atoms_created"] >= 1 and data["atoms"]
 
     async def test_remember_returns_typed_atoms(self, client, agent):
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
@@ -190,7 +201,8 @@ class TestRecall:
         ag_headers = {"X-Agent-Key": agent["agent_key"]}
         await remember(client, agent["id"], "pgvector stores embeddings as vector(384) columns.", domain_tags=["postgres"], headers=ag_headers)
         resp = await client.post(f"/v1/agents/{agent['id']}/recall", json={
-            "query": "storing vector embeddings in postgres",
+            # Lexical overlap: the unit suite runs on the fake embedder.
+            "query": "pgvector stores vector embeddings",
         }, headers=ag_headers)
         assert resp.status_code == 200
         data = resp.json()
@@ -1034,7 +1046,7 @@ class TestRecallControls:
         resp = await client.post(f"/v1/agents/{aid}/recall", json={
             "query": "pandas",
             "max_total_tokens": 50,
-            "min_similarity": 0.1,
+            "min_similarity": 0.0,
             "expand_graph": False,
             "max_results": 10,
         }, headers=ag_headers)

@@ -1,0 +1,22 @@
+{
+  "id": "temporary_state",
+  "description": "A temporary state keeps its time limit in the atom text.",
+  "failure_pattern": "dropped validity limit",
+  "steps": [
+    {
+      "text": "Tom is off caffeine until the end of November while he trials a new sleep routine.",
+      "speaker": "Tom",
+      "addressee": "Clio",
+      "remembered_on": "2026-11-10"
+    }
+  ],
+  "assert": {
+    "atoms_any_match": [
+      "tom[^.]*caffeine[^.]*(until|through|during|end of november|november 30|2026-11-30)"
+    ],
+    "atoms_none_match": [
+      "^(?!.*(until|through|november|2026-11)).*caffeine"
+    ]
+  },
+  "xfail": null
+}

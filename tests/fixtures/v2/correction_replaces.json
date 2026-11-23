@@ -1,0 +1,20 @@
+{
+  "id": "correction_replaces",
+  "description": "A correction in one note becomes one atom stating the corrected fact and naming what it replaces; the replaced claim is not stored as current.",
+  "failure_pattern": "correction stored as two current facts",
+  "steps": [
+    {
+      "text": "The Osprey design review is on Tuesday 24 November. Actually, scratch that — it moved to Thursday 26 November.",
+      "remembered_on": "2026-11-20"
+    }
+  ],
+  "assert": {
+    "atoms_any_match": [
+      "osprey[^.]*(thursday|26 november|november 26|2026-11-26)"
+    ],
+    "atoms_none_match": [
+      "^(?!.*(replac|instead|moved|rather than|not tuesday|previously|earlier|originally)).*osprey[^.]*(tuesday|24 november|november 24|2026-11-24)"
+    ]
+  },
+  "xfail": null
+}

@@ -1,0 +1,27 @@
+{
+  "id": "long_note_last_paragraph",
+  "description": "A note over 8,000 characters (split into parts) whose only distinctive fact is in the last paragraph; the fact must be stored and recallable.",
+  "failure_pattern": "long-input loss",
+  "steps": [
+    {
+      "filler": {
+        "paragraph": "Reading log, section {i}: the team skimmed general background material on queueing theory and cache design. Nobody drew a conclusion, nothing was decided, and no follow-up was assigned for section {i}.",
+        "count": 45
+      },
+      "text": "Final note: the Halyard staging cluster's TLS certificate expires on 2027-02-14 and must be renewed by Clio.",
+      "remembered_on": "2026-11-20"
+    }
+  ],
+  "recall": {
+    "query": "When does the Halyard staging TLS certificate expire?"
+  },
+  "assert": {
+    "atoms_any_match": [
+      "halyard.*(2027-02-14|february 14,? 2027|14 february 2027)"
+    ],
+    "recall_any_match": [
+      "halyard"
+    ]
+  },
+  "xfail": null
+}

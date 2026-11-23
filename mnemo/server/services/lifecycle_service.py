@@ -8,6 +8,7 @@ permanent failures land in lifecycle_dlq.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import time
@@ -91,7 +92,7 @@ _VALID_RELATIONSHIPS = {"supersedes", "tension_with", "narrows", "independent"}
 
 @lru_cache(maxsize=1)
 def _get_client() -> AsyncAnthropic:
-    """Singleton Anthropic client. Tests patch this same way as llm_decomposer:
+    """Singleton Anthropic client. Tests patch it:
     `patch('mnemo.server.services.lifecycle_service._get_client', ...)`."""
     return AsyncAnthropic()
 
@@ -219,8 +220,19 @@ async def _record_dlq(
         logger.warning("failed to record lifecycle_dlq row", exc_info=True)
 
 
+@asynccontextmanager
+async def _connection(db):
+    """Yield a connection: acquire from a pool (and release after), or use a
+    connection the caller already holds."""
+    if isinstance(db, asyncpg.Pool):
+        async with db.acquire() as conn:
+            yield conn
+    else:
+        yield db
+
+
 async def detect_lifecycle_relationships(
-    conn: asyncpg.Connection,
+    db,
     agent_id: UUID,
     new_atom_id: UUID,
 ) -> int:
@@ -228,26 +240,33 @@ async def detect_lifecycle_relationships(
     candidate and write the appropriate edge type when the model is confident
     enough. Permanent LLM failures land in lifecycle_dlq.
 
-    Returns the count of edges written by this call. Never raises."""
-    new_row = await conn.fetchrow(
-        "SELECT id, text_content, atom_type, embedding, created_at FROM atoms WHERE id = $1",
-        new_atom_id,
-    )
-    if new_row is None:
-        return 0
+    `db` is a pool (the store path) or a connection (tests). With a pool, no
+    connection is held during the model calls: candidates are read, the
+    connection is released, each pair is classified, and each write acquires
+    a connection briefly.
 
-    candidates = await _get_candidates(conn, agent_id, new_atom_id, new_row["embedding"])
-    if not candidates:
-        return 0
+    Returns the count of edges written by this call. Never raises."""
+    async with _connection(db) as conn:
+        new_row = await conn.fetchrow(
+            "SELECT id, text_content, atom_type, embedding, created_at FROM atoms WHERE id = $1",
+            new_atom_id,
+        )
+        if new_row is None:
+            return 0
+        candidates = await _get_candidates(conn, agent_id, new_atom_id, new_row["embedding"])
+        # Idempotency / no-competing-edges: skip pairs that already have any
+        # lifecycle edge (either direction). Saves an LLM call too.
+        pending = []
+        for cand in candidates:
+            try:
+                if not await _pair_has_lifecycle_edge(conn, new_atom_id, cand["id"]):
+                    pending.append(cand)
+            except Exception:
+                logger.warning("lifecycle edge lookup failed", exc_info=True)
 
     edges_written = 0
-    for cand in candidates:
+    for cand in pending:
         try:
-            # Idempotency / no-competing-edges: skip if any lifecycle edge exists
-            # for this pair already (either direction). Saves an LLM call too.
-            if await _pair_has_lifecycle_edge(conn, new_atom_id, cand["id"]):
-                continue
-
             t0 = time.monotonic()
             existing_age_days = max(
                 0,
@@ -263,7 +282,8 @@ async def detect_lifecycle_relationships(
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             if result is None:
-                await _record_dlq(conn, new_atom_id, cand["id"], agent_id, "lifecycle LLM permanent failure")
+                async with _connection(db) as conn:
+                    await _record_dlq(conn, new_atom_id, cand["id"], agent_id, "lifecycle LLM permanent failure")
                 logger.warning(
                     "lifecycle_check",
                     extra={
@@ -289,19 +309,20 @@ async def detect_lifecycle_relationships(
             edge_created = False
             if edge_type is not None:
                 try:
-                    edge = await atom_service.create_edge(
-                        conn=conn,
-                        source_id=new_atom_id,
-                        target_id=cand["id"],
-                        edge_type=edge_type,
-                        weight=float(result["confidence"]),
-                        metadata={
-                            "reasoning": result["reasoning"],
-                            "detected_at": datetime.now(timezone.utc).isoformat(),
-                            "detector": DETECTOR_VERSION,
-                            "cosine_at_detection": cand["similarity"],
-                        },
-                    )
+                    async with _connection(db) as conn:
+                        edge = await atom_service.create_edge(
+                            conn=conn,
+                            source_id=new_atom_id,
+                            target_id=cand["id"],
+                            edge_type=edge_type,
+                            weight=float(result["confidence"]),
+                            metadata={
+                                "reasoning": result["reasoning"],
+                                "detected_at": datetime.now(timezone.utc).isoformat(),
+                                "detector": DETECTOR_VERSION,
+                                "cosine_at_detection": cand["similarity"],
+                            },
+                        )
                     if edge is not None:
                         edges_written += 1
                         edge_created = True
@@ -309,6 +330,8 @@ async def detect_lifecycle_relationships(
                     logger.warning("lifecycle edge write failed", exc_info=True)
 
             usage = result.get("usage") or {}
+            # No model reasoning in logs: it paraphrases atom text (spec rule 3).
+            # It is kept in the edge metadata.
             logger.info(
                 "lifecycle_check",
                 extra={
@@ -321,7 +344,6 @@ async def detect_lifecycle_relationships(
                     "cosine": cand["similarity"],
                     "llm_relationship": rel,
                     "llm_confidence": result["confidence"],
-                    "llm_reasoning": result.get("reasoning"),
                     "edge_created": edge_created,
                     "edge_type": edge_type if edge_created else None,
                     "latency_ms": latency_ms,

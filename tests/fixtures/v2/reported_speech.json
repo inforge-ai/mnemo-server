@@ -1,0 +1,20 @@
+{
+  "id": "reported_speech",
+  "description": "Reported speech keeps who said it: 'Sam said X' is stored as Sam's claim, not as X stated as fact.",
+  "failure_pattern": "reported speech flattened to fact",
+  "steps": [
+    {
+      "text": "Sam said the Harrow migration is finished, but I haven't verified it yet.",
+      "remembered_on": "2026-11-20"
+    }
+  ],
+  "assert": {
+    "atoms_any_match": [
+      "sam (said|says|reported|stated|claimed|told)[^.]*harrow|harrow[^.]*according to sam"
+    ],
+    "atoms_none_match": [
+      "^(the )?harrow migration (is|was|has been) (finished|complete|completed|done)"
+    ]
+  },
+  "xfail": null
+}

@@ -1,0 +1,170 @@
+[
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-02",
+  "text": "The Halyard staging cluster now runs 6 nodes after we added two last Thursday. The TLS certificate on it expires on 2027-02-14.",
+  "id": "syn01"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-03",
+  "text": "I moved the PE sleeve from 6% to 4% and trimmed VTI by a tenth. The HSA stays in cash until January.",
+  "id": "syn02"
+ },
+ {
+  "speaker": "Sam",
+  "addressee": "Orion",
+  "date": "2026-11-04",
+  "text": "Orion, your nightly reindex job took 47 minutes yesterday, up from about 20 last week. Please look at the batch size before Friday.",
+  "id": "syn03"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-05",
+  "text": "Kestrel ingest dropped 312 events during the 02:00 UTC window. The retry queue recovered all but 9 of them by 03:15.",
+  "id": "syn04"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-06",
+  "text": "We are not using Jenkins any more for Kestrel; CI moved to the Buildkite pipeline on 2026-10-28.",
+  "id": "syn05"
+ },
+ {
+  "speaker": "Priya",
+  "addressee": "Clio",
+  "date": "2026-11-06",
+  "text": "Priya said the Osprey design review moved from Tuesday 24 November to Thursday 26 November because the SRE lead is travelling.",
+  "id": "syn06"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-07",
+  "text": "The Gannet export now runs at 03:00 UTC instead of 01:30 UTC. Its output bucket is gannet-exports-eu and retention is 30 days.",
+  "id": "syn07"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-08",
+  "text": "Tom is off caffeine until the end of November while he trials a new sleep routine. He still drinks green tea at lunch.",
+  "id": "syn08"
+ },
+ {
+  "speaker": "Wren",
+  "addressee": "Tom",
+  "date": "2026-11-09",
+  "text": "The Marlin deploy key was rotated this morning after the contractor offboarding. The old key ID ended in 7f3a.",
+  "id": "syn09"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-09",
+  "text": "The Harrow migration has 14 of 18 tables moved. The two largest tables, orders and ledger_entries, are scheduled for the 2026-11-21 maintenance window.",
+  "id": "syn10"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-10",
+  "text": "The Q3 board pack goes to the CFO on 2026-11-20. It must include the ARR bridge and the NRR figure, which was 118% for Q3.",
+  "id": "syn11"
+ },
+ {
+  "speaker": "Nadia",
+  "addressee": "Clio",
+  "date": "2026-11-11",
+  "text": "You flagged the wrong invoice yesterday, Clio: the duplicate was INV-20931, not INV-20913.",
+  "id": "syn12"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-12",
+  "text": "Latency on the Tidewell scheduler API p95 is 340 ms after the cache change, down from 610 ms. The p50 did not move.",
+  "id": "syn13"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-12",
+  "text": "Book the Lisbon trip for 3 to 7 December. I prefer aisle seats and no layovers through Frankfurt.",
+  "id": "syn14"
+ },
+ {
+  "speaker": "Omar",
+  "addressee": "Clio",
+  "date": "2026-11-13",
+  "text": "Omar reported that the Brightwater grant has 1,200 KTP NQ options vesting next March, not RSUs.",
+  "id": "syn15"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-14",
+  "text": "The Petrel backup job failed twice this week with exit code 137. Memory on the runner is capped at 2 GiB.",
+  "id": "syn16"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-15",
+  "text": "If the Heron contract signs by Monday, we start onboarding on 1 December; otherwise onboarding slips to January.",
+  "id": "syn17"
+ },
+ {
+  "speaker": "Lena",
+  "addressee": "Tom",
+  "date": "2026-11-15",
+  "text": "Lena thinks the Ibis churn spike is seasonal, but she has not checked the cohort data yet.",
+  "id": "syn18"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-16",
+  "text": "The Corvid feature flag dark_mode_v2 is enabled for 25% of EU users and 0% of US users.",
+  "id": "syn19"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-17",
+  "text": "Actually the dentist appointment is at 14:30 on Wednesday, not 15:30. Please update the calendar.",
+  "id": "syn20"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-18",
+  "text": "The Plover API rate limit is 600 requests per minute per key. Bursts above that return HTTP 429 with a Retry-After header.",
+  "id": "syn21"
+ },
+ {
+  "speaker": "Tom",
+  "addressee": "Clio",
+  "date": "2026-11-19",
+  "text": "The Wagtail repo uses Python 3.12 and uv. Never upgrade pandas past 2.2 there without running the reconciliation tests.",
+  "id": "syn22"
+ },
+ {
+  "speaker": "Ines",
+  "addressee": "Clio",
+  "date": "2026-11-19",
+  "text": "Ines told Clio that the Shrike vendor raised its price by 12% from 2027-01-01, and that the contract allows exit with 60 days' notice.",
+  "id": "syn23"
+ },
+ {
+  "speaker": "clio",
+  "addressee": null,
+  "date": "2026-11-20",
+  "text": "Tom decided on 2026-11-20 to keep the SGOV position and not buy more BIL this quarter.",
+  "id": "syn24"
+ }
+]
