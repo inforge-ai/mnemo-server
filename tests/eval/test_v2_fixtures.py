@@ -10,6 +10,9 @@ and run against each atom's text separately:
   recall_top_match  re    the first recall result matches
   recall_any_match  [re]  every pattern matches at least one recall result
   recall_none_match [re]  no pattern matches any recall result
+  remembered_on_any_between [lo, hi]  at least one active atom has
+                                      lo <= remembered_on <= hi (ISO dates)
+  remembered_on_none_before  date     no active atom has remembered_on < date
 
 v2 Phase 1 additions:
   - every live case runs MNEMO_FIXTURE_REPEAT times (default 5) and must pass
@@ -34,6 +37,7 @@ import asyncio
 import json
 import os
 import re
+from datetime import date
 from pathlib import Path
 from uuid import UUID
 
@@ -157,6 +161,23 @@ async def _provider_failure(case, client, pool, aid, headers, monkeypatch):
 async def _check(case, client, pool, aid, agent_key):
     a = case["assert"]
     failures = []
+
+    if "remembered_on_any_between" in a or "remembered_on_none_before" in a:
+        async with pool.acquire() as conn:
+            dates = [r["d"] for r in await conn.fetch(
+                "SELECT remembered_on::date AS d FROM atoms "
+                "WHERE agent_id = $1 AND is_active = true AND remembered_on IS NOT NULL",
+                UUID(aid),
+            )]
+        if "remembered_on_any_between" in a:
+            lo, hi = (date.fromisoformat(x) for x in a["remembered_on_any_between"])
+            if not any(lo <= d <= hi for d in dates):
+                failures.append(f"no atom has remembered_on in [{lo}, {hi}]; dates={sorted(map(str, dates))}")
+        if "remembered_on_none_before" in a:
+            floor = date.fromisoformat(a["remembered_on_none_before"])
+            early = sorted(str(d) for d in dates if d < floor)
+            if early:
+                failures.append(f"{len(early)} atom(s) have remembered_on before {floor}: {early}")
 
     if "atoms_any_match" in a or "atoms_none_match" in a:
         async with pool.acquire() as conn:

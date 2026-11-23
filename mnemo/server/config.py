@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     lifecycle_band_high: float = 0.90
     lifecycle_candidate_limit: int = 5
     lifecycle_llm_timeout_seconds: float = 5.0
+    lifecycle_max_concurrency: int = 4  # pair classifications in flight at once, per new atom
     supersedes_threshold: float = 0.75
     tension_threshold: float = 0.65
     narrows_threshold: float = 0.65

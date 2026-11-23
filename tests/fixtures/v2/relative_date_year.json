@@ -1,0 +1,24 @@
+{
+  "id": "relative_date_year",
+  "description": "A day-and-month with no year ('w/c 1 Dec') resolves against the note's date, so a note dated 2026-11-22 lands in 2026, not an earlier year.",
+  "failure_pattern": "relative date resolved to the wrong year (seen in production: haiku_v1 atoms created 2026-11-22 with remembered_on 2024-12-01)",
+  "steps": [
+    {
+      "text": "Clio, the Heron migration review is w/c 1 Dec. Tom wants the rollback runbook finished before then.",
+      "speaker": "Tom",
+      "addressee": "Clio",
+      "remembered_on": "2026-11-22"
+    }
+  ],
+  "assert": {
+    "remembered_on_any_between": ["2026-11-22", "2026-12-07"],
+    "remembered_on_none_before": "2026-01-01",
+    "atoms_any_match": [
+      "heron[^.]*review"
+    ],
+    "atoms_none_match": [
+      "\\b(2023|2024|2025)\\b"
+    ]
+  },
+  "xfail": null
+}
