@@ -93,6 +93,7 @@ cp .env.example .env
 ### 3. Run with Docker
 
 ```bash
+scripts/deploy/check_free_space.sh || exit 1   # aborts below max(30 GiB, 2 x image + 10 GiB)
 BUILD_COMMIT=$(git rev-parse HEAD) docker compose build
 docker compose up -d
 ```
