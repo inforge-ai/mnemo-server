@@ -1,33 +1,26 @@
--- Guarded repair: shift remembered_on by 1-3 years for TIER 1 candidates only.
---   psql "$DB" -v expected=N -f scripts/phase1/remembered_on_exec.sql
--- N = tier-1 would_update from the dry run. Aborts (rollback) on any mismatch.
--- Old and new values go to repair_remembered_on_2026_11 (the undo table) first.
+-- Guarded tier-1 repair: shift remembered_on for the scope only.
+--   psql "$DB" -v agents=clio -v which=next -v target=past -v expected=N \
+--        -f scripts/phase1/remembered_on_exec.sql
+-- N = the dry run's scope count for the same arguments. Aborts (rollback) on any
+-- mismatch. Old and new values go to repair_remembered_on_2026_11 (undo table).
 \set ON_ERROR_STOP on
 \if :{?expected}
 \else
-  \echo 'usage: -v expected=N (tier-1 would_update from the dry run)'
+  \echo 'usage: -v agents=a,b -v which=same|next|all -v target=nearest|past -v expected=N'
   \quit
 \endif
 BEGIN;
 \ir remembered_on_candidates.sql
-CREATE TABLE IF NOT EXISTS repair_remembered_on_2026_11 (
-  atom_id            uuid PRIMARY KEY REFERENCES atoms(id) ON DELETE CASCADE,
-  agent_id           uuid NOT NULL,
-  old_remembered_on  timestamptz NOT NULL,
-  new_remembered_on  timestamptz NOT NULL,
-  tier               int NOT NULL,
-  repaired_at        timestamptz NOT NULL DEFAULT now(),
-  reverted_at        timestamptz
-);
-SELECT count(*) = :expected AS ok FROM cand WHERE tier = 1 \gset
+\ir remembered_on_scope.sql
+SELECT count(*) = :expected AS ok FROM scope \gset
 \if :ok
 \else
-  \echo 'ABORT: tier-1 candidate count differs from expected'
+  \echo 'ABORT: scope count differs from expected'
   ROLLBACK;
   \quit
 \endif
 INSERT INTO repair_remembered_on_2026_11 (atom_id, agent_id, old_remembered_on, new_remembered_on, tier)
-SELECT atom_id, agent_id, old_remembered_on, new_remembered_on, tier FROM cand WHERE tier = 1
+SELECT atom_id, agent_id, old_remembered_on, new_remembered_on, tier FROM scope
 ON CONFLICT (atom_id) DO UPDATE   -- re-run after an undo
   SET old_remembered_on = EXCLUDED.old_remembered_on, new_remembered_on = EXCLUDED.new_remembered_on,
       tier = EXCLUDED.tier, repaired_at = now(), reverted_at = NULL;

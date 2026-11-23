@@ -93,13 +93,17 @@ Defaults already in effect, so nothing else to set:
 
 ## 5. Rebuild, restart, check
 
+**Rollback image.** Untagged images are removed automatically on this host, so `image_tags.sh pre` tags the running image as `mnemo-server:<commit>` before the build. After a successful deploy (health ok and reporting the new commit), `post` tags the new image and keeps the previous tag; older `mnemo-server:*` tags are removed. To roll back: `scripts/deploy/image_tags.sh rollback <commit>` (code only; schema migrations are not rolled back). Two images on disk is about 24 GB, which the free-space check already allows for.
+
 **Free space first.** The image is about 24 GB, and a rebuild needs roughly twice that while it runs. `scripts/deploy/check_free_space.sh` aborts unless the Docker filesystem has max(30 GiB, 2 × current image + 10 GiB) free. The 10 GiB keeps Postgres and Zulip, which share the disk, writable at the build's peak. On 2026-11-23 a build started with 17 GB free and filled the disk, and Zulip's RabbitMQ was down for about 8 minutes. If it aborts, prune unused build cache and images (`docker builder prune`, `docker image prune`) after checking what they hold, and never prune volumes without looking.
 
 ```bash
 scripts/deploy/check_free_space.sh || exit 1   # aborts below max(30 GiB, 2 x image + 10 GiB)
+scripts/deploy/image_tags.sh pre               # tag the running image mnemo-server:<its commit> (rollback)
 BUILD_COMMIT=$(git rev-parse --short HEAD) docker compose build mnemo-server
 docker compose up -d mnemo-server
 curl -s http://127.0.0.1:8000/v1/health
+scripts/deploy/image_tags.sh post              # after health is ok: tag the new image, keep the previous, drop older
 ```
 
 Expect `schema_version` `010_sources` and `version` ending `+<commit>`. The logs should show `Decomposer: anthropic claude-haiku-5-5` and no `marked N stuck store job(s)` beyond what is expected (0).

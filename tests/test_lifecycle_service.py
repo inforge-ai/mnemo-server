@@ -542,3 +542,143 @@ async def test_detect_with_pool_releases_connection_during_llm(pool, agent_with_
 
     assert n == 1
     assert seen["idle"] == seen["size"]
+
+
+# ── Same-source exclusion and concurrency (post-G2 fixes) ──────────────────
+
+async def _source(conn, agent_id):
+    import uuid
+    return await conn.fetchval(
+        "INSERT INTO sources (agent_id, store_id, text, speaker) VALUES ($1, $2, 'synthetic note', 'tester') RETURNING id",
+        agent_id, uuid.uuid4(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_candidates_excludes_same_source(pool, agent_with_address):
+    from mnemo.server.services.lifecycle_service import _get_candidates
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        src = await _source(conn, agent_id)
+        other_src = await _source(conn, agent_id)
+        new_id, new_emb = await _insert(conn, agent_id, "Heron review moves to the week of 30 November", "episodic")
+        sib_id, _ = await _insert(conn, agent_id, "Heron runbook must be ready before the review", "episodic",
+                                  emb=vector_at_cosine(new_emb, 0.70, seed=11))
+        other_id, _ = await _insert(conn, agent_id, "Heron review was planned for mid November", "episodic",
+                                    emb=vector_at_cosine(new_emb, 0.70, seed=12))
+        legacy_id, _ = await _insert(conn, agent_id, "Heron review needs a room", "episodic",
+                                     emb=vector_at_cosine(new_emb, 0.70, seed=13))
+        await conn.execute("UPDATE atoms SET source_id = $1 WHERE id = ANY($2)", src, [new_id, sib_id])
+        await conn.execute("UPDATE atoms SET source_id = $1 WHERE id = $2", other_src, other_id)
+
+        with_src = {c["id"] for c in await _get_candidates(conn, agent_id, new_id, new_emb, src)}
+        without_src = {c["id"] for c in await _get_candidates(conn, agent_id, new_id, new_emb, None)}
+
+    assert sib_id not in with_src
+    assert {other_id, legacy_id} <= with_src
+    # No source on the new atom (pre-Phase-1 path): nothing extra is excluded.
+    assert {sib_id, other_id, legacy_id} <= without_src
+
+
+@pytest.mark.asyncio
+async def test_detect_never_compares_atoms_of_the_same_note(pool, agent_with_address):
+    from mnemo.server.services import lifecycle_service
+
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        src = await _source(conn, agent_id)
+        new_id, new_emb = await _insert(conn, agent_id, "Heron review moves to the week of 30 November", "episodic")
+        sib_id, _ = await _insert(conn, agent_id, "Heron runbook must be ready before the review", "episodic",
+                                  emb=vector_at_cosine(new_emb, 0.70, seed=14))
+        old_id, _ = await _insert(conn, agent_id, "Heron review was planned for mid November", "episodic",
+                                  emb=vector_at_cosine(new_emb, 0.70, seed=15))
+        await conn.execute("UPDATE atoms SET source_id = $1 WHERE id = ANY($2)", src, [new_id, sib_id])
+
+        seen = []
+
+        async def _eval(**kw):
+            seen.append(kw["existing_text"])
+            return {"relationship": "narrows", "confidence": 0.95, "reasoning": "r",
+                    "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1}}
+
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+
+        targets = {r["target_id"] for r in await conn.fetch(
+            "SELECT target_id FROM edges WHERE source_id = $1 AND edge_type = 'narrows'", new_id)}
+
+    assert n == 1
+    assert targets == {old_id}
+    assert seen == ["Heron review was planned for mid November"]
+
+
+async def _many_candidates(conn, agent_id, k, seed0):
+    new_id, new_emb = await _insert(conn, agent_id, "Kestrel export now runs nightly", "episodic")
+    olds = []
+    for i in range(k):
+        oid, _ = await _insert(conn, agent_id, f"Kestrel export note {i}", "episodic",
+                               emb=vector_at_cosine(new_emb, 0.70, seed=seed0 + i))
+        olds.append(oid)
+    return new_id, olds
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_pool", [False, True])
+async def test_pairs_are_classified_concurrently_with_a_bound(pool, agent_with_address, monkeypatch, use_pool):
+    import asyncio
+    from mnemo.server.config import settings
+    from mnemo.server.services import lifecycle_service
+
+    monkeypatch.setattr(settings, "lifecycle_candidate_limit", 6)
+    monkeypatch.setattr(settings, "lifecycle_max_concurrency", 4)
+    agent_id = agent_with_address["id"]
+    state = {"now": 0, "max": 0}
+
+    async def _eval(**kw):
+        state["now"] += 1
+        state["max"] = max(state["max"], state["now"])
+        await asyncio.sleep(0.05)
+        state["now"] -= 1
+        return {"relationship": "tension_with", "confidence": 0.9, "reasoning": "r",
+                "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1}}
+
+    async with pool.acquire() as conn:
+        new_id, olds = await _many_candidates(conn, agent_id, 6, seed0=20)
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval):
+            if use_pool:
+                n = await lifecycle_service.detect_lifecycle_relationships(pool, agent_id, new_id)
+            else:
+                # A caller-held connection: writes must stay sequential.
+                n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+        written = await conn.fetchval(
+            "SELECT count(*) FROM edges WHERE source_id = $1 AND edge_type = 'tension_with'", new_id)
+
+    assert n == 6 and written == 6
+    assert state["max"] == 4
+
+
+@pytest.mark.asyncio
+async def test_one_failing_pair_does_not_block_the_others(pool, agent_with_address, monkeypatch):
+    from mnemo.server.config import settings
+    from mnemo.server.services import lifecycle_service
+
+    monkeypatch.setattr(settings, "lifecycle_candidate_limit", 3)
+    agent_id = agent_with_address["id"]
+
+    async def _eval(**kw):
+        if kw["existing_text"].endswith("1"):
+            raise RuntimeError("boom")
+        if kw["existing_text"].endswith("2"):
+            return None  # permanent failure → DLQ
+        return {"relationship": "narrows", "confidence": 0.9, "reasoning": "r",
+                "usage": {"model": "x", "input_tokens": 1, "output_tokens": 1}}
+
+    async with pool.acquire() as conn:
+        new_id, olds = await _many_candidates(conn, agent_id, 3, seed0=40)
+        with patch.object(lifecycle_service, "_evaluate_pair", side_effect=_eval):
+            n = await lifecycle_service.detect_lifecycle_relationships(conn, agent_id, new_id)
+        dlq = await conn.fetchval("SELECT count(*) FROM lifecycle_dlq WHERE new_atom_id = $1", new_id)
+
+    assert n == 1
+    assert dlq == 1

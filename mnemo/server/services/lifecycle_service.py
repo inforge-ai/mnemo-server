@@ -30,8 +30,13 @@ async def _get_candidates(
     agent_id: UUID,
     new_atom_id: UUID,
     embedding: list[float],
+    source_id: UUID | None = None,
 ) -> list[dict]:
-    """ANN-query active same-agent atoms, filter to the lifecycle cosine band."""
+    """ANN-query active same-agent atoms, filter to the lifecycle cosine band.
+
+    Atoms from the same source note as the new atom (same `source_id`) are
+    not candidates: they were written together, so neither replaces or
+    narrows the other. Atoms without a source (pre-Phase-1) are unaffected."""
     over_fetch = max(settings.lifecycle_candidate_limit * 4, 20)
     rows = await conn.fetch(
         """
@@ -41,6 +46,7 @@ async def _get_candidates(
         WHERE agent_id = $2
           AND is_active = true
           AND id != $3
+          AND ($5::uuid IS NULL OR source_id IS DISTINCT FROM $5::uuid)
         ORDER BY embedding <=> $1::vector
         LIMIT $4
         """,
@@ -48,6 +54,7 @@ async def _get_candidates(
         agent_id,
         new_atom_id,
         over_fetch,
+        source_id,
     )
     candidates = []
     for r in rows:
@@ -248,12 +255,14 @@ async def detect_lifecycle_relationships(
     Returns the count of edges written by this call. Never raises."""
     async with _connection(db) as conn:
         new_row = await conn.fetchrow(
-            "SELECT id, text_content, atom_type, embedding, created_at FROM atoms WHERE id = $1",
+            "SELECT id, text_content, atom_type, embedding, created_at, source_id FROM atoms WHERE id = $1",
             new_atom_id,
         )
         if new_row is None:
             return 0
-        candidates = await _get_candidates(conn, agent_id, new_atom_id, new_row["embedding"])
+        candidates = await _get_candidates(
+            conn, agent_id, new_atom_id, new_row["embedding"], new_row["source_id"],
+        )
         # Idempotency / no-competing-edges: skip pairs that already have any
         # lifecycle edge (either direction). Saves an LLM call too.
         pending = []
@@ -264,22 +273,37 @@ async def detect_lifecycle_relationships(
             except Exception:
                 logger.warning("lifecycle edge lookup failed", exc_info=True)
 
-    edges_written = 0
-    for cand in pending:
-        try:
+    # Classify every pending pair concurrently (bounded): the model calls are
+    # independent and dominate the time. The writes below stay sequential, so
+    # a caller-held connection (tests) never runs two queries at once.
+    sem = asyncio.Semaphore(max(1, settings.lifecycle_max_concurrency))
+
+    async def _classify(cand: dict) -> tuple[dict | None, int, BaseException | None]:
+        async with sem:
             t0 = time.monotonic()
-            existing_age_days = max(
-                0,
-                int((datetime.now(timezone.utc) - cand["created_at"]).total_seconds() / 86400),
-            )
-            result = await _evaluate_pair(
-                new_text=new_row["text_content"],
-                new_type=new_row["atom_type"],
-                existing_text=cand["text_content"],
-                existing_type=cand["atom_type"],
-                existing_age_days=existing_age_days,
-            )
-            latency_ms = int((time.monotonic() - t0) * 1000)
+            try:
+                existing_age_days = max(
+                    0,
+                    int((datetime.now(timezone.utc) - cand["created_at"]).total_seconds() / 86400),
+                )
+                result = await _evaluate_pair(
+                    new_text=new_row["text_content"],
+                    new_type=new_row["atom_type"],
+                    existing_text=cand["text_content"],
+                    existing_type=cand["atom_type"],
+                    existing_age_days=existing_age_days,
+                )
+                return result, int((time.monotonic() - t0) * 1000), None
+            except Exception as e:  # never let one pair sink the batch
+                return None, int((time.monotonic() - t0) * 1000), e
+
+    classified = await asyncio.gather(*(_classify(c) for c in pending))
+
+    edges_written = 0
+    for cand, (result, latency_ms, err) in zip(pending, classified):
+        try:
+            if err is not None:
+                raise err
 
             if result is None:
                 async with _connection(db) as conn:

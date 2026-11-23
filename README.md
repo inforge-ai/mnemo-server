@@ -94,8 +94,10 @@ cp .env.example .env
 
 ```bash
 scripts/deploy/check_free_space.sh || exit 1   # aborts below max(30 GiB, 2 x image + 10 GiB)
-BUILD_COMMIT=$(git rev-parse HEAD) docker compose build
+scripts/deploy/image_tags.sh pre               # tag the running image mnemo-server:<its commit> (rollback)
+BUILD_COMMIT=$(git rev-parse --short HEAD) docker compose build
 docker compose up -d
+scripts/deploy/image_tags.sh post              # after health is ok: tag the new image, keep the previous, drop older
 ```
 
 ### 4. Verify
