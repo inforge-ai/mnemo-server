@@ -6,11 +6,12 @@
 --   tier 1: the wrong year does not appear in the atom text (date-only fix is consistent).
 --   tier 2: the wrong year appears in the text (ISO date or other form): text would
 --           disagree after a date-only fix. Not repaired by these scripts.
+-- Optional scope (dry run and exec): -v agents=clio,tapio  -v same_year_only=true
 -- Reads atoms; writes only the temp table. Counts and ids only; no text leaves the DB.
 SET timezone = 'UTC';
 CREATE TEMP TABLE cand ON COMMIT DROP AS
 WITH b AS (
-  SELECT a.id, a.agent_id, a.remembered_on, a.created_at::date AS c, a.remembered_on::date AS r,
+  SELECT a.id, a.agent_id, (SELECT name FROM agents WHERE id = a.agent_id) AS agent_name, a.remembered_on, a.created_at::date AS c, a.remembered_on::date AS r,
          strpos(a.text_content, to_char(a.remembered_on::date, 'YYYY-MM-DD')) > 0 AS iso_in_text,
          a.text_content ~ ('\m' || extract(year FROM a.remembered_on)::int || '\M') AS year_in_text
   FROM atoms a
@@ -27,7 +28,8 @@ WITH b AS (
                    WHEN abs(rn - c) <= 90 THEN rn END AS rf
   FROM f
 )
-SELECT id AS atom_id, agent_id, remembered_on AS old_remembered_on,
+SELECT id AS atom_id, agent_id, agent_name, remembered_on AS old_remembered_on,
+       extract(year FROM rf) = extract(year FROM c) AS same_year,   -- corrected date in created_at's own year
        (extract(year FROM rf) - extract(year FROM r))::int AS years_shift,
        remembered_on + make_interval(years => (extract(year FROM rf) - extract(year FROM r))::int) AS new_remembered_on,
        CASE WHEN year_in_text THEN 2 ELSE 1 END AS tier, iso_in_text
