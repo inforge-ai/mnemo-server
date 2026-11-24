@@ -752,7 +752,10 @@ async def retrieve(
     with a 15% specificity penalty for consolidated atoms.
     Similarity floor: atoms below min_similarity are excluded from primary results.
     Expansion floor: expanded atoms below min_similarity * 0.6 are excluded.
+    Superseded atoms are hidden unless include_superseded or
+    settings.recall_hide_superseded is false.
     """
+    include_superseded = include_superseded or not settings.recall_hide_superseded
     embedding = await encode(query, prompt_name="query")
     over_fetch = max_results * 2
 
@@ -1023,7 +1026,9 @@ async def recent(
 
     order_by="stored": created_at DESC (default). "event":
     COALESCE(remembered_on, created_at) DESC. All filters are in the WHERE
-    clause, before LIMIT."""
+    clause, before LIMIT. Superseded atoms are hidden unless include_superseded
+    or settings.recall_hide_superseded is false."""
+    include_superseded = include_superseded or not settings.recall_hide_superseded
     order = (
         "COALESCE(a.remembered_on, a.created_at) DESC, a.created_at DESC"
         if order_by == "event" else "a.created_at DESC"
