@@ -204,3 +204,13 @@ def test_replay_matches_decide():
     probs = {"relation": a.relation, "change": a.change, "same_attribute": a.same_attribute, "correction": a.correction}
     assert replay(inputs, probs) == decide(new, old, a)
     assert replay(inputs, probs, Thresholds(replaces=0.9)).guard == "threshold"
+
+
+def test_replay_reapplies_the_kind_threshold():
+    a = ans("replaces", p=0.95)
+    new = side("unknown")              # stored as unknown at kind threshold 0.8
+    inputs = {"new": new.to_json(), "old": side("state", D1).to_json(),
+              "new_kind_top": "state", "new_kind_p": 0.7, "old_kind_stored": "state"}
+    probs = {"relation": a.relation, "change": a.change, "same_attribute": a.same_attribute, "correction": a.correction}
+    assert replay(inputs, probs, Thresholds(kind=0.8)).final == "unrelated"
+    assert replay(inputs, probs, Thresholds(kind=0.6)).final == "replaces"

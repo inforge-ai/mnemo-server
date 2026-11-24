@@ -105,6 +105,7 @@ def write_dates(kind: str, event_date: datetime | None, precision: str,
 class AtomClass:
     kind: str = "unknown"
     kind_p: float | None = None
+    kind_top: str | None = None          # the model's top kind even below the threshold (for G3 replay)
     kind_probs: dict | None = None
     grounded_p: float | None = None
     time_unresolved: bool = False
@@ -231,6 +232,7 @@ def _class_from(res: DecisionResult, asked_time: bool, th: Thresholds) -> AtomCl
     if probs:
         top = max(probs, key=probs.get)
         c.kind_probs, c.kind_p = probs, float(probs[top])
+        c.kind_top = top if top in KINDS else None
         c.kind = top if top in KINDS and c.kind_p >= th.kind else "unknown"
     c.grounded_p = res.p_true("grounded")
     if asked_time:
@@ -341,6 +343,8 @@ async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID 
         plan.cost += res.cost or 0.0
         inputs = {"new": new_side.to_json(), "old": old_side.to_json(), "cosine": round(c.cosine, 4),
                   "questions": QUESTIONS_VERSION, "new_kind_p": plan.classes[i].kind_p,
+                  "new_kind_top": plan.classes[i].kind_top,
+                  "old_kind_top": (c.lazy.kind_top if c.lazy and c.kind == "unknown" else c.kind),
                   "old_kind_p": c.lazy.kind_p if c.lazy else c.kind_p,
                   "old_kind_lazy": c.lazy is not None and c.kind == "unknown",
                   "old_time_asked": bool(c.lazy and c.lazy.asked_time),

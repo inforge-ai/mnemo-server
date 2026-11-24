@@ -177,9 +177,22 @@ def decide(new: Side, old: Side, ans: Answers, th: Thresholds | None = None) -> 
     return Decision(raw, None, raw)
 
 
+def _replay_kind(side: Side, top: str | None, p: float | None, th: Thresholds) -> Side:
+    """Re-apply the kind threshold when the row recorded the model's top kind."""
+    if top in KINDS and p is not None:
+        side.kind = top if p >= th.kind else "unknown"
+    return side
+
+
 def replay(inputs: dict, probabilities: dict, th: Thresholds | None = None) -> Decision:
-    """Re-run decide() from a stored relation_decisions row."""
+    """Re-run decide() from a stored relation_decisions row, at any thresholds
+    (the kind threshold too, where the row recorded each side's top kind)."""
+    th = th or Thresholds()
     ans = Answers(relation=probabilities["relation"], change=probabilities.get("change", 0.0),
                   same_attribute=probabilities.get("same_attribute", 0.0),
                   correction=probabilities.get("correction", 0.0))
-    return decide(Side.from_json(inputs["new"]), Side.from_json(inputs["old"]), ans, th)
+    new = _replay_kind(Side.from_json(inputs["new"]), inputs.get("new_kind_top"), inputs.get("new_kind_p"), th)
+    old = Side.from_json(inputs["old"])
+    if inputs.get("old_kind_lazy") or inputs.get("old_kind_stored") == "unknown":
+        old = _replay_kind(old, inputs.get("old_kind_top"), inputs.get("old_kind_p"), th)
+    return decide(new, old, ans, th)

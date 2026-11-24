@@ -212,12 +212,22 @@ async def _check_relations(case, pool, aid, agent_key, client, steps, failures):
     a = case["assert"]
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT new_atom_id, old_atom_id, final_relation, guard_fired FROM relation_decisions "
-            "WHERE agent_id = $1", UUID(aid))
+            "SELECT new_atom_id, old_atom_id, final_relation, guard_fired, raw_choice, inputs, probabilities "
+            "FROM relation_decisions WHERE agent_id = $1", UUID(aid))
+
+    def _why(r):   # synthetic fixtures only: safe to print
+        i = json.loads(r["inputs"] or "{}")
+        p = json.loads(r["probabilities"] or "{}")
+        rel = {k: round(v, 2) for k, v in (p.get("relation") or {}).items()}
+        return (f"{i.get('new', {}).get('kind')}({i.get('new_kind_p')})->{i.get('old', {}).get('kind')}"
+                f"({i.get('old_kind_p')}) raw={r['raw_choice']} rel={rel} chg={round(p.get('change', 0), 2)} "
+                f"attr={round(p.get('same_attribute', 0), 2)} corr={round(p.get('correction', 0), 2)} "
+                f"prec={i.get('new', {}).get('precision')}/{i.get('old', {}).get('precision')}")
     for spec in a.get("relations", []):
         new, old = steps[spec["new"]], steps[spec["old"]]
         finals = [r["final_relation"] for r in rows if r["new_atom_id"] in new and r["old_atom_id"] in old]
         guards = [r["guard_fired"] for r in rows if r["new_atom_id"] in new and r["old_atom_id"] in old]
+        guards += [_why(r) for r in rows if r["new_atom_id"] in new and r["old_atom_id"] in old]
         if "any" in spec and spec["any"] not in finals:
             failures.append(f"step {spec['new']} -> step {spec['old']}: no {spec['any']} (got {finals}, guards {guards})")
         if "none" in spec and spec["none"] in finals:
