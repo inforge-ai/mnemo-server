@@ -1,0 +1,32 @@
+{
+  "id": "reading_vs_baseline",
+  "description": "A dated reading of a different quantity does not retire a baseline.",
+  "failure_pattern": "a day's reading retired a baseline (Phase 1 supersedes review)",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "Ana's resting heart rate baseline is 52 bpm.",
+      "remembered_on": "2026-11-01T08:00:00Z"
+    },
+    {
+      "text": "During the interval session on 23 November 2026, Ana's heart rate peaked at 171 bpm.",
+      "remembered_on": "2026-11-23T18:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "What is Ana's resting heart rate baseline?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      }
+    ],
+    "recall_contains_steps": [
+      0
+    ]
+  },
+  "xfail": null
+}

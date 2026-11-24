@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # "regex" only when chosen explicitly; "fake" = scripted test decomposer.
     # "openrouter" is for the bake-off against mnemo_eval / test DBs only.
     decomposer_provider: Literal["anthropic", "openrouter", "regex", "fake"] = "anthropic"
+    decomposer_prompt: Literal["v2", "v3"] = "v3"   # v3: event_date + date_precision, no confidence (Phase 2)
     decomposer_model: str = "claude-haiku-4-5-20251001"
     decomposer_deadline_seconds: float = 90.0  # whole decomposition, attempts included
     allow_non_anthropic_decomposer: bool = False
@@ -111,6 +112,33 @@ class Settings(BaseSettings):
     # Recall and recent hide atoms that are the target of a supersedes edge from an
     # active atom. False = return them (as if every request set include_superseded).
     recall_hide_superseded: bool = True
+    # v2 Phase 2 decision models (docs/phase2-design.md §5). Every OpenRouter
+    # request carries provider {"zdr": true}. The production key lives in the
+    # production .env (MNEMO_OPENROUTER_API_KEY, a dedicated key with a cap).
+    decision_provider: Literal["off", "openrouter", "fake"] = "off"
+    decision_model: str = "typesafe/jev-1.14"
+    decision_fallback_model: str = "liquid/d1.2-ultra"
+    decision_request_timeout_seconds: float = 1.5
+    decision_retries: int = 2
+    openrouter_api_key: str | None = None
+    # Relation decisions (docs/phase2-design.md §3–§5). off | shadow | enforce.
+    relation_mode: Literal["off", "shadow", "enforce"] = "off"
+    relation_k: int = 5
+    relation_k_large: int | None = None        # smaller k for large stores (proposal; off by default)
+    relation_large_store_atoms: int = 20       # a store with more atoms than this uses relation_k_large
+    relation_budget_seconds: float = 3.0
+    relation_concurrency: int = 16
+    relation_pending_interval_seconds: float = 120.0
+    relation_pending_max_attempts: int = 6
+    relation_threshold_same: float = 0.85
+    relation_threshold_replaces: float = 0.80
+    relation_threshold_conflict: float = 0.60
+    relation_threshold_refines: float = 0.50
+    relation_threshold_change: float = 0.50
+    relation_threshold_same_attribute: float = 0.50
+    relation_threshold_correction: float = 0.50
+    kind_threshold: float = 0.60              # Tom, 2026-11-24
+    grounding_model_cutoff: float = 0.09      # Jev grounding p below this → flag model_ungrounded
     # Logging
     log_level: str = "INFO"
 
@@ -128,6 +156,8 @@ class Settings(BaseSettings):
             fakes.append("MNEMO_EMBEDDING_BACKEND=fake")
         if self.decomposer_provider == "fake":
             fakes.append("MNEMO_DECOMPOSER_PROVIDER=fake")
+        if self.decision_provider == "fake":
+            fakes.append("MNEMO_DECISION_PROVIDER=fake")
         if fakes and "test" not in self.database_url:
             raise ValueError(
                 f"{', '.join(fakes)} is only allowed when MNEMO_DATABASE_URL "

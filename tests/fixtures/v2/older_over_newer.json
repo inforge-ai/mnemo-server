@@ -1,0 +1,32 @@
+{
+  "id": "older_over_newer",
+  "description": "A note dated earlier than the stored one does not replace it.",
+  "failure_pattern": "older information hides newer information",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text. The spec expects `review`; the hard requirement is no replaces and the newer atom still recalled.",
+  "steps": [
+    {
+      "text": "The Dunlin service's request limit is 500 requests per minute.",
+      "remembered_on": "2026-11-20T09:00:00Z"
+    },
+    {
+      "text": "The Dunlin service's request limit is 300 requests per minute.",
+      "remembered_on": "2026-10-01T09:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "What is the Dunlin service's request limit?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      }
+    ],
+    "recall_contains_steps": [
+      0
+    ]
+  },
+  "xfail": null
+}

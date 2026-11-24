@@ -32,6 +32,7 @@ import asyncpg
 import numpy as np
 
 from ..config import settings
+from . import confidence
 from ..embeddings import encode, encode_batch
 from ..decomposer import DecomposedAtom
 from ..decomposers import CandidateAtom, DecomposeRequest, beta_for, decompose_note
@@ -155,8 +156,12 @@ async def _insert_atom(
     source_id: UUID | None = None,
     source_quote: str | None = None,
     verification: dict | None = None,
+    rel: dict | None = None,
 ) -> asyncpg.Record:
+    """`rel` (Phase 2): kind, kind_p, valid_from (None = the store time),
+    date_precision, date_basis. Without it the migration defaults apply."""
     half_life = HALF_LIVES.get(atom.atom_type, 30.0)
+    rel = rel or {}
     row = await conn.fetchrow(
         """
         INSERT INTO atoms (
@@ -164,13 +169,17 @@ async def _insert_atom(
             confidence_alpha, confidence_beta,
             source_type, source_ref,
             domain_tags, decay_half_life_days, decay_type, decomposer_version,
-            remembered_on, source_id, source_quote, verification
-        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12,$13,$14,$15,$16)
+            remembered_on, source_id, source_quote, verification,
+            kind, kind_p, valid_from, date_precision, date_basis
+        ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12,$13,$14,$15,$16,
+                  COALESCE($17, 'unknown'), $18,
+                  CASE WHEN $21::text IS NULL THEN NULL ELSE COALESCE($19, now()) END,
+                  COALESCE($20, 'unknown'), $21)
         RETURNING
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
             source_type, domain_tags, created_at, last_accessed, access_count, is_active,
-            remembered_on, source_id, source_quote,
+            remembered_on, source_id, source_quote, kind, kind_p, valid_from, date_precision, status,
             effective_confidence(
                 confidence_alpha, confidence_beta,
                 decay_type, decay_half_life_days,
@@ -193,6 +202,7 @@ async def _insert_atom(
         source_id,
         source_quote,
         json.dumps(verification) if verification is not None else None,
+        rel.get("kind"), rel.get("kind_p"), rel.get("valid_from"), rel.get("date_precision"), rel.get("date_basis"),
     )
     return row
 
@@ -208,7 +218,7 @@ async def _get_atom_row(
             a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
-            a.remembered_on, a.source_id, s.origin_class,
+            a.remembered_on, a.source_id, s.origin_class, a.kind, a.valid_from, a.date_precision, a.status,
             effective_confidence(
                 a.confidence_alpha, a.confidence_beta,
                 a.decay_type, a.decay_half_life_days,
@@ -391,6 +401,11 @@ def _row_to_atom_response(
         # v2 Phase 1 provenance (NULL for atoms stored before Phase 1).
         "source_id": _safe_get(row, "source_id"),
         "origin_class": _safe_get(row, "origin_class"),
+        # v2 Phase 2
+        "kind": _safe_get(row, "kind"),
+        "valid_from": _safe_get(row, "valid_from"),
+        "date_precision": _safe_get(row, "date_precision"),
+        "status": _safe_get(row, "status"),
     }
 
 
@@ -510,7 +525,7 @@ class PreparedStore:
     timings_ms: dict | None = None   # {"decompose": ms, "embed": ms}
 
 
-async def prepare_atoms(req: DecomposeRequest) -> PreparedStore:
+async def prepare_atoms(req: DecomposeRequest, origin_class: str = "unspecified") -> PreparedStore:
     """Decompose, check and embed a note. Holds NO database connection: the
     model call and the embedding run before any connection is acquired.
 
@@ -525,10 +540,10 @@ async def prepare_atoms(req: DecomposeRequest) -> PreparedStore:
     for cand, emb in zip(candidates, embeddings):
         known = tuple(n for n in (req.speaker, req.addressee, req.agent_name, req.user_name) if n)
         flags = grounding.run_checks(cand.text, cand.source_quote, req.text, known)
-        alpha, beta = beta_for(cand)
+        alpha, beta = confidence.prior_for(origin_class) if cand.confidence_from_prior else beta_for(cand)
         downgraded = False
         if grounding.lowers_band(flags):
-            lowered = lower_one_band(alpha, beta)
+            lowered = confidence.lower_band(alpha, beta)
             downgraded = lowered != (alpha, beta)
             alpha, beta = lowered
         prepared.append(PreparedAtom(cand, emb, flags, alpha, beta, downgraded))
@@ -546,6 +561,8 @@ async def persist_atoms(
     source_id: UUID | None = None,
     store_id: UUID | None = None,
     operator_id: UUID | None = None,
+    plan=None,
+    note_date: datetime | None = None,
 ) -> dict:
     """Write a prepared store. The caller wraps this in ONE transaction:
     dedup checks, inserts, source_merges, edges and usage rows commit or
@@ -575,11 +592,27 @@ async def persist_atoms(
     atoms_created = 0
     duplicates_merged = 0
 
-    for p in prepared.atoms:
+    from types import SimpleNamespace
+    from . import relation_service
+    req_dates = SimpleNamespace(remembered_on=note_date)
+    enforce = plan is not None and plan.mode == "enforce"
+    index_ids: list[UUID | None] = []          # per prepared atom: new atom id (None if dedup-merged)
+    dedup_targets: list[UUID | None] = []
+    alpha_beta: list[tuple[float, float]] = []
+
+    for i, p in enumerate(prepared.atoms):
         cand = p.candidate
+        fields = relation_service.atom_fields(plan, i, cand, req_dates)
+        cls = plan.classes[i] if plan else None
+        if cls is not None and cls.grounded_p is not None and cls.grounded_p < settings.grounding_model_cutoff:
+            p.alpha, p.beta = confidence.scale_alpha(p.alpha, p.beta, confidence.UNGROUNDED_SCALE)
+            if "model_ungrounded" not in p.flags:
+                p.flags.append("model_ungrounded")
+        alpha_beta.append((p.alpha, p.beta))
         # Arc atoms are synthetic summaries — never deduplicate them against
         # their component sentences (their embeddings overlap by design).
-        duplicate = None if cand.source_type == "arc" else await _check_duplicate(
+        # Enforce mode: the relation decision (`same`) replaces the 0.97 merge.
+        duplicate = None if cand.source_type == "arc" or enforce else await _check_duplicate(
             conn, agent_id, p.embedding, cand.atom_type,
         )
         if duplicate:
@@ -599,6 +632,8 @@ async def persist_atoms(
             stored_ids.append(duplicate["id"])
             stored_embeddings.append(p.embedding)
             items.append(_store_item(row, cand.source_quote, merged=True, flags=p.flags))
+            index_ids.append(None)
+            dedup_targets.append(duplicate["id"])
             duplicates_merged += 1
         else:
             structured = {"subject": cand.subject} if cand.subject else {}
@@ -612,8 +647,12 @@ async def persist_atoms(
                 conn, agent_id, atom, p.embedding, domain_tags, cand.source_type,
                 decomposer_version=prepared.version or "unknown",
                 source_id=source_id, source_quote=cand.source_quote,
-                verification=grounding.verification_record(p.flags, p.band_downgraded),
+                verification={**grounding.verification_record(p.flags, p.band_downgraded),
+                              **fields["verification_extra"]},
+                rel=fields,
             )
+            index_ids.append(row["id"])
+            dedup_targets.append(None)
             stored_ids.append(row["id"])
             stored_embeddings.append(p.embedding)
             items.append(_store_item(row, cand.source_quote, merged=False, flags=p.flags))
@@ -647,12 +686,28 @@ async def persist_atoms(
             conn, agent_id, stored_ids[i], stored_embeddings[i], current_call_ids,
         )
 
+    relations_pending: list[UUID] = []
+    relation_counts: dict = {}
+    if plan is not None:
+        rel = await relation_service.persist_relations(
+            conn, agent_id, plan, index_ids, dedup_targets, source_id, store_id, alpha_beta)
+        for i, entries in enumerate(rel["relations"]):
+            items[i]["relations"] = entries
+        relations_pending = rel["pending"]
+        relation_counts = rel["counts"]
+        if enforce:
+            for i, atom_id in enumerate(index_ids):
+                if atom_id is not None and any(e["relation"] == "same" for e in rel["relations"][i]):
+                    items[i]["status"] = "merged"
+
     return {
         "atoms": items,
         "atoms_created": atoms_created,
         "duplicates_merged": duplicates_merged,
         "edges_created": edges_created,
         "new_atom_ids": [stored_ids[i] for i in new_atom_indices],
+        "relations_pending": relations_pending,
+        "relation_counts": relation_counts,
     }
 
 
@@ -666,6 +721,12 @@ def _store_item(row: asyncpg.Record, source_quote: str | None, merged: bool, fla
         "source_quote": source_quote,
         "merged_into_existing": merged,
         "flags": list(flags),
+        "kind": _safe_get(row, "kind"),
+        "kind_p": _safe_get(row, "kind_p"),
+        "valid_from": _safe_get(row, "valid_from"),
+        "date_precision": _safe_get(row, "date_precision"),
+        "status": _safe_get(row, "status"),
+        "relations": [],
     }
 
 
@@ -768,7 +829,7 @@ async def retrieve(
             a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
-            a.remembered_on, a.source_id, s.origin_class,
+            a.remembered_on, a.source_id, s.origin_class, a.kind, a.valid_from, a.date_precision, a.status,
             a.embedding,
             1 - (a.embedding <=> $1::vector) AS cosine_sim,
             effective_confidence(
@@ -916,6 +977,9 @@ async def retrieve(
     # post-merge so superseded atoms can't surface via either path.
     if not include_superseded:
         all_atoms = await _filter_superseded(conn, all_atoms)
+    else:
+        await _attach_hidden_by(conn, all_atoms)
+    all_atoms = await _attach_conflict_partners(conn, agent_id, all_atoms)
     await _attach_lifecycle_edges(conn, all_atoms)
     return {
         "atoms": all_atoms,
@@ -923,26 +987,79 @@ async def retrieve(
     }
 
 
+HIDDEN_STATUSES = ("superseded", "merged")
+
+
 async def _filter_superseded(
     conn: asyncpg.Connection,
-    rows: list[asyncpg.Record],
-) -> list[asyncpg.Record]:
+    rows: list,
+) -> list:
+    """Drop atoms whose status is superseded or merged (v2 Phase 2). Only a v2
+    relation decision or the supersede API sets those; legacy `supersedes`
+    edges no longer hide anything."""
     if not rows:
         return rows
-    atom_ids = [r["id"] for r in rows]
-    superseded = await conn.fetch(
-        """
-        SELECT DISTINCT e.target_id
-        FROM edges e
-        JOIN atoms a2 ON a2.id = e.source_id
-        WHERE e.target_id = ANY($1)
-          AND e.edge_type = 'supersedes'
-          AND a2.is_active = true
-        """,
-        atom_ids,
+    hidden = await conn.fetch(
+        "SELECT id FROM atoms WHERE id = ANY($1) AND status = ANY($2::text[])",
+        [r["id"] for r in rows], list(HIDDEN_STATUSES),
     )
-    superseded_ids = {r["target_id"] for r in superseded}
-    return [r for r in rows if r["id"] not in superseded_ids]
+    hidden_ids = {r["id"] for r in hidden}
+    return [r for r in rows if r["id"] not in hidden_ids]
+
+
+async def _attach_hidden_by(conn: asyncpg.Connection, atoms: list[dict]) -> None:
+    """For returned atoms that are superseded or merged: what hid them."""
+    ids = [a["id"] for a in atoms if a.get("status") in HIDDEN_STATUSES]
+    if not ids:
+        return
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (hidden) hidden, edge_type, by_atom, id FROM (
+            SELECT e.target_id AS hidden, e.edge_type, e.source_id AS by_atom, e.id, e.created_at
+            FROM edges e WHERE e.target_id = ANY($1) AND e.edge_type = 'replaces' AND e.retired_at IS NULL
+            UNION ALL
+            SELECT e.source_id, e.edge_type, e.target_id, e.id, e.created_at
+            FROM edges e WHERE e.source_id = ANY($1) AND e.edge_type = 'same' AND e.retired_at IS NULL
+        ) x ORDER BY hidden, created_at DESC
+        """,
+        ids,
+    )
+    by = {r["hidden"]: {"relation": r["edge_type"], "by_atom_id": r["by_atom"], "edge_id": r["id"]} for r in rows}
+    for a in atoms:
+        if a["id"] in by:
+            a["hidden_by"] = by[a["id"]]
+
+
+async def _attach_conflict_partners(conn: asyncpg.Connection, agent_id: UUID, atoms: list[dict]) -> list[dict]:
+    """An atom in an open conflict brings its partner once (match_type
+    conflict_partner). Partners of partners are not followed."""
+    present = {a["id"] for a in atoms}
+    if not present:
+        return atoms
+    rows = await conn.fetch(
+        """
+        SELECT id, atom_a, atom_b FROM conflicts
+        WHERE agent_id = $1 AND resolved_at IS NULL AND (atom_a = ANY($2) OR atom_b = ANY($2))
+        ORDER BY opened_at
+        """,
+        agent_id, list(present),
+    )
+    for a in atoms:
+        for r in rows:
+            if a["id"] in (r["atom_a"], r["atom_b"]):
+                a["conflict_id"] = r["id"]
+                break
+    added: list[dict] = []
+    for r in rows:
+        for mine, other in ((r["atom_a"], r["atom_b"]), (r["atom_b"], r["atom_a"])):
+            if mine in present and other not in present:
+                row = await _get_atom_row(conn, other, agent_id)
+                if row is not None and row["is_active"]:
+                    item = _row_to_atom_response(row, None, match_type="conflict_partner", via=mine)
+                    item["conflict_id"] = r["id"]
+                    added.append(item)
+                    present.add(other)
+    return atoms + added
 
 
 async def _attach_lifecycle_edges(
@@ -1039,7 +1156,7 @@ async def recent(
             a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
-            a.remembered_on, a.source_id, s.origin_class,
+            a.remembered_on, a.source_id, s.origin_class, a.kind, a.valid_from, a.date_precision, a.status,
             effective_confidence(
                 a.confidence_alpha, a.confidence_beta,
                 a.decay_type, a.decay_half_life_days,
@@ -1053,15 +1170,16 @@ async def recent(
           AND ($3::text[] IS NULL OR a.domain_tags && $3)
           AND ($4::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) >= $4)
           AND ($5::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) < $5)
-          AND ($6 OR NOT EXISTS (
-                SELECT 1 FROM edges e JOIN atoms src ON src.id = e.source_id
-                WHERE e.target_id = a.id AND e.edge_type = 'supersedes' AND src.is_active = true))
+          AND ($6 OR a.status NOT IN ('superseded', 'merged'))
         ORDER BY {order}
         LIMIT $7
         """,
         agent_id, atom_types, domain_tags, since, until, include_superseded, limit,
     )
-    return [_row_to_atom_response(r) for r in rows]
+    atoms = [_row_to_atom_response(r) for r in rows]
+    if include_superseded:
+        await _attach_hidden_by(conn, atoms)
+    return atoms
 
 
 async def soft_delete_atom(

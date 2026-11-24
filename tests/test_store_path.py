@@ -56,7 +56,7 @@ async def test_wait_returns_atoms_and_recall_finds_them(client, agent, pool):
     assert row["source_id"] == src["id"]
     assert json.loads(row["verification"])["flags"] == []
     assert json.loads(row["structured"])["subject"] == "Clio"
-    assert row["decomposer_version"] == "fake:scripted:prompt_v2"
+    assert row["decomposer_version"] == "fake:scripted:prompt_v3"
 
 
 async def test_provenance_fields_stored_and_passed_to_decomposer(client, agent, pool):

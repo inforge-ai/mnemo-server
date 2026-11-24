@@ -1,0 +1,33 @@
+{
+  "id": "different_days_unresolved",
+  "description": "An undated 'tomorrow' note, then a dated plan: the dates cannot be compared, so nothing is hidden.",
+  "failure_pattern": "notes about different days read as a state change (Phase 1 supersedes review)",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text. Step 0 is stored like a pre-Phase-2 atom (no date, no decomposition).",
+  "steps": [
+    {
+      "text": "The Plover vendor call is tomorrow.",
+      "explicit": "episodic"
+    },
+    {
+      "text": "The Plover vendor call is on 15 December 2026.",
+      "remembered_on": "2026-11-24T09:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "When is the Plover vendor call?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      }
+    ],
+    "recall_contains_steps": [
+      0,
+      1
+    ]
+  },
+  "xfail": null
+}

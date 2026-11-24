@@ -8,8 +8,8 @@ from functools import lru_cache
 import anthropic
 from anthropic import AsyncAnthropic
 
-from .base import DecomposeRequest, DecomposeResult, DecomposerError, parse_items, version_string
-from .prompt_v2 import RECORD_ATOMS_TOOL, TOOL_NAME, build_system_prompt
+from .base import DecomposeRequest, DecomposeResult, DecomposerError, parse_items, prompt_module, version_string
+from .prompt_v2 import TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +32,14 @@ class AnthropicDecomposer:
 
     async def decompose(self, req: DecomposeRequest) -> DecomposeResult:
         client = _get_client()
+        prompt = prompt_module()
         try:
             response = await client.messages.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
-                system=build_system_prompt(req),
+                system=prompt.build_system_prompt(req),
                 messages=[{"role": "user", "content": req.text}],
-                tools=[RECORD_ATOMS_TOOL],
+                tools=[prompt.RECORD_ATOMS_TOOL],
                 tool_choice={"type": "tool", "name": TOOL_NAME},
             )
         except anthropic.APITimeoutError as exc:
@@ -70,5 +71,5 @@ class AnthropicDecomposer:
         }
         return DecomposeResult(
             atoms=atoms, usage=[usage], warnings=warnings,
-            version=version_string(self.provider, self.model),
+            version=version_string(self.provider, self.model, prompt.PROMPT_VERSION),
         )

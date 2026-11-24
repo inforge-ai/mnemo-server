@@ -68,6 +68,8 @@ DELETE FROM agent_trust;
 DELETE FROM capabilities;
 DELETE FROM snapshot_atoms;
 DELETE FROM lifecycle_dlq;
+DELETE FROM conflicts;
+DELETE FROM relation_decisions;
 DELETE FROM edges;
 DELETE FROM views;
 DELETE FROM store_failures;
@@ -104,6 +106,9 @@ def pytest_configure(config):
         settings.decomposer_provider = "anthropic"
         # Production runs lifecycle detection (supersedes / tension edges).
         settings.lifecycle_detection_enabled = True
+        # Phase 2: relation decisions use the live OpenRouter models when a key is set.
+        if os.environ.get("OPENROUTER_API_KEY"):
+            settings.decision_provider = "openrouter"
         from mnemo.server.embeddings import warmup
         warmup()
     else:
@@ -133,6 +138,8 @@ def _no_live_llm(request, monkeypatch):
         raise RuntimeError("live Anthropic client constructed in a non-eval test")
 
     monkeypatch.setattr(anthropic.AsyncAnthropic, "__init__", _refuse)
+    from mnemo.server.decisions import openrouter as openrouter_decisions
+    monkeypatch.setattr(openrouter_decisions, "REAL_NETWORK_ALLOWED", False)
     anthropic_decomposer._get_client.cache_clear()
     if hasattr(lifecycle_service._get_client, "cache_clear"):
         lifecycle_service._get_client.cache_clear()

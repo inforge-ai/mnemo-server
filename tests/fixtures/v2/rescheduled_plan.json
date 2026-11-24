@@ -1,0 +1,35 @@
+{
+  "id": "rescheduled_plan",
+  "description": "A booked meeting, then the same meeting moved to another day: the later plan replaces the earlier one.",
+  "failure_pattern": "old date of a rescheduled plan still recalled as current",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "The Wren team's quarterly planning meeting is booked for Tuesday 8 December 2026.",
+      "remembered_on": "2026-11-20T09:00:00Z"
+    },
+    {
+      "text": "The Wren team's quarterly planning meeting has been moved to Thursday 10 December 2026.",
+      "remembered_on": "2026-11-24T09:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "When is the Wren team's quarterly planning meeting?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "any": "replaces"
+      }
+    ],
+    "recall_hides_steps": [
+      0
+    ],
+    "recall_contains_steps": [
+      1
+    ]
+  },
+  "xfail": null
+}

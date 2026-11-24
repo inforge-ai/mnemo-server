@@ -1,0 +1,42 @@
+{
+  "id": "calculation_vs_measurement",
+  "description": "A measurement and a calculation from different origins disagree: a conflict, both recalled, the partner shown.",
+  "failure_pattern": "a calculation silently replaces a measurement",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "The Skua pump drew 42 W at idle when measured on 20 November 2026.",
+      "remembered_on": "2026-11-20T10:00:00Z",
+      "origin_class": "measurement"
+    },
+    {
+      "text": "From its rated specification, the Skua pump draws about 60 W at idle.",
+      "remembered_on": "2026-11-21T10:00:00Z",
+      "origin_class": "agent_inference"
+    }
+  ],
+  "recall": {
+    "query": "How much power does the Skua pump draw at idle?",
+    "max_results": 1
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      },
+      {
+        "new": 1,
+        "old": 0,
+        "any": "conflict"
+      }
+    ],
+    "conflict_open": true,
+    "recall_contains_steps": [
+      0,
+      1
+    ]
+  },
+  "xfail": null
+}

@@ -1,0 +1,40 @@
+{
+  "id": "duplicate_independent",
+  "description": "The same fact from an independent second note: same, evidence added, the duplicate hidden.",
+  "failure_pattern": "duplicates pile up after the 0.97 merge is retired",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text. Same-source duplicates are never compared (candidates exclude the atom's own note), so the no-evidence case is covered offline (tests/test_relations_store.py).",
+  "steps": [
+    {
+      "text": "The Murre cluster has 12 worker nodes.",
+      "remembered_on": "2026-11-10T09:00:00Z"
+    },
+    {
+      "text": "The Murre cluster has 12 worker nodes.",
+      "remembered_on": "2026-11-12T09:00:00Z",
+      "speaker": "Lee",
+      "origin_class": "user_stated"
+    }
+  ],
+  "recall": {
+    "query": "How many worker nodes does the Murre cluster have?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "any": "same"
+      }
+    ],
+    "recall_hides_steps": [
+      1
+    ],
+    "recall_contains_steps": [
+      0
+    ]
+  },
+  "xfail": {
+    "phase": "phase 2 G3",
+    "fix": "same threshold (0.85) is tuned against Tom's shadow verdicts at G3; with q2 the model gives same 0.41-0.57 (Tom, 2026-11-24)"
+  }
+}

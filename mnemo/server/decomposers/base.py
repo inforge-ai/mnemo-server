@@ -46,6 +46,11 @@ class CandidateAtom:
     # Providers that assign Beta parameters directly (regex) set this;
     # otherwise `confidence` is mapped through confidence_to_beta.
     beta: tuple[float, float] | None = None
+    # prompt_v3: the atom's own date and how precise it is (docs/phase2-design.md §4).
+    event_date: datetime | None = None
+    date_precision: str = "unknown"
+    # prompt_v3 gives no confidence: the store uses the origin_class prior.
+    confidence_from_prior: bool = False
 
 
 @dataclass
@@ -63,8 +68,18 @@ class Decomposer(Protocol):
     async def decompose(self, req: DecomposeRequest) -> DecomposeResult: ...
 
 
-def version_string(provider: str, model: str, prompt_version: str = PROMPT_VERSION) -> str:
-    return f"{provider}:{model}:{prompt_version}"
+def version_string(provider: str, model: str, prompt_version: str | None = None) -> str:
+    return f"{provider}:{model}:{prompt_version or prompt_module().PROMPT_VERSION}"
+
+
+def prompt_module():
+    """The decomposer prompt in use: settings.decomposer_prompt (v3 from Phase 2; v2 for rollback)."""
+    from ..config import settings
+    if settings.decomposer_prompt == "v2":
+        from . import prompt_v2
+        return prompt_v2
+    from . import prompt_v3
+    return prompt_v3
 
 
 # ── Post-processing shared by every provider ────────────────────────────────
@@ -140,18 +155,28 @@ def parse_items(items) -> tuple[list[CandidateAtom], list[str]]:
             text = item["text"]
             quote = item["source_quote"]
             atom_type = item["type"]
-            confidence = float(item["confidence"])
+            from_prior = "confidence" not in item
+            confidence = 0.0 if from_prior else float(item["confidence"])
             if not isinstance(text, str) or not text.strip() or not isinstance(quote, str):
                 raise ValueError
             if atom_type not in ("episodic", "semantic", "procedural"):
                 raise ValueError
             subject = item.get("subject")
+            event_date = parse_date(item.get("event_date"))
+            precision = item.get("date_precision")
+            if event_date is None:
+                precision = "unknown"
+            elif precision not in ("day", "month", "year"):
+                precision = "day"
             atoms.append(CandidateAtom(
                 text=text.strip(),
                 atom_type=atom_type,
                 confidence=min(max(confidence, 0.0), 1.0),
                 source_quote=quote,
-                remembered_on=parse_date(item.get("remembered_on")),
+                remembered_on=event_date or parse_date(item.get("remembered_on")),
+                event_date=event_date,
+                date_precision=precision,
+                confidence_from_prior=from_prior,
                 subject=subject.strip() if isinstance(subject, str) and subject.strip() else None,
                 entity_resolved=item.get("entity_resolved", True) is not False,
             ))

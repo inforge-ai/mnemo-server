@@ -22,6 +22,12 @@ from mnemo.server.decomposers.prompt_v2 import TOOL_NAME, build_preamble, build_
 MODEL = "claude-haiku-4-5-20251001"
 
 
+@pytest.fixture(autouse=True)
+def _prompt_v2(monkeypatch):
+    """These tests cover prompt v2, kept selectable for rollback (MNEMO_DECOMPOSER_PROMPT=v2)."""
+    monkeypatch.setattr(settings, "decomposer_prompt", "v2")
+
+
 def _req(text="Synthetic note.", **kw):
     base = dict(text=text, agent_name="clio", speaker="clio")
     base.update(kw)

@@ -23,6 +23,24 @@ v2 Phase 1 additions:
   - "simulate": "provider_failure" swaps in the fake decomposer raising a
     DecomposerError; assert keys "http_status", "source_kept", "atom_count"
 
+v2 Phase 2 additions (relations decided on write):
+  - every case runs with MNEMO_FIXTURE_RELATION_MODE (default "enforce") unless
+    it sets "relation_mode"; decisions use the live OpenRouter models
+    (OPENROUTER_API_KEY, every request with provider {"zdr": true}); the
+    relation budget is raised so fixtures test decisions, not latency
+  - "relations": [{"new": i, "old": j, "any": rel} | {"new": i, "old": j, "none": rel}]
+    checks relation_decisions between the atoms of step i and step j
+    (`any`: at least one pair has final relation rel; `none`: no pair has it)
+  - "recall_contains_steps": [i]  recall returns at least one atom of step i
+  - "recall_hides_steps": [i]     recall returns no atom of step i
+  - "conflict_open": true         an open conflict joins an atom of step 0 and of step 1
+  - "undo_replaces": true         undo every replaces edge, then recall_contains_steps
+                                  must hold for the restored step(s)
+  - a step with "explicit": "<atom_type>" is stored through POST /atoms (no
+    decomposition, no date, no checks), like an atom stored before Phase 2
+  - "simulate": "decision_outage" the decision model is down: every step is
+    stored (201), relations are pending, nothing is hidden
+
 Cases the current system fails carry "xfail": {"phase": ..., "fix": ...} and
 run as xfail(strict=True), so a fix that makes one pass must also flip it.
 "strict": false marks a case that fails only some of the time (LLM
@@ -59,6 +77,7 @@ pytestmark = [
 PHASE0_DEDUP_THRESHOLD = 0.97  # MNEMO_DUPLICATE_SIMILARITY_THRESHOLD in production
 DEFAULT_REPEAT = int(os.environ.get("MNEMO_FIXTURE_REPEAT", "5"))
 STEP_FIELDS = ("remembered_on", "speaker", "addressee", "channel", "origin_class")
+RELATION_MODE = os.environ.get("MNEMO_FIXTURE_RELATION_MODE", "enforce")
 
 
 def _xfail_mark(x: dict):
@@ -121,8 +140,24 @@ async def test_v2_fixture(case, dedup_threshold, client, agent_with_key, pool, m
         await _provider_failure(case, client, pool, aid, headers, monkeypatch)
         return
 
+    monkeypatch.setattr(settings, "relation_mode", case.get("relation_mode", RELATION_MODE))
+    monkeypatch.setattr(settings, "relation_budget_seconds", 30.0)
+    if case.get("simulate") == "decision_outage":
+        from mnemo.server.decisions.fake import FakeDecisions
+        from mnemo.server.services import relation_service
+
+        def down(state, questions):
+            raise RuntimeError("decision provider down")
+        monkeypatch.setattr(relation_service, "get_decision_model", lambda: FakeDecisions(down))
+
     store_ids = []
     for step in case["steps"]:
+        if step.get("explicit"):
+            r = await client.post(f"/v1/agents/{aid}/atoms", headers=headers,
+                                  json={"atom_type": step["explicit"], "text_content": step["text"]})
+            assert r.status_code == 201, r.text
+            store_ids.append(("atom", r.json()["id"]))
+            continue
         body = {"text": _step_text(step)}
         for f in STEP_FIELDS:
             if step.get(f):
@@ -130,13 +165,16 @@ async def test_v2_fixture(case, dedup_threshold, client, agent_with_key, pool, m
         r = await client.post(f"/v1/agents/{aid}/remember", json=body, headers=headers)
         assert r.status_code == 201, r.text
         store_ids.append(r.json()["store_id"])
+        if case.get("simulate") == "decision_outage" and settings.relation_mode != "off" and r.json().get("atoms"):
+            assert r.json().get("relations_pending") or step is case["steps"][0], r.text
 
     try:
-        await _check(case, client, pool, aid, agent_key)
+        await _check(case, client, pool, aid, agent_key, store_ids)
     finally:
         if not sync:  # let background stores finish before the DB is cleaned
             for sid in store_ids:
-                await _wait_for_store(client, sid, headers)
+                if not isinstance(sid, tuple):
+                    await _wait_for_store(client, sid, headers)
 
 
 async def _provider_failure(case, client, pool, aid, headers, monkeypatch):
@@ -158,9 +196,69 @@ async def _provider_failure(case, client, pool, aid, headers, monkeypatch):
         assert n == a["atom_count"]
 
 
-async def _check(case, client, pool, aid, agent_key):
+async def _step_atoms(pool, store_ids) -> list[set]:
+    out = []
+    async with pool.acquire() as conn:
+        for sid in store_ids:
+            if isinstance(sid, tuple):           # explicit atom
+                out.append({UUID(sid[1])})
+                continue
+            out.append({r["id"] for r in await conn.fetch(
+                "SELECT a.id FROM atoms a JOIN sources s ON s.id = a.source_id WHERE s.store_id = $1", UUID(sid))})
+    return out
+
+
+async def _check_relations(case, pool, aid, agent_key, client, steps, failures):
+    a = case["assert"]
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT new_atom_id, old_atom_id, final_relation, guard_fired, raw_choice, inputs, probabilities "
+            "FROM relation_decisions WHERE agent_id = $1", UUID(aid))
+
+    def _why(r):   # synthetic fixtures only: safe to print
+        i = json.loads(r["inputs"] or "{}")
+        p = json.loads(r["probabilities"] or "{}")
+        rel = {k: round(v, 2) for k, v in (p.get("relation") or {}).items()}
+        return (f"{i.get('new', {}).get('kind')}({i.get('new_kind_p')})->{i.get('old', {}).get('kind')}"
+                f"({i.get('old_kind_p')}) raw={r['raw_choice']} rel={rel} chg={round(p.get('change', 0), 2)} "
+                f"attr={round(p.get('same_attribute', 0), 2)} corr={round(p.get('correction', 0), 2)} "
+                f"prec={i.get('new', {}).get('precision')}/{i.get('old', {}).get('precision')}")
+    for spec in a.get("relations", []):
+        new, old = steps[spec["new"]], steps[spec["old"]]
+        finals = [r["final_relation"] for r in rows if r["new_atom_id"] in new and r["old_atom_id"] in old]
+        guards = [r["guard_fired"] for r in rows if r["new_atom_id"] in new and r["old_atom_id"] in old]
+        guards += [_why(r) for r in rows if r["new_atom_id"] in new and r["old_atom_id"] in old]
+        if "any" in spec and spec["any"] not in finals:
+            failures.append(f"step {spec['new']} -> step {spec['old']}: no {spec['any']} (got {finals}, guards {guards})")
+        if "none" in spec and spec["none"] in finals:
+            failures.append(f"step {spec['new']} -> step {spec['old']}: unexpected {spec['none']} (guards {guards})")
+    if a.get("conflict_open"):
+        async with pool.acquire() as conn:
+            n = await conn.fetchval(
+                "SELECT count(*) FROM conflicts WHERE resolved_at IS NULL AND "
+                "((atom_a = ANY($1) AND atom_b = ANY($2)) OR (atom_a = ANY($2) AND atom_b = ANY($1)))",
+                list(steps[0]), list(steps[1]))
+        if not n:
+            failures.append("no open conflict between step 0 and step 1")
+    if a.get("undo_replaces"):
+        async with pool.acquire() as conn:
+            edges = await conn.fetch("SELECT e.id FROM edges e JOIN atoms s ON s.id = e.source_id "
+                                     "WHERE s.agent_id = $1 AND e.edge_type = 'replaces' AND e.retired_at IS NULL",
+                                     UUID(aid))
+        if not edges:
+            failures.append("undo_replaces: no replaces edge to undo")
+        for e in edges:
+            r = await client.post(f"/v1/edges/{e['id']}/undo", json={}, headers={"X-Agent-Key": agent_key})
+            if r.status_code != 200:
+                failures.append(f"undo returned {r.status_code}")
+
+
+async def _check(case, client, pool, aid, agent_key, store_ids=()):
     a = case["assert"]
     failures = []
+    steps = await _step_atoms(pool, store_ids) if store_ids else []
+    if steps:
+        await _check_relations(case, pool, aid, agent_key, client, steps, failures)
 
     if "remembered_on_any_between" in a or "remembered_on_none_before" in a:
         async with pool.acquire() as conn:
@@ -203,6 +301,13 @@ async def _check(case, client, pool, aid, agent_key):
         r = await client.post(f"/v1/agents/{aid}/recall", json=rq, headers={"X-Agent-Key": agent_key})
         assert r.status_code == 200, r.text
         recalled = [x["text_content"] for x in r.json()["atoms"]]
+        recalled_ids = {UUID(x["id"]) for x in r.json()["atoms"]}
+        for i in a.get("recall_contains_steps", []):
+            if not recalled_ids & steps[i]:
+                failures.append(f"recall returns no atom of step {i}")
+        for i in a.get("recall_hides_steps", []):
+            if recalled_ids & steps[i]:
+                failures.append(f"recall returns an atom of step {i}, which should be hidden")
         if "recall_top_match" in a:
             if not recalled or not _matches(a["recall_top_match"], recalled[0]):
                 failures.append(f"top recall result does not match {a['recall_top_match']!r}")

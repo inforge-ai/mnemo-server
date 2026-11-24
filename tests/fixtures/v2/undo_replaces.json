@@ -1,0 +1,33 @@
+{
+  "id": "undo_replaces",
+  "description": "A replaces is undone: the old atom is back in recall.",
+  "failure_pattern": "a hide cannot be reversed",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "The Avocet team uses Trello for task tracking.",
+      "remembered_on": "2026-09-02T09:00:00Z"
+    },
+    {
+      "text": "The Avocet team no longer uses Trello for task tracking.",
+      "remembered_on": "2026-10-14T09:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "Does the Avocet team use Trello?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "any": "replaces"
+      }
+    ],
+    "undo_replaces": true,
+    "recall_contains_steps": [
+      0
+    ]
+  },
+  "xfail": null
+}

@@ -72,6 +72,9 @@ class StoreSource:
     remembered_on: datetime | None = None
     domain_tags: list[str] = field(default_factory=list)
     user_name: str | None = None
+    # v2 Phase 2 (not persisted; a retry does not repeat them)
+    resolves: list[UUID] = field(default_factory=list)          # close the open conflict between these two
+    exclude_candidates: list[UUID] = field(default_factory=list) # never decided against (supersede-with-text)
 
     def request(self) -> DecomposeRequest:
         return DecomposeRequest(
@@ -105,9 +108,12 @@ async def create_store(
     addressee: str | None,
     channel: str | None,
     origin_class: str,
+    resolves: list[UUID] | None = None,
+    exclude_candidates: list[UUID] | None = None,
 ) -> StoreSource:
     """tx1: the job row and the source row, committed before decomposition."""
     src = StoreSource(
+        resolves=list(resolves or []), exclude_candidates=list(exclude_candidates or []),
         store_id=uuid4(), source_id=uuid4(), agent_id=agent_id, operator_id=operator_id,
         agent_name=agent_name, text=text, speaker=speaker or agent_name,
         addressee=addressee, channel=channel, origin_class=origin_class,
@@ -203,7 +209,7 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
 
     # No connection is held from here until persist.
     try:
-        prepared = await atom_service.prepare_atoms(src.request())
+        prepared = await atom_service.prepare_atoms(src.request(), origin_class=src.origin_class)
     except DecomposerError as exc:
         logger.warning("store %s: decomposer failed: %s", src.store_id, exc.reason)
         await _mark_failed(pool, src, exc.reason, traceback.format_exc())
@@ -213,6 +219,20 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         await _mark_failed(pool, src, "storage error", traceback.format_exc())
         return {**base, "status": "failed", "http_status": 500, "error": "storage error"}
 
+    # Relations (Phase 2): candidates on one short connection, model calls with
+    # none held, under the store's budget. Fail open: any error → no plan, and
+    # the store proceeds exactly as without relations.
+    plan = None
+    if settings.relation_mode != "off" and prepared.atoms:
+        from . import relation_service
+        try:
+            plan = await relation_service.prepare_relations(
+                pool, src.agent_id, src.source_id, src.request(), prepared.atoms, origin_class=src.origin_class,
+                exclude=src.exclude_candidates)
+        except Exception:
+            logger.exception("store %s: relation step failed; storing without relations", src.store_id)
+            plan = None
+
     t_persist = time.monotonic()
     try:
         async with pool.acquire() as conn:
@@ -220,7 +240,13 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
                 result = await atom_service.persist_atoms(
                     conn, src.agent_id, prepared, src.domain_tags,
                     source_id=src.source_id, store_id=src.store_id, operator_id=src.operator_id,
+                    plan=plan, note_date=src.remembered_on,
                 )
+                resolved = None
+                if len(src.resolves) == 2 and result["atoms"]:
+                    from .relation_service import resolve_conflict
+                    resolved = await resolve_conflict(conn, src.agent_id, src.resolves[0], src.resolves[1],
+                                                      result["atoms"][0]["id"])
                 await conn.execute(
                     """
                     UPDATE store_jobs
@@ -235,13 +261,19 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         return {**base, "status": "failed", "http_status": 500, "error": "storage error"}
 
     timings = dict(prepared.timings_ms or {})
+    if plan is not None:
+        timings.update({f"relations_{k}": v for k, v in plan.timings_ms.items()})
     timings["persist"] = round((time.monotonic() - t_persist) * 1000)
     # Ids, counts and timings only — no text (spec rule 3).
     logger.info(
         "store_complete",
         extra={"event": "store_complete", "store_id": str(src.store_id), "agent_id": str(src.agent_id),
                "atoms_created": result["atoms_created"], "duplicates_merged": result["duplicates_merged"],
-               "parts": len(prepared.usage) or 1, "timings_ms": timings},
+               "parts": len(prepared.usage) or 1, "timings_ms": timings,
+               "relation_mode": plan.mode if plan else "off",
+               "relations": result.get("relation_counts") or {},
+               "relations_pending": len(result.get("relations_pending") or []),
+               "relation_budget_exhausted": bool(plan and plan.budget_exhausted)},
     )
 
     if settings.lifecycle_detection_enabled and result["new_atom_ids"]:
@@ -258,7 +290,9 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         "atoms_created": result["atoms_created"],
         "duplicates_merged": result["duplicates_merged"],
         "atoms": result["atoms"],
-        "warnings": prepared.warnings,
+        "relations_pending": [str(x) for x in result.get("relations_pending") or []],
+        "warnings": prepared.warnings + (
+            ["no open conflict between the atoms in `resolves`"] if src.resolves and not resolved else []),
         "timings_ms": timings,
     }
 

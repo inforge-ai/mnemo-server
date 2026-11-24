@@ -19,6 +19,13 @@
     "recall_top_match": "82\\.1",
     "recall_none_match": [
       "^(?!.*(wrong|incorrect|earlier|previous|correct|82\\.1)).*76\\.1"
+    ],
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "any": "replaces"
+      }
     ]
   },
   "xfail": null,
@@ -26,5 +33,5 @@
     0.97,
     0.9
   ],
-  "note": "Guard for phase 2 at any dedup threshold. Phase 0: passed at 0.97, failed at 0.90 (the corrected atom merged into the old one). Phase 1 (2026-11-22): passes at both, 10/10 runs each with Haiku 4.5 and prompt v2 \u2014 the v2 atom names what it replaces, stays below the 0.90 merge threshold, and lifecycle detection supersedes the old atom. Store-time dedup itself is unchanged (Phase 2)."
+  "note": "Guard for phase 2 at any dedup threshold. Phase 0: passed at 0.97, failed at 0.90 (the corrected atom merged into the old one). Phase 1 (2026-11-22): passes at both, 10/10 runs each with Haiku 4.5 and prompt v2 — the v2 atom names what it replaces, stays below the 0.90 merge threshold, and lifecycle detection supersedes the old atom. Store-time dedup itself is unchanged (Phase 2)."
 }
