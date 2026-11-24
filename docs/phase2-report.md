@@ -106,6 +106,64 @@ Read-only, 2026-11-24. Production has no migration 011 yet, so there is no kind 
 - **Tested** end to end on the test DB with the fake decision model, including undo.
 - **Order.** It runs after the G2 deploy and before `MNEMO_RELATION_MODE=shadow` is set (Tom: 8.3 before shadow).
 
+## G2 package (2026-11-24) — STOP for Tom
+
+**Key.** `MNEMO_OPENROUTER_API_KEY` is set in the production `.env`: 1 line, value not read. The running container does not have it yet; compose reads `env_file` only when it creates a container, so the deploy's recreate picks it up.
+
+**Free space and memory.**
+- Free space: 63 GiB on the Docker root, 34 GiB required. `check_free_space.sh`: OK.
+- Host memory: 7,745 MB total, about 1,350 MB available.
+
+| container | MB |
+|---|---|
+| `docker-zulip-zulip-1` | 1,964 |
+| `mnemo-server-mnemo-server-1` | 1,004 |
+| `docker-zulip-database-1` | 84 |
+| `docker-zulip-rabbitmq-1` | 44 |
+| `mnemo-test-pg` | 43 |
+| `docker-zulip-memcached-1` | 10 |
+| `docker-zulip-redis-1` | 5 |
+| `valkey` | 3 |
+
+**Backup plan.** `pg_dump --format=custom` to `~/backups/mnemo-prod-<date>-pre-phase2.dump`, with a sha256 and a row-count check on `atoms` and `edges`. Every earlier dump is kept.
+
+**Rollback image.** Production runs `9b5776b`, tagged `mnemo-server:9b5776b`; `mnemo-server:2e09f2b` is also kept. Rolling back the code leaves migration 011 in place, and the old code works with it.
+
+**Migration 011 dry run on production.** The migrator lists `Pending: 011_relations`. The full migration ran inside a transaction that was rolled back, with `lock_timeout` 2 s:
+- about 0.4 s in total, of which 0.23 s is the `edges` backfill;
+- 9,096 atoms `active`, 4,052 `archived`, 0 rows breaking the status/`is_active` invariant;
+- `legacy_lifecycle` on 3,440 `narrows`, 207 `supersedes` and 2,219 `tension_with` edges;
+- after the rollback, `relation_decisions` does not exist.
+
+**Suites.** Server 750 passed, offline. Client 142 passed.
+
+**Live fixtures.** Run 4: 132 passed, 5 failed (`calculation_vs_measurement`: the conflict probability is below its 0.60 threshold), 10 xfail. See above.
+
+**Latency.** See the latency table above.
+
+**One real decision request from inside the production container.**
+- Synthetic text, `provider: {"zdr": true}`, the production key passed to that one `docker exec` through a temporary env file (mode 600, deleted).
+- Result: **HTTP 200**, model `typesafe/jev-1.14-20261014`, provider TypeSafe, **511 ms**, **$0.0000183** (435 input tokens).
+
+**Backfill previews** (read-only on production today; the real dry runs run after migration 011):
+
+| backfill | preview |
+|---|---|
+| 8.1 dates | 13,148 atoms have no `date_basis` yet (all, active or not): 10,646 undated (`stated`, from `created_at`), 2,183 day, 236 month, 83 year. The 42 clio atoms repaired in Phase 1 are among those on 1 January. |
+| 8.2 time unresolved | 152 active candidates, about $0.003 |
+| 8.3 kind | 9,096 active atoms, about $0.20 |
+
+**Deploy sequence** (`scripts/phase2/README.md`):
+1. Free-space and memory checks, image tag, backup.
+2. Deploy with `MNEMO_RELATION_MODE=off` and `MNEMO_DECISION_PROVIDER=openrouter`: migrate, rebuild, restart, health, tag, smoke test.
+3. Backfill 8.1: dry run → STOP → execute.
+4. Backfill 8.2: dry run → STOP → plan, ask, apply.
+5. Backfill 8.3: dry run → STOP → plan, ask, apply.
+6. `MNEMO_RELATION_MODE=shadow`, recreate the container, verify.
+7. Re-decide Tom's 15 Phase 1 pairs (`redecide_pairs.py --since 2026-11-23T21:56:57Z --until 2026-11-24T19:18:00Z`; 15 pairs in that window). Tom then runs `scripts/phase2/review_phase1_pairs.sql`.
+
+**What is live from the deploy onward.** Decomposer prompt v3 and the `origin_class` confidence priors are live for every write from the deploy onward, whatever the relation mode. While the mode is `off`, new atoms keep kind `unknown` and get no model grounding answer.
+
 ## Tapio
 
 0 stores since 2026-11-23 (all statuses), per Tom's instruction counted for the G2 package. The watch for its first 0.6.0rc1 store was stopped by the host's memory-pressure reaper on 2026-11-24. Tom said not to restart it.

@@ -3,7 +3,8 @@
 Runs INSIDE the server container (the app's DB role, the production decision
 client and key, every request with provider {"zdr": true}):
 
-    docker exec -i mnemo-server-mnemo-server-1 sh -c 'cd /app && .venv/bin/python - --since 2026-11-23T21:56:57Z' \\
+    docker exec -i mnemo-server-mnemo-server-1 sh -c 'cd /app && .venv/bin/python - \\
+        --since 2026-11-23T21:56:57Z --until 2026-11-24T19:18:00Z' \\
         < scripts/phase2/redecide_pairs.py
 
 Pairs: legacy lifecycle edges (decided_by = 'legacy_lifecycle'), selected by
@@ -66,12 +67,13 @@ async def main(args) -> None:
             FROM edges e JOIN atoms a ON a.id = e.source_id
             WHERE e.decided_by = 'legacy_lifecycle' AND e.edge_type = ANY($1::text[])
               AND ($2::timestamptz IS NULL OR e.created_at >= $2)
+              AND ($4::timestamptz IS NULL OR e.created_at < $4)
               AND ($3::uuid[] IS NULL OR e.id = ANY($3))
               AND NOT EXISTS (SELECT 1 FROM relation_decisions d
                               WHERE d.decided_by = 'relation_v2_backfill' AND d.inputs->>'legacy_edge_id' = e.id::text)
             ORDER BY e.created_at
             """,
-            args.edge_types.split(","), args.since, args.edge_ids.split(",") if args.edge_ids else None)
+            args.edge_types.split(","), args.since, args.edge_ids.split(",") if args.edge_ids else None, args.until)
         counts = {"pairs": len(edges), "decided": 0, "no_answer": 0, "missing_atom": 0, "cost": 0.0}
         finals = {}
         sem = asyncio.Semaphore(args.concurrency)
@@ -142,10 +144,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--edge-types", default="supersedes")
     ap.add_argument("--since", default=None)
+    ap.add_argument("--until", default=None)
     ap.add_argument("--edge-ids", default="")
     ap.add_argument("--concurrency", type=int, default=8)
     a = ap.parse_args(sys.argv[1:])
-    if a.since:
-        from datetime import datetime
-        a.since = datetime.fromisoformat(a.since.replace("Z", "+00:00"))
+    from datetime import datetime
+    for name in ("since", "until"):
+        if getattr(a, name):
+            setattr(a, name, datetime.fromisoformat(getattr(a, name).replace("Z", "+00:00")))
     asyncio.run(main(a))
