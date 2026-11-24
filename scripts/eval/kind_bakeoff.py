@@ -47,7 +47,7 @@ DECISION_MODELS = ["typesafe/jev-1.14", "liquid/d1.2-ultra"]
 GENERATIVE = ["claude-haiku-5-5"]
 GENERATOR = "claude-haiku-5-5"
 VARIANTS = ["base", "order", "wording"]
-KIND_THRESHOLD = 0.60
+KIND_THRESHOLD = 0.80   # provisional (Tom, 2026-11-24)
 
 BUCKETS = {
     "state": {
@@ -214,8 +214,40 @@ def _q(xs, q):
     return xs[min(len(xs) - 1, int(q * len(xs)))] if xs else float("nan")
 
 
+def hand_labels() -> dict[str, str]:
+    """Tom's labels from kind_label_check.csv (blank rows ignored)."""
+    if not LABEL_CHECK.exists():
+        return {}
+    out = {}
+    with LABEL_CHECK.open() as f:
+        for row in list(csv.reader(f))[1:]:
+            lab = row[-1].strip().lower() if row else ""
+            if lab in KINDS:
+                out[row[0]] = lab
+    return out
+
+
+def threshold_table(items, by, models) -> None:
+    print("\n## Kind threshold: coverage, accuracy and wrong kinds kept (base variant)\n")
+    print("| threshold | " + " | ".join(f"{m}: kept / accuracy / wrong" for m in models) + " |")
+    print("|---|" + "---|" * len(models))
+    for t in (0.5, 0.6, 0.7, 0.8, 0.9):
+        cells = []
+        for m in models:
+            rs = [r for r in by[(m, "base")].values() if r.get("answer") and r["answer"].get("probabilities")]
+            keep = [r for r in rs if max(r["answer"]["probabilities"].values()) >= t]
+            ok = sum(r["answer"]["choice"] == items[r["item"]]["kind"] for r in keep)
+            cells.append(f"{db.pct(len(keep) / len(items))} / {db.pct(ok / max(1, len(keep)))} / {len(keep) - ok}")
+        print(f"| {t:.1f} | " + " | ".join(cells) + " |")
+
+
 def report(args) -> None:
-    items = {it["id"]: it for it in db.read_jsonl(ITEMS)}
+    items = {it["id"]: dict(it) for it in db.read_jsonl(ITEMS)}
+    hand = hand_labels() if not args.generated_labels else {}
+    changed = sum(items[i]["kind"] != lab for i, lab in hand.items() if i in items)
+    for i, lab in hand.items():
+        if i in items:
+            items[i]["kind"] = lab
     rows = db.read_jsonl(RESULTS)
     by = defaultdict(dict)                      # (model, variant) -> item -> row
     for r in rows:
@@ -225,6 +257,11 @@ def report(args) -> None:
     print(f"# Kind bake-off results\n\n{n_items} synthetic atoms: " +
           ", ".join(f"{k} {v}" for k, v in sorted(Counter(i['kind'] for i in items.values()).items())) +
           f". Variants: {', '.join(VARIANTS)}. Kind threshold for coverage: {KIND_THRESHOLD}.\n")
+    if hand:
+        print(f"Labels: Tom's hand labels for the {len(hand)} checked items ({changed} differ from the generated "
+              f"label); generated labels for the other {n_items - len(hand)}.\n")
+    else:
+        print("Labels: generated labels only.\n")
     print("| model | answered | accuracy | " + " | ".join(f"recall {k}" for k in KINDS) +
           " | Brier | ECE | flip: order | flip: wording | coverage ≥ thr | accuracy ≥ thr | p50 s | p95 s | $ / 1k |")
     print("|---|---|---|" + "---|" * len(KINDS) + "---|---|---|---|---|---|---|---|---|")
@@ -270,6 +307,8 @@ def report(args) -> None:
             b = sum(preds[best][i] == items[i]["kind"] and preds[m][i] != items[i]["kind"] for i in common)
             c = sum(preds[m][i] == items[i]["kind"] and preds[best][i] != items[i]["kind"] for i in common)
             print(f"| {m} | {b} | {c} | {db.mcnemar_exact(b, c):.3f} |")
+
+    threshold_table(items, by, models)
 
     print("\n## Accuracy by boundary bucket (base variant)\n")
     buckets = sorted({it["bucket"] for it in items.values()})
@@ -323,7 +362,8 @@ def main() -> None:
     r.add_argument("--env-file", default="~/.config/mnemo/openrouter.env")
     r.add_argument("--models", default="")
     r.add_argument("--limit", type=int, default=0)
-    sub.add_parser("report")
+    rp = sub.add_parser("report")
+    rp.add_argument("--generated-labels", action="store_true", help="ignore Tom's hand labels")
     lc = sub.add_parser("labelcheck")
     lc.add_argument("--min-disagree", type=int, default=2)
     lc.add_argument("--random-n", type=int, default=20)

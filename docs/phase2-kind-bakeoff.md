@@ -2,7 +2,44 @@
 
 **Date:** 2026-11-24. **Spec:** `docs/phase2-spec.md` item 4. **Design:** `docs/phase2-design.md` §2.1, §4.
 **Script:** `scripts/eval/kind_bakeoff.py`. **Data:** `scripts/eval/data/kind_atoms.jsonl`, 160 synthetic atoms.
-**Status:** **STOP.** These are the numbers; no model has been chosen.
+**Status:**
+- Tom chose `typesafe/jev-1.14`, fallback `liquid/d1.2-ultra`, kind threshold **0.80 provisionally** (2026-11-24).
+- The threshold is fixed only after this re-score against his hand labels (below) has been reported.
+
+## Re-score against Tom's hand labels (2026-11-24)
+
+Tom labelled all 27 rows of `kind_label_check.csv`: the 7 atoms on which two or more models disagreed with the generated label, plus 20 random ones. His labels replace the generated ones for those 27; the other 133 keep the generated label.
+
+- **He changed 8 labels.** 4 were among the 7 disagreements and **4 among the 20 random rows**. That suggests the generated labels on the unchecked 133 are wrong about 20% of the time (4 of 20; the interval is wide). Every accuracy figure below carries that uncertainty.
+- **Alignment check.** His labels are not shifted by a row. Agreement with the generated label and the three models is 0.69 on the same row, and 0.23–0.39 one or two rows off.
+
+| model | answered | accuracy | recall state | recall plan | recall observation | recall rule | Brier | ECE | flip: order | flip: wording | coverage ≥ thr | accuracy ≥ thr | p50 s | p95 s | $ / 1k |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| typesafe/jev-1.14 | 100.0% | 94.4% | 94.4% | 95.5% | 95.0% | 92.5% | 0.102 | 0.046 | 1.9% | 5.0% | 88.8% | 97.2% | 0.32 | 0.43 | 0.0225 |
+| liquid/d1.2-ultra | 100.0% | 93.1% | 88.9% | 95.5% | 95.0% | 92.5% | 0.124 | 0.066 | 1.9% | 2.5% | 83.1% | 97.0% | 0.43 | 1.69 | 0.0098 |
+| claude-haiku-5-5 | 100.0% | 94.4% | 91.7% | 95.5% | 95.0% | 95.0% | 0.138 | 0.151 | 2.5% | 3.8% | 69.4% | 96.4% | 0.67 | 0.85 | 0.1416 |
+
+Coverage is measured at the provisional threshold of 0.80.
+
+**On the 27 checked rows alone:** Jev 19/27, Liquid 19/27, Haiku 18/27.
+
+**Threshold:** coverage, accuracy and wrong kinds kept, base variant.
+
+| threshold | typesafe/jev-1.14: kept / accuracy / wrong | liquid/d1.2-ultra: kept / accuracy / wrong | claude-haiku-5-5: kept / accuracy / wrong |
+|---|---|---|---|
+| 0.5 | 98.8% / 95.6% / 7 | 98.1% / 93.6% / 10 | 100.0% / 94.4% / 9 |
+| 0.6 | 95.0% / 95.4% / 7 | 93.8% / 95.3% / 7 | 96.2% / 96.1% / 6 |
+| 0.7 | 92.5% / 95.9% / 6 | 88.1% / 96.5% / 5 | 84.4% / 97.0% / 4 |
+| 0.8 | 88.8% / 97.2% / 4 | 83.1% / 97.0% / 4 | 69.4% / 96.4% / 4 |
+| 0.9 | 84.4% / 97.0% / 4 | 50.6% / 97.5% / 2 | 19.4% / 93.5% / 2 |
+
+- **Jev's wrong kinds at 0.80 are confident ones.** It keeps 4 wrong kinds at 0.8 and still 4 at 0.9 (probabilities 0.97–1.0), so raising the threshold does not remove them. All 4 are rows Tom relabelled where Jev agreed with the generator:
+  - `K0011` observation → Tom: plan;
+  - `K0026` observation → Tom: state;
+  - `K0137` state → Tom: observation;
+  - `K0159` state → Tom: rule.
+- **What this means.** At 0.80 the open question is not calibration. It is which reading of a few boundary atoms is right: a dated past action, an ongoing fee "until renewal", a cost of running something.
+- **The 8 changes by direction** (generated → Tom): state → plan 3, state → observation 1, state → rule 1, observation → plan 1, observation → state 1, rule → observation 1.
 
 ## Summary
 
