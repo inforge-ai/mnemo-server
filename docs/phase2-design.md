@@ -2,7 +2,16 @@
 
 **Date:** 2026-11-24. **Spec:** `docs/phase2-spec.md`. **Branch:** `v2/phase2` (mnemo-server, off `main` @ `927a27d`); mnemo-client `v2/phase2` (stacked on `v2/phase1`, which is PR #2 and still unmerged).
 
-**Status:** awaiting Tom's review. No feature code has been written.
+**Status:** G1 approved by Tom on 2026-11-24, with six changes. They are folded into the sections below and listed here:
+
+1. `origin_class = 'unspecified'` is a wildcard. It satisfies the † same-origin condition, and the origin guard fires only when both sides are specified and differ (§3).
+2. New column `atoms.date_basis` (`event` | `stated`). Undated atoms, new and legacy, get `valid_from = created_at`, precision `day`, basis `stated`. The § same-day rule requires basis `event` on both sides; the ordering guards accept either basis (§1, §3, §4, §9).
+3. The provider object is `{"zdr": true}` only. The G2 package includes one real request on synthetic text that succeeds (§5).
+4. The status trigger runs `BEFORE INSERT OR UPDATE` (§1).
+5. The origin guard yields `conflict` only where the cell allows `conflict`; otherwise `review` (§3).
+6. Every pair asks all four questions (relation, change, same_attribute, correction), so `decide()` can be replayed from `relation_decisions` at any threshold. The G3 grid replays; it does not re-ask (§2.2, §6).
+
+Answers to §12 are recorded there.
 
 All production figures below are read-only counts taken on 2026-11-24. The note contains no atom or source text.
 
@@ -66,7 +75,8 @@ ALTER TABLE atoms
   ADD COLUMN valid_from     timestamptz,
   ADD COLUMN valid_until    timestamptz,
   ADD COLUMN date_precision text NOT NULL DEFAULT 'unknown'
-        CHECK (date_precision IN ('day','month','year','unknown'));
+        CHECK (date_precision IN ('day','month','year','unknown')),
+  ADD COLUMN date_basis     text CHECK (date_basis IN ('event','stated'));  -- NULL until set (write time or backfill 8.1)
 UPDATE atoms SET status = 'archived' WHERE NOT is_active;          -- one pass, ~3.9k rows
 ALTER TABLE atoms ADD CONSTRAINT atoms_status_is_active
   CHECK ((status = 'archived') = (NOT is_active));
@@ -75,14 +85,18 @@ CREATE INDEX idx_atoms_agent_status ON atoms (agent_id, status) WHERE is_active;
 -- keep status in step with is_active (66 code sites write is_active; none change)
 CREATE FUNCTION atoms_sync_status() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW.is_active IS DISTINCT FROM OLD.is_active THEN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT NEW.is_active THEN NEW.status := 'archived';
+    ELSIF NEW.status = 'archived' THEN NEW.is_active := false;
+    END IF;
+  ELSIF NEW.is_active IS DISTINCT FROM OLD.is_active THEN
     NEW.status := CASE WHEN NEW.is_active THEN 'active' ELSE 'archived' END;
   ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
     NEW.is_active := (NEW.status <> 'archived');
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER atoms_sync_status BEFORE UPDATE OF is_active, status ON atoms
+CREATE TRIGGER atoms_sync_status BEFORE INSERT OR UPDATE OF is_active, status ON atoms
   FOR EACH ROW EXECUTE FUNCTION atoms_sync_status();
 
 -- edges
@@ -195,7 +209,9 @@ NEW ATOM (kind {kind}; event date …, precision …; origin …):
 {new text}
 ```
 
-A kind shows as `unknown` until it is known (§4). The model sees kinds and dates because the bake-off showed that context sharpens the replace/refine split. Whatever the model says, the matrix still decides.
+A kind shows as `unknown` until it is known (§4).
+
+**All four questions below are asked on every pair**, whatever the kinds (G1 change 6). They share the state and the round trip, and their input-only billing makes the extra questions nearly free. `decide()` is therefore a pure function of the stored `relation_decisions` row and can be replayed at any threshold. The model sees kinds and dates because the bake-off showed that context sharpens the replace/refine split. Whatever the model says, the matrix still decides.
 
 **`relation`** (`choice`). Instructions: "How does the NEW ATOM relate to the EXISTING ATOM?"
 
@@ -258,19 +274,20 @@ def decide(new: Side, old: Side, ans: Answers, th: Thresholds) -> Decision:
     if raw not in allowed:
         return downgrade(ans, th, raw, guard="matrix")
     cond = allowed[raw]
-    if cond == "dagger" and not (ans.same_attribute >= th.attr and new.origin_class == old.origin_class):
+    if cond == "dagger" and not (ans.same_attribute >= th.attr and origin_compatible(new, old)):
         return downgrade(ans, th, raw, guard="dagger")
     if cond == "ddagger" and ans.change < th.change:
         return downgrade(ans, th, raw, guard="ddagger")
     if cond == "section" and not (new.precision == old.precision == "day"
+                                  and new.date_basis == old.date_basis == "event"
                                   and same_day(new.valid_from, old.valid_from)
                                   and ans.correction >= th.correction):
         return downgrade(ans, th, raw, guard="section")
     if ans.relation[raw] < th[raw]:                         # per-relation probability threshold
         return downgrade(ans, th, raw, guard="threshold")
     if raw == "replaces":
-        if new.origin_class != old.origin_class:
-            return Decision("conflict", "origin_differs", raw)
+        if origins_differ(new, old):                        # both specified and different
+            return Decision("conflict" if "conflict" in allowed else "review", "origin_differs", raw)
         if new.precision not in ("day", "month") or old.precision not in ("day", "month"):
             return Decision("review", "precision", raw)
         if new.time_unresolved or old.time_unresolved:
@@ -278,6 +295,12 @@ def decide(new: Side, old: Side, ans: Answers, th: Thresholds) -> Decision:
         if earlier_at_coarser(new.valid_from, old.valid_from, coarser(new.precision, old.precision)):
             return Decision("review", "date_order", raw)
     return Decision(raw, None, raw)
+
+def origin_compatible(a, b):   # 'unspecified' is a wildcard
+    return "unspecified" in (a.origin_class, b.origin_class) or a.origin_class == b.origin_class
+
+def origins_differ(a, b):
+    return not origin_compatible(a, b)
 
 def downgrade(ans, th, raw, guard):
     return Decision("refines" if ans.relation["refines"] >= th.refines else "unrelated", guard, raw)
@@ -288,7 +311,7 @@ def downgrade(ans, th, raw, guard):
 - The spec's "model probability ≥ tuned threshold" guard is the threshold check above.
 
 **What happens when a guard fails:**
-- origin differs → `conflict`;
+- origin differs (both specified) → `conflict` where the cell allows it, otherwise `review`;
 - precision, unresolved time or date order → `review`;
 - probability threshold → downgrade.
 
@@ -315,17 +338,17 @@ Jev's yes/no probabilities are known to be harsh: its grounding question tuned t
   - `date_precision`: `day`, `month`, `year` or `unknown`.
 
   The decomposer still does not decide kind. `decomposer_version` becomes `anthropic:claude-haiku-5-5:prompt_v3`.
-- **`valid_from` / `date_precision` at write time:**
+- **`valid_from` / `date_precision` / `date_basis` at write time** (G1 change 2):
 
-  | kind | `valid_from` | `date_precision` |
-  |---|---|---|
-  | state, rule, observation | `event_date`, else `remembered_on` | from the decomposer, or `day` if a caller supplied `remembered_on` |
-  | plan | when the plan was made: `remembered_on`, else the store time | (see below) |
-  | all, when nothing is given | the store time (`created_at`) | `day` |
+  | kind | `valid_from` | `date_precision` | `date_basis` |
+  |---|---|---|---|
+  | state, rule, observation | `event_date`, else `remembered_on` | from the decomposer, or `day` for a caller-supplied `remembered_on` | `event` |
+  | plan | when the plan was made: `remembered_on` | `day` | `event` |
+  | any, when no date is given | `created_at` (the store time) | `day` | `stated` |
 
   For plans, the scheduled date stays in `event_date` inside `structured`.
-
-  The fallback to the store time is a proposal: the store time is a true "as of" date for a state or a plan. **Open question 3:** the alternative is NULL / `unknown`, which blocks every automatic `replaces` for undated notes.
+  - The § same-day rule requires `event` on both sides.
+  - The ordering guards (date order, precision) accept either basis.
 - **Kind below its threshold** is stored as `unknown`. Such an atom can be linked, but it is never replaced and never replaces anything.
 - **Candidates with no kind yet.** Before backfill step 8.3, nearly every candidate is `unknown`, so shadow would show almost no `replaces`. Proposal: when a candidate's kind is `unknown`, the pair step first asks the per-atom `kind` question for that candidate, which is one extra request.
   - In **shadow**, that answer goes only in `relation_decisions.inputs`; atoms are not touched.
@@ -393,12 +416,14 @@ route ── create_store (tx1: store_jobs + sources)                      uncha
 
 `DecisionModel` is a protocol with one method: `ask(state, questions) -> Answers | None`. There are two implementations: `OpenRouterDecisions` and `FakeDecisions` (scripted, for tests).
 
-- **Request body.** Every request body is built by one function, `_body()`, which always sets `provider = {"zdr": true, "data_collection": "deny"}`. A final assertion refuses to send any body without it.
+- **Request body.** Every request body is built by one function, `_body()`, which always sets `provider = {"zdr": true}` and nothing else (G1 change 3). A final assertion refuses to send any body without it.
   - A test sends through a mock transport and checks every captured body, including retries and the fallback model.
   - A second test proves that a body without `zdr` is never sent.
 - **No connection held.** Calls never hold a DB connection: the client takes no connection argument, and the store path calls it between the two transactions.
 - **Recorded per request:** model, probabilities, `usage.cost` and latency, in `relation_decisions` and in per-atom `verification`.
 - **Logs** carry ids, counts and timings only.
+- **The G2 package includes one real request** on synthetic text that succeeds with `zdr: true`.
+- **Key.** Production uses a dedicated OpenRouter key with a spending cap, set in the production `.env` (Tom's answer to Q1). Eval and bake-off runs keep using the eval key from the shell environment.
 
 ## 6. Shadow review and switch-on (G2 → G3)
 
@@ -417,7 +442,7 @@ route ── create_store (tx1: store_jobs + sources)                      uncha
 - p50/p95 `remember` with and without the check;
 - cost per 1,000 stores.
 
-**G3 tuning.** For each threshold, the report shows the wrong-`replaces` and wrong-`same` counts, and the right decisions lost, across a grid from 0.5 to 0.95. The aim is zero wrong at the smallest loss. Then Tom decides on:
+**G3 tuning** replays `decide()` over the stored rows; nothing is re-asked. For each threshold, the report shows the wrong-`replaces` and wrong-`same` counts, and the right decisions lost, across a grid from 0.5 to 0.95. The aim is zero wrong at the smallest loss. Then Tom decides on:
 - `MNEMO_RELATION_MODE=enforce`;
 - `MNEMO_LIFECYCLE_DETECTION_ENABLED=false`;
 - `MNEMO_RECALL_HIDE_SUPERSEDED=true`.
@@ -469,7 +494,8 @@ route ── create_store (tx1: store_jobs + sources)                      uncha
 ## 9. Backfill (G4; each step its own dry run, guarded execute and undo table)
 
 1. **Date precision for haiku_v1 atoms.** Deterministic SQL, `repair_precision_2026_12`.
-   - Null `remembered_on` → `unknown`.
+   - Null `remembered_on` → `valid_from = created_at`, precision `day`, basis `stated` (G1 change 2).
+   - Otherwise basis `event`, and:
    - 1 January 00:00 → `year`.
    - The 1st of another month → `month`.
    - Either of those stays `day` if the text contains an explicit day-and-month date matching that day.
@@ -522,7 +548,18 @@ The fixture runner gains `relations` assertions (expected final relation per pai
 9. Synthetic latency numbers.
 10. **G2 package:** migration dry run, CI, fixtures, latency, plus the 15 Phase 1 pairs re-decided on synthetic stand-ins. The real pairs are decided only after Tom answers open question 1.
 
-## 12. Open questions for Tom
+## 12. Open questions for Tom (answered 2026-11-24)
+
+**Answers:**
+1. **Confirmed.** Production memory text may go to OpenRouter with `zdr: true`: Jev primary, d1.2-ultra fallback. Use a dedicated production key with a spending cap, in the production `.env`.
+2. **Wrong pairs:** edge `b5cec0b3-010b-4a35-bed8-ce4f8bf3595a`, and the edge from new atom `d8589da9-cd8d-404b-9740-7706a45ff1ed` to old atom `823680ee-62aa-4488-8c08-5cfc599e84ce`. Neither may come out as `replaces`.
+3. **Yes,** as in G1 change 2.
+4. **Agreed.**
+5. **Agreed.**
+6. **Proceed without them.** No status docs go in the repo.
+7. **Merge client PR #2 to `main`,** then rebase `v2/phase2` on it.
+
+The questions as asked:
 
 1. **Production text to OpenRouter.**
    - Phase 1's standing rule was "no production memory text to any provider other than Anthropic". Spec rule 4 implies it now goes to Jev and d1.2-ultra with `zdr: true`. Please confirm explicitly.
