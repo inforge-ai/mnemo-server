@@ -53,16 +53,19 @@ async def lifespan(app: FastAPI):
 
     from .services.consolidation import consolidation_loop
     task = asyncio.create_task(consolidation_loop(pool))
+    from .services.relation_service import pending_loop
+    relation_task = asyncio.create_task(pending_loop(pool))
 
     app.state.start_time = time.time()
 
     yield
 
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for t in (task, relation_task):
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
     await drain_background(timeout=10.0)
     await close_pool()
 

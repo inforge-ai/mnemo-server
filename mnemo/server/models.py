@@ -48,6 +48,16 @@ class RememberRequest(BaseModel):
     wait: bool = True
 
 
+class StoredRelation(BaseModel):
+    """A relation decided for a stored atom (v2 Phase 2). In shadow mode it is
+    recorded only (`mode: "shadow"`): no edge, nothing hidden."""
+    relation: Literal["same", "replaces", "refines", "conflict", "review"]
+    target_atom_id: UUID
+    decision_id: UUID
+    edge_id: Optional[UUID] = None
+    mode: Literal["shadow", "enforce"]
+
+
 class StoredAtom(BaseModel):
     """One atom of a store: newly created, or an existing atom it merged into."""
     id: UUID
@@ -57,6 +67,13 @@ class StoredAtom(BaseModel):
     source_quote: Optional[str] = None
     merged_into_existing: bool = False
     flags: list[str] = []
+    # v2 Phase 2
+    kind: Optional[str] = None
+    kind_p: Optional[float] = None
+    valid_from: Optional[datetime] = None
+    date_precision: Optional[str] = None
+    status: Optional[str] = None
+    relations: list[StoredRelation] = []
 
 
 class RememberResponse(BaseModel):
@@ -68,6 +85,7 @@ class RememberResponse(BaseModel):
     atoms_created: int = 0
     duplicates_merged: int = 0
     atoms: list[StoredAtom] = []
+    relations_pending: list[UUID] = []
     warnings: list[str] = []
 
 

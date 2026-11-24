@@ -121,6 +121,22 @@ class Settings(BaseSettings):
     decision_request_timeout_seconds: float = 1.5
     decision_retries: int = 2
     openrouter_api_key: str | None = None
+    # Relation decisions (docs/phase2-design.md §3–§5). off | shadow | enforce.
+    relation_mode: Literal["off", "shadow", "enforce"] = "off"
+    relation_k: int = 5
+    relation_budget_seconds: float = 3.0
+    relation_concurrency: int = 16
+    relation_pending_interval_seconds: float = 120.0
+    relation_pending_max_attempts: int = 6
+    relation_threshold_same: float = 0.85
+    relation_threshold_replaces: float = 0.80
+    relation_threshold_conflict: float = 0.60
+    relation_threshold_refines: float = 0.50
+    relation_threshold_change: float = 0.50
+    relation_threshold_same_attribute: float = 0.50
+    relation_threshold_correction: float = 0.50
+    kind_threshold: float = 0.80              # provisional (Tom, 2026-11-24)
+    grounding_model_cutoff: float = 0.09      # Jev grounding p below this → flag model_ungrounded
     # Logging
     log_level: str = "INFO"
 
