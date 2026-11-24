@@ -96,6 +96,18 @@ async def test_recent_hides_superseded_by_default(client, agent, pool):
     assert len(allr) == 2
 
 
+async def test_recent_returns_superseded_when_setting_off(client, agent, pool, monkeypatch):
+    from mnemo.server.config import settings
+    monkeypatch.setattr(settings, "recall_hide_superseded", False)
+    ids = await _seed(pool, UUID(agent["id"]), n=2)
+    async with pool.acquire() as conn:
+        await conn.execute("INSERT INTO edges (source_id, target_id, edge_type, weight) "
+                           "VALUES ($1, $2, 'supersedes', 0.9)", ids[1], ids[0])
+    url = f"/v1/agents/{agent['id']}/recent"
+    shown = (await client.post(url, json={}, headers=_hdr(agent))).json()["atoms"]
+    assert {UUID(a["id"]) for a in shown} == set(ids)
+
+
 async def test_agents_me(client, agent, operator_with_key):
     resp = await client.get("/v1/agents/me", headers=_hdr(agent))
     assert resp.status_code == 200

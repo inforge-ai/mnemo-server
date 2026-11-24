@@ -116,3 +116,38 @@ async def test_recall_filters_superseded_even_via_graph_expansion(pool, agent_wi
     ids = [a["id"] for a in result["atoms"]]
     assert new_id in ids
     assert old_id not in ids, "graph expansion re-introduced superseded atom"
+
+
+def test_recall_hide_superseded_defaults_true():
+    from mnemo.server.config import Settings
+    assert Settings.model_fields["recall_hide_superseded"].default is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expand", [False, True])
+async def test_recall_returns_superseded_when_setting_off(pool, agent_with_address, monkeypatch, expand):
+    """recall_hide_superseded=False: superseded atoms come back, both as vector
+    matches and via graph expansion, even with include_superseded=False."""
+    from mnemo.server.config import settings
+    monkeypatch.setattr(settings, "recall_hide_superseded", False)
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        old_id = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        await create_edge(
+            conn=conn, source_id=new_id, target_id=old_id,
+            edge_type="supersedes", weight=0.9,
+            metadata={"reasoning": "x", "detector": "auto_lifecycle_v1"},
+        )
+        await create_edge(conn=conn, source_id=new_id, target_id=old_id, edge_type="related", weight=0.8)
+
+        result = await retrieve(
+            conn=conn, agent_id=agent_id, query="Zulip integration status",
+            domain_tags=None, min_confidence=0.0, min_similarity=0.0,
+            max_results=10 if not expand else 1, expand_graph=expand, expansion_depth=1 if expand else 0,
+            include_superseded=False, similarity_drop_threshold=None,
+            verbosity="standard", max_content_chars=None, max_total_tokens=None,
+        )
+
+    ids = [a["id"] for a in result["atoms"]]
+    assert new_id in ids and old_id in ids

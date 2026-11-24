@@ -108,6 +108,9 @@ class Settings(BaseSettings):
     supersedes_threshold: float = 0.75
     tension_threshold: float = 0.65
     narrows_threshold: float = 0.65
+    # Recall and recent hide atoms that are the target of a supersedes edge from an
+    # active atom. False = return them (as if every request set include_superseded).
+    recall_hide_superseded: bool = True
     # Logging
     log_level: str = "INFO"
 
