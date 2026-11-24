@@ -40,7 +40,7 @@ case "${1:-}" in
     mapfile -t tags < <(docker images "$REPO" --format '{{.CreatedAt}}\t{{.Tag}}' | sort -r | cut -f2 | grep -vx "$c" || true)
     keep_prev="${tags[0]:-}"
     for t in "${tags[@]:1}"; do docker rmi "$REPO:$t" >/dev/null && echo "removed old tag $REPO:$t"; done
-    echo "deployed $REPO:$c; rollback image: ${keep_prev:+$REPO:$keep_prev}${keep_prev:-none}"
+    echo "deployed $REPO:$c; rollback image: ${keep_prev:+$REPO:}${keep_prev:-none}"
     ;;
   list)
     docker images "$REPO" --format '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}'
