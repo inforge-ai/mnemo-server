@@ -248,7 +248,8 @@ def _side_dict(text: str, side: Side) -> dict:
 
 async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID | None, req, atoms: list,
                             mode: str | None = None, model: DecisionModel | None = None,
-                            origin_class: str = "unspecified") -> RelationPlan | None:
+                            origin_class: str = "unspecified",
+                            exclude: list[UUID] | None = None) -> RelationPlan | None:
     """`atoms`: PreparedAtom list (candidate + embedding). Returns None when relations are off."""
     mode = mode or settings.relation_mode
     if mode == "off" or not atoms:
@@ -260,7 +261,8 @@ async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID 
     plan = RelationPlan(mode=mode, classes=[AtomClass() for _ in atoms], sides=[], pairs=[])
 
     async with pool.acquire() as conn:
-        cands = await fetch_candidates(conn, agent_id, [p.embedding for p in atoms], source_id, settings.relation_k)
+        cands = await fetch_candidates(conn, agent_id, [p.embedding for p in atoms], source_id, settings.relation_k,
+                                       exclude)
     t1 = time.monotonic()
     plan.timings_ms["candidates"] = round((t1 - t0) * 1000)
 
@@ -605,3 +607,113 @@ async def pending_loop(pool: asyncpg.Pool) -> None:
             await process_pending(pool)
         except Exception:
             logger.exception("relation pending worker failed")
+
+
+# ── explicit API (docs/phase2-design.md §7) ─────────────────────────────────
+
+class RelationApiError(Exception):
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
+async def supersede(conn: asyncpg.Connection, agent_id: UUID, old_id: UUID, new_id: UUID, reason: str) -> dict:
+    """The agent says new_id replaces old_id: an `agent` edge; the old atom is
+    superseded with valid_until = the new atom's valid_from."""
+    if old_id == new_id:
+        raise RelationApiError(422, "an atom cannot supersede itself")
+    rows = {r["id"]: r for r in await conn.fetch(
+        "SELECT id, status, is_active, COALESCE(valid_from, created_at) AS vf FROM atoms "
+        "WHERE id = ANY($1) AND agent_id = $2 FOR UPDATE", [old_id, new_id], agent_id)}
+    if old_id not in rows or new_id not in rows:
+        raise RelationApiError(404, "atom not found")
+    if rows[old_id]["status"] != "active":
+        raise RelationApiError(409, f"atom is {rows[old_id]['status']}; only an active atom can be superseded")
+    if not rows[new_id]["is_active"]:
+        raise RelationApiError(409, "the superseding atom is not active")
+    edge_id = await _edge(conn, new_id, old_id, "replaces", 1.0, "agent", {"reason": reason})
+    if edge_id is None:
+        edge_id = await conn.fetchval(
+            "UPDATE edges SET decided_by = 'agent', retired_at = NULL, metadata = $3::jsonb "
+            "WHERE source_id = $1 AND target_id = $2 AND edge_type = 'replaces' RETURNING id",
+            new_id, old_id, json.dumps({"reason": reason}))
+    await conn.execute("UPDATE atoms SET status = 'superseded', valid_until = $2 WHERE id = $1",
+                       old_id, rows[new_id]["vf"])
+    return {"edge_id": edge_id, "old_atom_id": old_id, "by_atom_id": new_id, "status": "superseded"}
+
+
+async def undo(conn: asyncpg.Connection, agent_id: UUID, edge_id: UUID) -> dict:
+    """Reverse a `replaces` or `same`: the hidden atom is active again, evidence
+    added by `same` is taken back, and the edge is retired (never deleted)."""
+    e = await conn.fetchrow(
+        """
+        SELECT e.id, e.source_id, e.target_id, e.edge_type, e.retired_at, e.metadata,
+               s.agent_id AS src_agent, t.agent_id AS tgt_agent
+        FROM edges e JOIN atoms s ON s.id = e.source_id JOIN atoms t ON t.id = e.target_id
+        WHERE e.id = $1 FOR UPDATE OF e
+        """, edge_id)
+    if e is None or e["src_agent"] != agent_id or e["tgt_agent"] != agent_id:
+        raise RelationApiError(404, "edge not found")
+    if e["edge_type"] not in ("replaces", "same"):
+        raise RelationApiError(409, f"only replaces or same can be undone (this edge is {e['edge_type']})")
+    if e["retired_at"] is not None:
+        raise RelationApiError(409, "already undone")
+    meta = _verification(e["metadata"])
+    if e["edge_type"] == "replaces":
+        restored = e["target_id"]
+        await conn.execute("UPDATE atoms SET status = 'active', valid_until = NULL "
+                           "WHERE id = $1 AND status = 'superseded'", restored)
+    else:
+        restored = e["source_id"]
+        await conn.execute("UPDATE atoms SET status = 'active' WHERE id = $1 AND status = 'merged'", restored)
+        if meta.get("evidence_added") and meta.get("old_alpha") is not None:
+            await conn.execute("UPDATE atoms SET confidence_alpha = $2, confidence_beta = $3 WHERE id = $1",
+                               e["target_id"], meta["old_alpha"], meta["old_beta"])
+    await conn.execute("UPDATE edges SET retired_at = now() WHERE id = $1", edge_id)
+    return {"edge_id": edge_id, "undone": e["edge_type"], "restored_atom_id": restored}
+
+
+async def list_conflicts(conn: asyncpg.Connection, agent_id: UUID, open_only: bool = True, limit: int = 20) -> list[dict]:
+    rows = await conn.fetch(
+        """
+        SELECT c.id, c.opened_at, c.resolved_at, c.resolved_by_atom_id,
+               a.id AS a_id, a.text_content AS a_text, a.kind AS a_kind,
+               a.confidence_alpha / (a.confidence_alpha + a.confidence_beta) AS a_conf,
+               COALESCE(sa.origin_class, 'unspecified') AS a_origin,
+               b.id AS b_id, b.text_content AS b_text, b.kind AS b_kind,
+               b.confidence_alpha / (b.confidence_alpha + b.confidence_beta) AS b_conf,
+               COALESCE(sb.origin_class, 'unspecified') AS b_origin
+        FROM conflicts c
+        JOIN atoms a ON a.id = c.atom_a LEFT JOIN sources sa ON sa.id = a.source_id
+        JOIN atoms b ON b.id = c.atom_b LEFT JOIN sources sb ON sb.id = b.source_id
+        WHERE c.agent_id = $1 AND ($2 = false OR c.resolved_at IS NULL)
+        ORDER BY LEAST(a.confidence_alpha / (a.confidence_alpha + a.confidence_beta),
+                       b.confidence_alpha / (b.confidence_alpha + b.confidence_beta)) ASC,
+                 (COALESCE(sa.origin_class, 'unspecified') <> COALESCE(sb.origin_class, 'unspecified')) DESC,
+                 c.opened_at ASC
+        LIMIT $3
+        """, agent_id, open_only, limit)
+    return [{
+        "id": r["id"], "opened_at": r["opened_at"], "resolved_at": r["resolved_at"],
+        "resolved_by_atom_id": r["resolved_by_atom_id"],
+        "origins_differ": r["a_origin"] != r["b_origin"],
+        "atoms": [
+            {"id": r["a_id"], "text_content": r["a_text"], "kind": r["a_kind"],
+             "confidence_expected": float(r["a_conf"]), "origin_class": r["a_origin"]},
+            {"id": r["b_id"], "text_content": r["b_text"], "kind": r["b_kind"],
+             "confidence_expected": float(r["b_conf"]), "origin_class": r["b_origin"]},
+        ],
+    } for r in rows]
+
+
+async def resolve_conflict(conn: asyncpg.Connection, agent_id: UUID, atom_a: UUID, atom_b: UUID,
+                           by_atom_id: UUID) -> int:
+    """Close the open conflict between two atoms; supersedes neither side."""
+    result = await conn.execute(
+        """
+        UPDATE conflicts SET resolved_at = now(), resolved_by_atom_id = $4
+        WHERE agent_id = $1 AND resolved_at IS NULL
+          AND LEAST(atom_a, atom_b) = LEAST($2::uuid, $3::uuid)
+          AND GREATEST(atom_a, atom_b) = GREATEST($2::uuid, $3::uuid)
+        """, agent_id, atom_a, atom_b, by_atom_id)
+    return int(result.split()[-1])

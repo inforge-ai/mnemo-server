@@ -1,5 +1,6 @@
 """Recall response carries lifecycle_edges metadata for tension_with / narrows
-edges. Supersedes edges remain hidden by _filter_superseded."""
+edges. Since v2 Phase 2, hiding follows atoms.status (superseded / merged);
+legacy supersedes edges hide nothing."""
 import pytest
 
 from mnemo.server.services.atom_service import _insert_atom, create_edge, retrieve
@@ -67,6 +68,8 @@ async def test_recall_does_not_surface_supersedes_in_lifecycle_edges(pool, agent
             edge_type="supersedes", weight=0.9,
             metadata={"reasoning": "x", "detector": "auto_lifecycle_v1"},
         )
+        # v2 Phase 2: hiding follows status (set by a v2 decision), not legacy edges.
+        await conn.execute("UPDATE atoms SET status = 'superseded' WHERE id = $1", old_id)
 
         result = await retrieve(
             conn=conn, agent_id=agent_id, query="Zulip integration status",
@@ -99,6 +102,7 @@ async def test_recall_filters_superseded_even_via_graph_expansion(pool, agent_wi
             edge_type="supersedes", weight=0.9,
             metadata={"reasoning": "x", "detector": "auto_lifecycle_v1"},
         )
+        await conn.execute("UPDATE atoms SET status = 'superseded' WHERE id = $1", old_id)
         # 'related' edge gives graph expansion a path back to the old atom
         await create_edge(
             conn=conn, source_id=new_id, target_id=old_id,
@@ -140,6 +144,7 @@ async def test_recall_returns_superseded_when_setting_off(pool, agent_with_addre
             metadata={"reasoning": "x", "detector": "auto_lifecycle_v1"},
         )
         await create_edge(conn=conn, source_id=new_id, target_id=old_id, edge_type="related", weight=0.8)
+        await conn.execute("UPDATE atoms SET status = 'superseded' WHERE id = $1", old_id)
 
         result = await retrieve(
             conn=conn, agent_id=agent_id, query="Zulip integration status",
@@ -151,3 +156,22 @@ async def test_recall_returns_superseded_when_setting_off(pool, agent_with_addre
 
     ids = [a["id"] for a in result["atoms"]]
     assert new_id in ids and old_id in ids
+
+
+@pytest.mark.asyncio
+async def test_legacy_supersedes_edge_alone_hides_nothing(pool, agent_with_address):
+    """Phase 2: legacy edges never change status, so they no longer hide atoms."""
+    agent_id = agent_with_address["id"]
+    async with pool.acquire() as conn:
+        old_id = await _insert(conn, agent_id, "Zulip integration is a planned future task", "episodic")
+        new_id = await _insert(conn, agent_id, "Zulip integration is complete and in daily use", "episodic")
+        await create_edge(conn=conn, source_id=new_id, target_id=old_id, edge_type="supersedes", weight=0.9,
+                          metadata={"reasoning": "x", "detector": "auto_lifecycle_v1"})
+        result = await retrieve(
+            conn=conn, agent_id=agent_id, query="Zulip integration status",
+            domain_tags=None, min_confidence=0.0, min_similarity=0.0,
+            max_results=10, expand_graph=False, expansion_depth=0,
+            include_superseded=False, similarity_drop_threshold=None,
+            verbosity="standard", max_content_chars=None, max_total_tokens=None,
+        )
+    assert {old_id, new_id} <= {a["id"] for a in result["atoms"]}

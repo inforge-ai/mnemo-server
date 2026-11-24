@@ -87,8 +87,9 @@ async def test_recent_orders_and_filters_without_access_update(client, agent, po
 async def test_recent_hides_superseded_by_default(client, agent, pool):
     ids = await _seed(pool, UUID(agent["id"]), n=2)
     async with pool.acquire() as conn:
-        await conn.execute("INSERT INTO edges (source_id, target_id, edge_type, weight) "
-                           "VALUES ($1, $2, 'supersedes', 0.9)", ids[1], ids[0])
+        await conn.execute("INSERT INTO edges (source_id, target_id, edge_type, weight, decided_by) "
+                           "VALUES ($1, $2, 'replaces', 0.9, 'relation_v2')", ids[1], ids[0])
+        await conn.execute("UPDATE atoms SET status = 'superseded' WHERE id = $1", ids[0])
     url = f"/v1/agents/{agent['id']}/recent"
     shown = (await client.post(url, json={}, headers=_hdr(agent))).json()["atoms"]
     assert [UUID(a["id"]) for a in shown] == [ids[1]]
@@ -101,8 +102,7 @@ async def test_recent_returns_superseded_when_setting_off(client, agent, pool, m
     monkeypatch.setattr(settings, "recall_hide_superseded", False)
     ids = await _seed(pool, UUID(agent["id"]), n=2)
     async with pool.acquire() as conn:
-        await conn.execute("INSERT INTO edges (source_id, target_id, edge_type, weight) "
-                           "VALUES ($1, $2, 'supersedes', 0.9)", ids[1], ids[0])
+        await conn.execute("UPDATE atoms SET status = 'superseded' WHERE id = $1", ids[0])
     url = f"/v1/agents/{agent['id']}/recent"
     shown = (await client.post(url, json={}, headers=_hdr(agent))).json()["atoms"]
     assert {UUID(a["id"]) for a in shown} == set(ids)

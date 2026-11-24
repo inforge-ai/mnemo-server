@@ -46,6 +46,55 @@ class RememberRequest(BaseModel):
     channel: Optional[str] = Field(None, min_length=1, max_length=200)
     origin_class: OriginClass = "unspecified"
     wait: bool = True
+    # v2 Phase 2: this note resolves the open conflict between these two atoms
+    # (it closes the conflict and supersedes neither side).
+    resolves: Optional[list[UUID]] = Field(None, min_length=2, max_length=2)
+
+
+class SupersedeRequest(BaseModel):
+    """Exactly one of by_atom_id / text."""
+    by_atom_id: Optional[UUID] = None
+    text: Optional[str] = Field(None, min_length=3, max_length=50_000)
+    reason: str = Field(..., min_length=1, max_length=2000)
+
+
+class SupersedeResponse(BaseModel):
+    edge_id: UUID
+    old_atom_id: UUID
+    by_atom_id: UUID
+    status: str
+    store_id: Optional[UUID] = None
+
+
+class UndoRequest(BaseModel):
+    reason: Optional[str] = Field(None, max_length=2000)
+
+
+class UndoResponse(BaseModel):
+    edge_id: UUID
+    undone: Literal["replaces", "same"]
+    restored_atom_id: UUID
+
+
+class ConflictAtom(BaseModel):
+    id: UUID
+    text_content: str
+    kind: Optional[str] = None
+    confidence_expected: float
+    origin_class: str
+
+
+class ConflictResponse(BaseModel):
+    id: UUID
+    opened_at: datetime
+    resolved_at: Optional[datetime] = None
+    resolved_by_atom_id: Optional[UUID] = None
+    origins_differ: bool
+    atoms: list[ConflictAtom]
+
+
+class ConflictListResponse(BaseModel):
+    conflicts: list[ConflictResponse]
 
 
 class StoredRelation(BaseModel):
@@ -123,6 +172,12 @@ class AtomCreate(BaseModel):
     # Ticket 4b: when the event/observation happened (episodic atoms only).
     remembered_on: Optional[datetime] = None
 
+class HiddenBy(BaseModel):
+    relation: Literal["replaces", "same"]
+    by_atom_id: UUID
+    edge_id: UUID
+
+
 class AtomResponse(BaseModel):
     id: UUID
     agent_id: UUID
@@ -145,7 +200,7 @@ class AtomResponse(BaseModel):
     # match, "graph" = pulled in via 1-hop edge expansion from a vector match.
     # `via` is set only when match_type == "graph" and points to the vector
     # match that was the expansion source.
-    match_type: Optional[Literal["vector", "graph"]] = None
+    match_type: Optional[Literal["vector", "graph", "conflict_partner"]] = None
     via: Optional[UUID] = None
     # When the event/observation happened (Ticket 4b, episodic atoms only).
     # Distinct from created_at — that's when mnemo stored the atom. NULL for
@@ -159,6 +214,14 @@ class AtomResponse(BaseModel):
     # recall path when the atom participates in such edges. supersedes edges
     # are filtered server-side and never appear here.
     lifecycle_edges: list[LifecycleEdge] | None = None
+    # v2 Phase 2: kind, validity and status; what hid an atom (only when hidden
+    # atoms are requested); the open conflict an atom is part of.
+    kind: Optional[str] = None
+    valid_from: Optional[datetime] = None
+    date_precision: Optional[str] = None
+    status: Optional[str] = None
+    hidden_by: Optional[HiddenBy] = None
+    conflict_id: Optional[UUID] = None
 
 # ── Retrieval ──
 

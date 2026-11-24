@@ -72,6 +72,9 @@ class StoreSource:
     remembered_on: datetime | None = None
     domain_tags: list[str] = field(default_factory=list)
     user_name: str | None = None
+    # v2 Phase 2 (not persisted; a retry does not repeat them)
+    resolves: list[UUID] = field(default_factory=list)          # close the open conflict between these two
+    exclude_candidates: list[UUID] = field(default_factory=list) # never decided against (supersede-with-text)
 
     def request(self) -> DecomposeRequest:
         return DecomposeRequest(
@@ -105,9 +108,12 @@ async def create_store(
     addressee: str | None,
     channel: str | None,
     origin_class: str,
+    resolves: list[UUID] | None = None,
+    exclude_candidates: list[UUID] | None = None,
 ) -> StoreSource:
     """tx1: the job row and the source row, committed before decomposition."""
     src = StoreSource(
+        resolves=list(resolves or []), exclude_candidates=list(exclude_candidates or []),
         store_id=uuid4(), source_id=uuid4(), agent_id=agent_id, operator_id=operator_id,
         agent_name=agent_name, text=text, speaker=speaker or agent_name,
         addressee=addressee, channel=channel, origin_class=origin_class,
@@ -221,7 +227,8 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         from . import relation_service
         try:
             plan = await relation_service.prepare_relations(
-                pool, src.agent_id, src.source_id, src.request(), prepared.atoms, origin_class=src.origin_class)
+                pool, src.agent_id, src.source_id, src.request(), prepared.atoms, origin_class=src.origin_class,
+                exclude=src.exclude_candidates)
         except Exception:
             logger.exception("store %s: relation step failed; storing without relations", src.store_id)
             plan = None
@@ -235,6 +242,11 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
                     source_id=src.source_id, store_id=src.store_id, operator_id=src.operator_id,
                     plan=plan, note_date=src.remembered_on,
                 )
+                resolved = None
+                if len(src.resolves) == 2 and result["atoms"]:
+                    from .relation_service import resolve_conflict
+                    resolved = await resolve_conflict(conn, src.agent_id, src.resolves[0], src.resolves[1],
+                                                      result["atoms"][0]["id"])
                 await conn.execute(
                     """
                     UPDATE store_jobs
@@ -279,7 +291,8 @@ async def run_store(pool: asyncpg.Pool, src: StoreSource) -> dict:
         "duplicates_merged": result["duplicates_merged"],
         "atoms": result["atoms"],
         "relations_pending": [str(x) for x in result.get("relations_pending") or []],
-        "warnings": prepared.warnings,
+        "warnings": prepared.warnings + (
+            ["no open conflict between the atoms in `resolves`"] if src.resolves and not resolved else []),
         "timings_ms": timings,
     }
 

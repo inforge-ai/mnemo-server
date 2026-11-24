@@ -218,7 +218,7 @@ async def _get_atom_row(
             a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
-            a.remembered_on, a.source_id, s.origin_class,
+            a.remembered_on, a.source_id, s.origin_class, a.kind, a.valid_from, a.date_precision, a.status,
             effective_confidence(
                 a.confidence_alpha, a.confidence_beta,
                 a.decay_type, a.decay_half_life_days,
@@ -401,6 +401,11 @@ def _row_to_atom_response(
         # v2 Phase 1 provenance (NULL for atoms stored before Phase 1).
         "source_id": _safe_get(row, "source_id"),
         "origin_class": _safe_get(row, "origin_class"),
+        # v2 Phase 2
+        "kind": _safe_get(row, "kind"),
+        "valid_from": _safe_get(row, "valid_from"),
+        "date_precision": _safe_get(row, "date_precision"),
+        "status": _safe_get(row, "status"),
     }
 
 
@@ -824,7 +829,7 @@ async def retrieve(
             a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
-            a.remembered_on, a.source_id, s.origin_class,
+            a.remembered_on, a.source_id, s.origin_class, a.kind, a.valid_from, a.date_precision, a.status,
             a.embedding,
             1 - (a.embedding <=> $1::vector) AS cosine_sim,
             effective_confidence(
@@ -972,6 +977,9 @@ async def retrieve(
     # post-merge so superseded atoms can't surface via either path.
     if not include_superseded:
         all_atoms = await _filter_superseded(conn, all_atoms)
+    else:
+        await _attach_hidden_by(conn, all_atoms)
+    all_atoms = await _attach_conflict_partners(conn, agent_id, all_atoms)
     await _attach_lifecycle_edges(conn, all_atoms)
     return {
         "atoms": all_atoms,
@@ -979,26 +987,79 @@ async def retrieve(
     }
 
 
+HIDDEN_STATUSES = ("superseded", "merged")
+
+
 async def _filter_superseded(
     conn: asyncpg.Connection,
-    rows: list[asyncpg.Record],
-) -> list[asyncpg.Record]:
+    rows: list,
+) -> list:
+    """Drop atoms whose status is superseded or merged (v2 Phase 2). Only a v2
+    relation decision or the supersede API sets those; legacy `supersedes`
+    edges no longer hide anything."""
     if not rows:
         return rows
-    atom_ids = [r["id"] for r in rows]
-    superseded = await conn.fetch(
-        """
-        SELECT DISTINCT e.target_id
-        FROM edges e
-        JOIN atoms a2 ON a2.id = e.source_id
-        WHERE e.target_id = ANY($1)
-          AND e.edge_type = 'supersedes'
-          AND a2.is_active = true
-        """,
-        atom_ids,
+    hidden = await conn.fetch(
+        "SELECT id FROM atoms WHERE id = ANY($1) AND status = ANY($2::text[])",
+        [r["id"] for r in rows], list(HIDDEN_STATUSES),
     )
-    superseded_ids = {r["target_id"] for r in superseded}
-    return [r for r in rows if r["id"] not in superseded_ids]
+    hidden_ids = {r["id"] for r in hidden}
+    return [r for r in rows if r["id"] not in hidden_ids]
+
+
+async def _attach_hidden_by(conn: asyncpg.Connection, atoms: list[dict]) -> None:
+    """For returned atoms that are superseded or merged: what hid them."""
+    ids = [a["id"] for a in atoms if a.get("status") in HIDDEN_STATUSES]
+    if not ids:
+        return
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (hidden) hidden, edge_type, by_atom, id FROM (
+            SELECT e.target_id AS hidden, e.edge_type, e.source_id AS by_atom, e.id, e.created_at
+            FROM edges e WHERE e.target_id = ANY($1) AND e.edge_type = 'replaces' AND e.retired_at IS NULL
+            UNION ALL
+            SELECT e.source_id, e.edge_type, e.target_id, e.id, e.created_at
+            FROM edges e WHERE e.source_id = ANY($1) AND e.edge_type = 'same' AND e.retired_at IS NULL
+        ) x ORDER BY hidden, created_at DESC
+        """,
+        ids,
+    )
+    by = {r["hidden"]: {"relation": r["edge_type"], "by_atom_id": r["by_atom"], "edge_id": r["id"]} for r in rows}
+    for a in atoms:
+        if a["id"] in by:
+            a["hidden_by"] = by[a["id"]]
+
+
+async def _attach_conflict_partners(conn: asyncpg.Connection, agent_id: UUID, atoms: list[dict]) -> list[dict]:
+    """An atom in an open conflict brings its partner once (match_type
+    conflict_partner). Partners of partners are not followed."""
+    present = {a["id"] for a in atoms}
+    if not present:
+        return atoms
+    rows = await conn.fetch(
+        """
+        SELECT id, atom_a, atom_b FROM conflicts
+        WHERE agent_id = $1 AND resolved_at IS NULL AND (atom_a = ANY($2) OR atom_b = ANY($2))
+        ORDER BY opened_at
+        """,
+        agent_id, list(present),
+    )
+    for a in atoms:
+        for r in rows:
+            if a["id"] in (r["atom_a"], r["atom_b"]):
+                a["conflict_id"] = r["id"]
+                break
+    added: list[dict] = []
+    for r in rows:
+        for mine, other in ((r["atom_a"], r["atom_b"]), (r["atom_b"], r["atom_a"])):
+            if mine in present and other not in present:
+                row = await _get_atom_row(conn, other, agent_id)
+                if row is not None and row["is_active"]:
+                    item = _row_to_atom_response(row, None, match_type="conflict_partner", via=mine)
+                    item["conflict_id"] = r["id"]
+                    added.append(item)
+                    present.add(other)
+    return atoms + added
 
 
 async def _attach_lifecycle_edges(
@@ -1095,7 +1156,7 @@ async def recent(
             a.id, a.agent_id, a.atom_type, a.text_content, a.structured,
             a.confidence_alpha, a.confidence_beta,
             a.source_type, a.domain_tags, a.created_at, a.last_accessed, a.access_count, a.is_active,
-            a.remembered_on, a.source_id, s.origin_class,
+            a.remembered_on, a.source_id, s.origin_class, a.kind, a.valid_from, a.date_precision, a.status,
             effective_confidence(
                 a.confidence_alpha, a.confidence_beta,
                 a.decay_type, a.decay_half_life_days,
@@ -1109,15 +1170,16 @@ async def recent(
           AND ($3::text[] IS NULL OR a.domain_tags && $3)
           AND ($4::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) >= $4)
           AND ($5::timestamptz IS NULL OR COALESCE(a.remembered_on, a.created_at) < $5)
-          AND ($6 OR NOT EXISTS (
-                SELECT 1 FROM edges e JOIN atoms src ON src.id = e.source_id
-                WHERE e.target_id = a.id AND e.edge_type = 'supersedes' AND src.is_active = true))
+          AND ($6 OR a.status NOT IN ('superseded', 'merged'))
         ORDER BY {order}
         LIMIT $7
         """,
         agent_id, atom_types, domain_tags, since, until, include_superseded, limit,
     )
-    return [_row_to_atom_response(r) for r in rows]
+    atoms = [_row_to_atom_response(r) for r in rows]
+    if include_superseded:
+        await _attach_hidden_by(conn, atoms)
+    return atoms
 
 
 async def soft_delete_atom(

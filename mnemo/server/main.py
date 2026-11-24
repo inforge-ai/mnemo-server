@@ -90,12 +90,13 @@ app.add_middleware(
 
 
 def _register_routers():
-    from .routes import admin, admin_agents, admin_operators, admin_trust, agents, atoms, auth, capabilities, health, memory, shares, views
+    from .routes import admin, admin_agents, admin_operators, admin_trust, agents, atoms, auth, capabilities, health, memory, relations, shares, views
     app.include_router(health.router, prefix="/v1")
     app.include_router(auth.router, prefix="/v1")
     app.include_router(agents.router, prefix="/v1")
     app.include_router(memory.router, prefix="/v1")
     app.include_router(atoms.router, prefix="/v1")
+    app.include_router(relations.router, prefix="/v1")
     app.include_router(views.router, prefix="/v1")
     app.include_router(capabilities.router, prefix="/v1")
     app.include_router(shares.router, prefix="/v1")

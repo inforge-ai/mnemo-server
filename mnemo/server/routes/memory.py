@@ -90,6 +90,7 @@ async def remember(agent_id: str, body: RememberRequest, auth: AuthContext = Dep
             addressee=body.addressee,
             channel=body.channel,
             origin_class=body.origin_class,
+            resolves=body.resolves,
         )
 
     if body.wait:
