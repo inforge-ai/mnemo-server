@@ -1,0 +1,32 @@
+{
+  "id": "observation_correction",
+  "description": "The same event on the same day, explicitly corrected: the correction replaces it.",
+  "failure_pattern": "a corrected reading stays current",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "The Grebe nightly backup on 20 November 2026 finished at 02:10 UTC.",
+      "remembered_on": "2026-11-20T08:00:00Z"
+    },
+    {
+      "text": "Correction: the Grebe nightly backup on 20 November 2026 finished at 02:40 UTC, not 02:10.",
+      "remembered_on": "2026-11-20T15:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "When did the Grebe nightly backup on 20 November 2026 finish?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "any": "replaces"
+      }
+    ],
+    "recall_hides_steps": [
+      0
+    ]
+  },
+  "xfail": null
+}

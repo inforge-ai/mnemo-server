@@ -1,0 +1,38 @@
+{
+  "id": "series_two_days",
+  "description": "Runs on two different days are a series: neither hides the other.",
+  "failure_pattern": "a day's observation retires another day's observation",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "Ana ran 6 km along the river path on 20 November 2026.",
+      "remembered_on": "2026-11-20T19:00:00Z"
+    },
+    {
+      "text": "Ana ran 8 km along the river path on 22 November 2026.",
+      "remembered_on": "2026-11-22T19:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "Ana's runs along the river path"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      },
+      {
+        "new": 1,
+        "old": 0,
+        "none": "same"
+      }
+    ],
+    "recall_contains_steps": [
+      0,
+      1
+    ]
+  },
+  "xfail": null
+}

@@ -19,11 +19,15 @@
     "recall_top_match": "done|complete|finished|migrated",
     "recall_none_match": [
       "\\bplan(s|ned|ning)?\\b"
+    ],
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "any": "replaces"
+      }
     ]
   },
-  "xfail": {
-    "phase": "phase 2",
-    "fix": "deterministic planned->done supersession; fails ~1 in 4 runs today",
-    "strict": false
-  }
+  "xfail": null,
+  "note": "Phase 2: expected to resolve deterministically via the change question (observation/plan ‡)."
 }

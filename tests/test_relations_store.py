@@ -296,3 +296,31 @@ async def test_relation_step_crash_fails_open(client, agent, pool, mode, monkeyp
     monkeypatch.setattr(relation_service, "prepare_relations", boom)
     body = await _remember(client, agent, [_atom(OLD, D1, "day")])
     assert body["atoms_created"] == 1 and body["relations_pending"] == []
+
+
+async def test_same_from_the_same_source_adds_no_evidence(client, agent, pool):
+    """Spec fixture 'duplicate from the same source': `same`, no evidence added.
+    Across remember calls sources are always independent, so this is tested at apply()."""
+    from mnemo.server.services.relations import Decision
+    from mnemo.server.services.relation_service import Candidate, PairResult, apply
+    async with pool.acquire() as conn:
+        src = await conn.fetchval(
+            "INSERT INTO sources (agent_id, store_id, text, speaker) VALUES ($1, gen_random_uuid(), 'n', 's') "
+            "RETURNING id", UUID(agent["id"]))
+        store = await conn.fetchval("SELECT store_id FROM sources WHERE id = $1", src)
+        from mnemo.server.embeddings import encode
+        from tests.test_consolidation import _insert_atom_sql
+        old = await _insert_atom_sql(conn, UUID(agent["id"]), "semantic", "dup fact", await encode("dup fact"))
+        new = await _insert_atom_sql(conn, UUID(agent["id"]), "semantic", "dup fact again", await encode("dup fact"))
+        alpha0 = await conn.fetchval("SELECT confidence_alpha FROM atoms WHERE id = $1", old)
+        cand = Candidate(id=old, text="dup fact", kind="rule", kind_p=0.9, valid_from=D1, precision="day",
+                         basis="event", origin_class="unspecified", time_unresolved=False, time_known=True,
+                         source_id=src, store_id=store, alpha=alpha0, beta=2.0, cosine=1.0)
+        pr = PairResult(0, cand, None, Decision("same", None, "same"), {},
+                        {"relation": {"same": 0.95}, "change": 0, "same_attribute": 0, "correction": 0})
+        async with conn.transaction():
+            final, guard, edge_id = await apply(conn, UUID(agent["id"]), new, src, store, (4.0, 2.0), pr, "same")
+        assert final == "same" and edge_id
+        assert await conn.fetchval("SELECT confidence_alpha FROM atoms WHERE id = $1", old) == alpha0
+        meta = json.loads(await conn.fetchval("SELECT metadata FROM edges WHERE id = $1", edge_id))
+        assert meta["evidence_added"] is False

@@ -106,6 +106,9 @@ def pytest_configure(config):
         settings.decomposer_provider = "anthropic"
         # Production runs lifecycle detection (supersedes / tension edges).
         settings.lifecycle_detection_enabled = True
+        # Phase 2: relation decisions use the live OpenRouter models when a key is set.
+        if os.environ.get("OPENROUTER_API_KEY"):
+            settings.decision_provider = "openrouter"
         from mnemo.server.embeddings import warmup
         warmup()
     else:

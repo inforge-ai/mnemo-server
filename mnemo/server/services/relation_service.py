@@ -124,6 +124,7 @@ class Candidate:
     basis: str
     origin_class: str
     time_unresolved: bool
+    time_known: bool
     source_id: UUID | None
     store_id: UUID | None
     alpha: float
@@ -139,9 +140,15 @@ class Candidate:
     def effective_kind(self) -> str:
         return self.lazy.kind if self.lazy is not None and self.kind == "unknown" else self.kind
 
+    @property
+    def effective_time_unresolved(self) -> bool:
+        if self.lazy is not None and self.lazy.asked_time:
+            return self.lazy.time_unresolved
+        return self.time_unresolved
+
     def side(self) -> Side:
         return Side(kind=self.effective_kind, valid_from=self.valid_from, precision=self.precision,
-                    basis=self.basis, origin_class=self.origin_class, time_unresolved=self.time_unresolved)
+                    basis=self.basis, origin_class=self.origin_class, time_unresolved=self.effective_time_unresolved)
 
 
 @dataclass
@@ -200,7 +207,8 @@ def candidate_from_row(r) -> Candidate:
     return Candidate(
         id=r["id"], text=r["text_content"], kind=r["kind"], kind_p=r["kind_p"], valid_from=vf, precision=prec,
         basis=basis, origin_class=r["origin_class"] or "unspecified",
-        time_unresolved=bool(ver.get("time_unresolved")), source_id=r["source_id"], store_id=r["store_id"],
+        time_unresolved=bool(ver.get("time_unresolved")), time_known="time_unresolved" in ver,
+        source_id=r["source_id"], store_id=r["store_id"],
         alpha=r["confidence_alpha"], beta=r["confidence_beta"], cosine=float(r["cosine"]),
         quote=r["source_quote"], speaker=r["speaker"], remembered_on=r["remembered_on"], created_at=r["created_at"],
     )
@@ -296,14 +304,24 @@ async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID 
         plan.cost += res.cost or 0.0
         plan.classes[i] = _class_from(res, tp, th) if res.ok else AtomClass(asked_time=tp, error=res.error)
 
-    unknown = {c.id: c for cs in cands for c in cs if c.kind == "unknown"}
+    def _old_needs_time(c: Candidate) -> bool:
+        return not c.time_known and time_prefilter(c.text, c.valid_from if c.basis == "event" else None)
+
+    unknown = {c.id: c for cs in cands for c in cs if c.kind == "unknown" or _old_needs_time(c)}
 
     async def classify_old(c: Candidate):
         state = atom_state(c.text, c.quote, c.speaker, None, c.remembered_on, c.created_at,
                            c.valid_from if c.basis == "event" else None, c.precision)
-        res = await ask(state, {"kind": kind_question()})
+        tp = _old_needs_time(c)
+        qs = {"kind": kind_question()} if c.kind == "unknown" else {}
+        if tp:
+            from ..decisions.questions import TIME_UNRESOLVED
+            qs["time_unresolved"] = TIME_UNRESOLVED
+        res = await ask(state, qs)
         plan.cost += res.cost or 0.0
-        lazy = _class_from(res, False, th) if res.ok else AtomClass(error=res.error)
+        lazy = _class_from(res, tp, th) if res.ok else AtomClass(error=res.error)
+        if c.kind != "unknown":
+            lazy.kind, lazy.kind_p = c.kind, c.kind_p
         for cs in cands:
             for x in cs:
                 if x.id == c.id:
@@ -323,7 +341,9 @@ async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID 
         plan.cost += res.cost or 0.0
         inputs = {"new": new_side.to_json(), "old": old_side.to_json(), "cosine": round(c.cosine, 4),
                   "questions": QUESTIONS_VERSION, "new_kind_p": plan.classes[i].kind_p,
-                  "old_kind_p": c.lazy.kind_p if c.lazy else c.kind_p, "old_kind_lazy": c.lazy is not None,
+                  "old_kind_p": c.lazy.kind_p if c.lazy else c.kind_p,
+                  "old_kind_lazy": c.lazy is not None and c.kind == "unknown",
+                  "old_time_asked": bool(c.lazy and c.lazy.asked_time),
                   "old_kind_stored": c.kind}
         ans = _answers(res) if res.ok else None
         if ans is None:
@@ -482,10 +502,15 @@ async def persist_relations(conn: asyncpg.Connection, agent_id: UUID, plan: Rela
         if final == "replaces" and pr.index in merged_atoms:
             final, guard = "review", "new_merged"
         edge_id = None
-        if plan.mode == "enforce" and pr.cand.lazy is not None and pr.cand.lazy.kind != "unknown":
-            # Enforce: a kind learned for an `unknown` old atom is kept (design §4).
-            await conn.execute("UPDATE atoms SET kind = $2, kind_p = $3 WHERE id = $1 AND kind = 'unknown'",
-                               pr.cand.id, pr.cand.lazy.kind, pr.cand.lazy.kind_p)
+        if plan.mode == "enforce" and pr.cand.lazy is not None:
+            # Enforce: what was learned about an old atom is kept (design §4).
+            if pr.cand.lazy.kind != "unknown":
+                await conn.execute("UPDATE atoms SET kind = $2, kind_p = $3 WHERE id = $1 AND kind = 'unknown'",
+                                   pr.cand.id, pr.cand.lazy.kind, pr.cand.lazy.kind_p)
+            if pr.cand.lazy.asked_time:
+                await conn.execute(
+                    "UPDATE atoms SET verification = COALESCE(verification, '{}'::jsonb) || jsonb_build_object("
+                    "'time_unresolved', $2::boolean) WHERE id = $1", pr.cand.id, pr.cand.lazy.time_unresolved)
         if plan.mode == "enforce" and new_id is not None:
             final, extra, edge_id = await apply(conn, agent_id, new_id, source_id, store_id,
                                                 alpha_beta[pr.index], pr, final)

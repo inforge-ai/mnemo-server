@@ -1,0 +1,32 @@
+{
+  "id": "year_precision",
+  "description": "Year-precision dates cannot be ordered safely: no automatic replaces.",
+  "failure_pattern": "a year-only date replaces another",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "The Petrel research project started in 2024.",
+      "remembered_on": "2026-10-01T09:00:00Z"
+    },
+    {
+      "text": "The Petrel research project started in 2023.",
+      "remembered_on": "2026-11-01T09:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "When did the Petrel research project start?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      }
+    ],
+    "recall_contains_steps": [
+      0
+    ]
+  },
+  "xfail": null
+}

@@ -1,0 +1,32 @@
+{
+  "id": "observation_vs_rule",
+  "description": "A single exception does not retire the rule.",
+  "failure_pattern": "one observation retires a general rule",
+  "note": "Phase 2 relation fixture (docs/phase2-spec.md item 11). Synthetic text.",
+  "steps": [
+    {
+      "text": "The Tern office is closed on public holidays.",
+      "remembered_on": "2026-09-01T09:00:00Z"
+    },
+    {
+      "text": "On 23 November 2026, a public holiday, the Tern office opened for three hours for a delivery.",
+      "remembered_on": "2026-11-23T17:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "Is the Tern office open on public holidays?"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      }
+    ],
+    "recall_contains_steps": [
+      0
+    ]
+  },
+  "xfail": null
+}
