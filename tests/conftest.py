@@ -135,6 +135,8 @@ def _no_live_llm(request, monkeypatch):
         raise RuntimeError("live Anthropic client constructed in a non-eval test")
 
     monkeypatch.setattr(anthropic.AsyncAnthropic, "__init__", _refuse)
+    from mnemo.server.decisions import openrouter as openrouter_decisions
+    monkeypatch.setattr(openrouter_decisions, "REAL_NETWORK_ALLOWED", False)
     anthropic_decomposer._get_client.cache_clear()
     if hasattr(lifecycle_service._get_client, "cache_clear"):
         lifecycle_service._get_client.cache_clear()

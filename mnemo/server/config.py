@@ -111,6 +111,15 @@ class Settings(BaseSettings):
     # Recall and recent hide atoms that are the target of a supersedes edge from an
     # active atom. False = return them (as if every request set include_superseded).
     recall_hide_superseded: bool = True
+    # v2 Phase 2 decision models (docs/phase2-design.md §5). Every OpenRouter
+    # request carries provider {"zdr": true}. The production key lives in the
+    # production .env (MNEMO_OPENROUTER_API_KEY, a dedicated key with a cap).
+    decision_provider: Literal["off", "openrouter", "fake"] = "off"
+    decision_model: str = "typesafe/jev-1.14"
+    decision_fallback_model: str = "liquid/d1.2-ultra"
+    decision_request_timeout_seconds: float = 1.5
+    decision_retries: int = 2
+    openrouter_api_key: str | None = None
     # Logging
     log_level: str = "INFO"
 
@@ -128,6 +137,8 @@ class Settings(BaseSettings):
             fakes.append("MNEMO_EMBEDDING_BACKEND=fake")
         if self.decomposer_provider == "fake":
             fakes.append("MNEMO_DECOMPOSER_PROVIDER=fake")
+        if self.decision_provider == "fake":
+            fakes.append("MNEMO_DECISION_PROVIDER=fake")
         if fakes and "test" not in self.database_url:
             raise ValueError(
                 f"{', '.join(fakes)} is only allowed when MNEMO_DATABASE_URL "
