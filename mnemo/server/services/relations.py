@@ -85,7 +85,7 @@ class Thresholds:
     change: float = 0.50
     same_attribute: float = 0.50
     correction: float = 0.50
-    kind: float = 0.80   # provisional (Tom, 2026-11-24)
+    kind: float = 0.60   # Tom, 2026-11-24
 
     def for_relation(self, rel: str) -> float:
         return getattr(self, rel)

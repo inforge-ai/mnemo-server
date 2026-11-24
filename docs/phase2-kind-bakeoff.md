@@ -3,10 +3,22 @@
 **Date:** 2026-11-24. **Spec:** `docs/phase2-spec.md` item 4. **Design:** `docs/phase2-design.md` §2.1, §4.
 **Script:** `scripts/eval/kind_bakeoff.py`. **Data:** `scripts/eval/data/kind_atoms.jsonl`, 160 synthetic atoms.
 **Status:**
-- Tom chose `typesafe/jev-1.14`, fallback `liquid/d1.2-ultra`, kind threshold **0.80 provisionally** (2026-11-24).
-- The threshold is fixed only after this re-score against his hand labels (below) has been reported.
+- Tom chose `typesafe/jev-1.14`, fallback `liquid/d1.2-ultra` (2026-11-24).
+- Kind threshold **0.60** (Tom, 2026-11-24, after the re-score and the fixture runs). At 0.80, three spec fixtures failed: real decomposer atoms got kind probabilities of 0.59–0.78.
 
-## Re-score against Tom's hand labels (2026-11-24)
+## Re-score after Tom's corrections to K0011 and K0116 (2026-11-24)
+
+With those two corrections, Tom's labels differ from the generated label on **6** of the 27 rows.
+
+| model | accuracy | Brier | ECE | wrong kinds kept at 0.6 / 0.8 / 0.9 |
+|---|---|---|---|---|
+| typesafe/jev-1.14 | 95.0% | 0.087 | 0.040 | 6 / 3 / 3 |
+| liquid/d1.2-ultra | 94.4% | 0.103 | 0.079 | 5 / 3 / 1 |
+| claude-haiku-5-5 | 95.0% | 0.124 | 0.157 | 5 / 3 / 1 |
+
+Jev's coverage is 95.0% at 0.6 and 88.8% at 0.8.
+
+## Re-score against Tom's hand labels, first pass (2026-11-24)
 
 Tom labelled all 27 rows of `kind_label_check.csv`: the 7 atoms on which two or more models disagreed with the generated label, plus 20 random ones. His labels replace the generated ones for those 27; the other 133 keep the generated label.
 

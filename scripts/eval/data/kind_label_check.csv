@@ -10,7 +10,7 @@ K0122,Priya Raman's quarterly planning review with the platform squad is on the 
 K0128,"Dana and I had reserved the 7:40 train to Lisbon for April 18, and we did ride it that morning.",2026-04-21,2026-04-18,observation
 K0058,Priya's current travel itinerary has her flying into Denver on a window seat with a 6 a.m. departure.,2026-03-01,,plan
 K0044,Ticket #48213 from a frustrated subscriber will be reassigned to the billing specialist next Monday so a refund plan can be prepared.,2026-07-06,2026-07-13,plan
-K0011,"The research group uploaded the cleaned survey dataset to the shared drive on May 19, 2026.",2026-05-20,2026-05-19,plan
+K0011,"The research group uploaded the cleaned survey dataset to the shared drive on May 19, 2026.",2026-05-20,2026-05-19,observation
 K0040,A p-value threshold of 0.05 is the cutoff the Brenmoor lab uses to flag a result as statistically significant in its published reports.,2026-09-04,,rule
 K0051,"Once the roof contractor finishes the gutter survey, the household will schedule the attic insulation upgrade.",2026-02-03,,plan
 K0025,Tobias Lind has resolved to increase his monthly retirement contribution by three percent starting next fiscal year.,2026-01-27,2027-01-01,plan
@@ -20,7 +20,7 @@ K0052,Customer ticket #48213 has a scheduled callback with the client's IT lead 
 K0010,The Lisbon hotel booking for the spring trip is set to check-out on April 18.,2026-02-20,2026-04-18,plan
 K0126,The Halvorsen family reserved a rental cottage in Asheville for the week starting 2026-07-06.,2026-02-18,2026-07-06,plan
 K0003,"After the visa appointment in Nairobi is confirmed, the family will finalize hotel reservations for the safari leg.",2026-04-22,,plan
-K0116,The circuit breaker panel in the Pelham cottage is rated for a maximum load of 200 amps.,2026-05-06,,observation
+K0116,The circuit breaker panel in the Pelham cottage is rated for a maximum load of 200 amps.,2026-05-06,,rule
 K0144,"Once the literature review on soil microbe diversity is complete, Dr. Okonkwo's lab will design the field sampling protocol.",2026-05-11,,plan
 K0023,The Osterhill platform team holds its weekly planning meeting every Monday at 9:30 in the small room on the third floor.,2026-05-07,,plan
 K0035,Weekly fasting glucose checks for Marcus must be scheduled on Mondays before 9 a.m. and never skipped during the trial period.,2026-05-04,,rule

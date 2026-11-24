@@ -135,7 +135,7 @@ class Settings(BaseSettings):
     relation_threshold_change: float = 0.50
     relation_threshold_same_attribute: float = 0.50
     relation_threshold_correction: float = 0.50
-    kind_threshold: float = 0.80              # provisional (Tom, 2026-11-24)
+    kind_threshold: float = 0.60              # Tom, 2026-11-24
     grounding_model_cutoff: float = 0.09      # Jev grounding p below this → flag model_ungrounded
     # Logging
     log_level: str = "INFO"

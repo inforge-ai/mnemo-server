@@ -47,7 +47,7 @@ DECISION_MODELS = ["typesafe/jev-1.14", "liquid/d1.2-ultra"]
 GENERATIVE = ["claude-haiku-5-5"]
 GENERATOR = "claude-haiku-5-5"
 VARIANTS = ["base", "order", "wording"]
-KIND_THRESHOLD = 0.80   # provisional (Tom, 2026-11-24)
+KIND_THRESHOLD = 0.60   # Tom, 2026-11-24
 
 BUCKETS = {
     "state": {
