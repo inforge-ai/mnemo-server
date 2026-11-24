@@ -68,6 +68,8 @@ DELETE FROM agent_trust;
 DELETE FROM capabilities;
 DELETE FROM snapshot_atoms;
 DELETE FROM lifecycle_dlq;
+DELETE FROM conflicts;
+DELETE FROM relation_decisions;
 DELETE FROM edges;
 DELETE FROM views;
 DELETE FROM store_failures;
