@@ -151,9 +151,90 @@ Runbook `scripts/phase1/README.md`. Counts and ids only.
 
 **Rollback images:** `scripts/deploy/image_tags.sh` (pre / post / list / rollback) is now in both runbooks. The running image is tagged `mnemo-server:2e09f2b`.
 
+**Date repair, last part (2026-11-23 22:17 UTC):** the 32 waiting tier-2 atoms (clio) went to the January just past (2026), under the same safe rule as the 83. Plan `-v which=next -v target=past`: 32 in scope (at most 32, as Tom required); every new date precedes `created_at`. **21 replace** (year next to the same day and month: text, date and embedding changed), **11 flag** (`date_suspect`). Planned, embedded in the container (old-text check: minimum cosine 1.0), and applied in one transaction: `applied 21 replace, 11 flag`. No repair candidates remain. Totals: `repair_remembered_on_2026_11` 227 rows; `repair_date_text_2026_11` 217 rows (104 replace, 113 flag), none reverted. `date_suspect` atoms per agent: clio 103, tapio 7, nels-claude-desktop 3.
+
+**Tapio on 0.6.0rc1 (2026-11-23 22:18 UTC):** idle beforehand (no log entries in the previous hour; last session 21:14; last mnemo operation 2026-10-31). `~/.hermes/profiles/tapio/config.yaml` pinned to `mnemo-ai[mcp]==0.6.0rc1` (backup `config.yaml.bak-2026-11-23-pre-rc1`); `hermes-tapio.service` restarted at 22:18:01; its MCP process runs 0.6.0rc1, with no errors in its log. Watching for its first store. **Clio waits for the 24-hour report.**
+
+**PR #25 merged** into `main` (`b70d521`) with CI green. Production runs `2e09f2b`; since then only docs and scripts changed.
+
 **Still to do after G2:**
-- 24 hours after the 21:05 restart: stores attempted, complete and failed; `remember` latency p50 and p95; flag counts on new atoms by flag; decomposer and lifecycle errors in the logs.
+- Done: the 24-hour report (below), run early on 2026-11-24 at 19:18 UTC.
 - Disk: at Tom's request the unused April image `mnemo-mnemo-server:latest` (`8f0e5b51ce2b`, 23.9 GB, no container) was removed at ~21:09. Free space is now 49 GB. The previous image `63af8ab7674b` (`7a0c676`) was untagged by the rebuild and is **gone** (removed outside this work within minutes). Rolling back now means rebuilding from `7a0c676`. 12.4 GB of build cache is still on disk.
+
+## 24-hour post-deploy report (2026-11-24)
+
+Read-only. Taken at **2026-11-24 19:18 UTC**, about two hours early at Tom's request. It covers stores created from **2026-11-23 21:07 UTC** and splits them at the **21:56:57 restart** (`2e09f2b`: lifecycle fixes, tension/narrows thresholds 0.80). Counts and ids only. The before period is 21:07–21:56:57 (about 50 minutes). The after period is 21:56:57 onwards (about 21 h 20 min).
+
+**Stores** (`store_jobs`)
+
+| period | agent | attempted | complete | failed | atoms |
+|---|---|---|---|---|---|
+| before | clio | 1 | 1 | 0 | 2 |
+| after | clio | 3 | 3 | 0 | 31 |
+| after | lloyd | 5 | 5 | 0 | 8 |
+| **total** | | **9** | **9** | **0** | **41** |
+
+No store is still pending. Tapio has not stored since moving to 0.6.0rc1, and the watch is still running. No other agent stored in the window.
+
+**`remember` latency**, measured server-side as `completed_at − created_at` on complete stores:
+
+| period | n | p50 | p95 | max |
+|---|---|---|---|---|
+| before | 1 | 1.96 s | 1.96 s | 1.96 s |
+| after | 8 | 1.70 s | 6.66 s | 7.09 s |
+| all | 9 | 1.76 s | 6.60 s | 7.09 s |
+
+The tail comes from clio's longer notes:
+- 1,021 characters → 14 atoms in 7.09 s (`42e6164b-346f-40c0-853f-cc6dedef30b3`)
+- 1,156 → 9 in 5.88 s (`601337c4-8f8b-4040-826b-c716c2fdf1ea`)
+- 568 → 8 in 4.42 s (`657a19f3-8c44-4254-9038-8e5d891f9501`)
+
+Every store of 202 characters or fewer finished in 1.04–1.96 s. All are well under the 30 s client timeout. With only 9 stores, the p95 is effectively the largest store.
+
+**Flags on new atoms:** every one of the 41 new atoms has a `source_id` and a `source_quote`.
+- 5 are flagged, all `ungrounded_quote`, all clio, all after the restart.
+- No new atom has `abbreviation_altered`, `no_subject` or `date_suspect`.
+
+**`date_suspect` atoms per agent** (active atoms): clio 103, tapio 7, nels-claude-desktop 3, **total 113**. This matches the baseline; there are no new ones.
+
+**Attribution on new atoms** (from their `sources` row):
+
+| period | agent | atoms | speaker ≠ agent | addressee set | `origin_class` ≠ `unspecified` |
+|---|---|---|---|---|---|
+| before | clio | 2 | 0 | 0 | 0 |
+| after | clio | 31 | 0 | 0 | 0 |
+| after | lloyd | 8 | 5 | 0 | 0 |
+
+- **Lloyd** (0.6.0rc1) has 2 stores whose speaker is not the agent: `8c6f7f74-3501-4917-8cfc-0d6e513082f1` and `1ce948dc-8675-4733-9ffd-e9b9b663e114`, with 5 atoms. The speaker in those is neither the agent name nor the operator name. Lloyd's other 3 stores use the default speaker.
+- **Clio** is still on 0.5.0, which cannot send these fields.
+- No store set an addressee, a channel or a non-default `origin_class`.
+
+**Errors in the logs.** The container logs cover only the period after the restart: the 21:56 deploy recreated the container, so the earlier container's logs are gone. The database shows that the one store before the restart completed with no lifecycle DLQ rows.
+
+In the container logs from 21:57:01 on (0 container restarts):
+- 0 lines at WARNING, ERROR or CRITICAL.
+- 0 HTTP 4xx/5xx responses.
+- 154 outbound model calls, all `200 OK`.
+- 145 `lifecycle_check` lines.
+- 9 store-service lines.
+- 21 hourly consolidation runs, every count 0.
+
+The decomposer had no errors: `store_failures` is empty for the window and no store failed. The lifecycle had no errors: `lifecycle_dlq` has 0 rows since 21:07.
+
+**Lifecycle edges created since the restart:**
+
+| type | total | clio | lloyd |
+|---|---|---|---|
+| `supersedes` | 15 | 15 | 0 |
+| `narrows` | 24 | 21 | 3 |
+| `tension_with` | 7 | 6 | 1 |
+| *`related` (similarity, not lifecycle)* | 240 | | |
+
+- **Same-note pairs:** none of the 46 lifecycle edges joins two atoms from the same note, so fix (a) held.
+- **Targets:** 11 of the 46 point at atoms created after the restart; the rest point at older atoms.
+- **Inactive targets:** 3 targets are now inactive, 2 `narrows` and 1 `tension_with`.
+- **Where they come from:** the edges come from 4 notes. Clio's latest note (`601337c4-8f8b-4040-826b-c716c2fdf1ea`, 9 atoms) produced 8 `supersedes`, 9 `narrows` and 3 `tension_with`.
+- **Rate:** for clio, 15 `supersedes` from 31 new atoms is high. Recall hides those 15 targets by default, so Tom may want a sample review of the clio `supersedes` edges before Clio moves to rc1.
 
 ## Open items
 
