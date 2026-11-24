@@ -15,19 +15,22 @@ RELATIONS = ("same", "replaces", "refines", "conflict", "unrelated")
 FINAL = RELATIONS + ("review", "pending")
 
 DAGGER, DDAGGER, SECTION = "dagger", "ddagger", "section"
+# state <-> observation (Tom, 2026-11-24): the change question (‡) AND the
+# same_attribute part of † must both pass; origin is not part of this condition.
+DDAGGER_ATTR = "ddagger_attr"
 
 # (new kind, old kind) -> {relation: extra condition or None}. `same` is added
 # by `cell()` where the kinds are equal and known. Spec matrix, phase2-spec.md.
 MATRIX: dict[tuple[str, str], dict[str, str | None]] = {
     ("state", "state"):             {"replaces": DAGGER, "refines": None, "conflict": None},
     ("state", "plan"):              {"replaces": DDAGGER, "refines": None},
-    ("state", "observation"):       {"refines": None},
+    ("state", "observation"):       {"replaces": DDAGGER_ATTR, "refines": None, "conflict": None},
     ("state", "rule"):              {"refines": None, "conflict": None},
     ("plan", "state"):              {"refines": None},
     ("plan", "plan"):               {"replaces": DAGGER, "refines": None},
     ("plan", "observation"):        {"refines": None},
     ("plan", "rule"):               {"refines": None},
-    ("observation", "state"):       {"replaces": DDAGGER, "refines": None, "conflict": None},
+    ("observation", "state"):       {"replaces": DDAGGER_ATTR, "refines": None, "conflict": None},
     ("observation", "plan"):        {"replaces": DDAGGER, "refines": None},
     ("observation", "observation"): {"replaces": SECTION, "refines": None, "conflict": None},
     ("observation", "rule"):        {"refines": None, "conflict": None},
@@ -159,6 +162,8 @@ def decide(new: Side, old: Side, ans: Answers, th: Thresholds | None = None) -> 
         return _downgrade(ans, th, raw, "dagger")
     if cond == DDAGGER and ans.change < th.change:
         return _downgrade(ans, th, raw, "ddagger")
+    if cond == DDAGGER_ATTR and not (ans.change >= th.change and ans.same_attribute >= th.same_attribute):
+        return _downgrade(ans, th, raw, "ddagger_attr")
     if cond == SECTION and not (new.precision == "day" and old.precision == "day"
                                 and new.basis == "event" and old.basis == "event"
                                 and _same_day(new, old) and ans.correction >= th.correction):

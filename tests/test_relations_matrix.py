@@ -7,23 +7,25 @@ import pytest
 from mnemo.server.services import relations as r
 from mnemo.server.services.relations import Answers, Side, Thresholds, decide, replay
 
-# Independent transcription of the spec's matrix (phase2-spec.md "The kind matrix").
+# Independent transcription of the spec's matrix (phase2-spec.md "The kind matrix"),
+# with Tom's 2026-11-24 change: state <-> observation symmetric, replaces only when
+# ‡ (change) and the same_attribute part of † both pass ("¶" below).
 SPEC = {
     "state":       {"state": "replaces†, refines, conflict", "plan": "replaces‡, refines",
-                    "observation": "refines", "rule": "refines, conflict"},
+                    "observation": "replaces¶, refines, conflict", "rule": "refines, conflict"},
     "plan":        {"state": "refines", "plan": "replaces†, refines", "observation": "refines", "rule": "refines"},
-    "observation": {"state": "replaces‡, refines, conflict", "plan": "replaces‡, refines",
+    "observation": {"state": "replaces¶, refines, conflict", "plan": "replaces‡, refines",
                     "observation": "replaces§, refines, conflict", "rule": "refines, conflict"},
     "rule":        {"state": "refines", "plan": "refines", "observation": "refines",
                     "rule": "replaces†, refines, conflict"},
 }
-MARK = {"†": r.DAGGER, "‡": r.DDAGGER, "§": r.SECTION}
+MARK = {"†": r.DAGGER, "‡": r.DDAGGER, "§": r.SECTION, "¶": r.DDAGGER_ATTR}
 
 
 def spec_cell(new, old):
     out = {}
     for item in SPEC[new][old].split(", "):
-        name = item.rstrip("†‡§")
+        name = item.rstrip("†‡§¶")
         out[name] = MARK.get(item[-1]) if item[-1] in MARK else None
     if new == old:
         out["same"] = None
@@ -106,7 +108,25 @@ def test_dagger_unspecified_is_a_wildcard(o_new, o_old):
 # ── ‡ the change question ──
 def test_ddagger_reading_against_baseline_is_not_a_change():
     d = decide(side("observation"), side("state", D1), ans("replaces", change=0.1))
-    assert (d.final, d.guard) == ("unrelated", "ddagger")
+    assert (d.final, d.guard) == ("unrelated", "ddagger_attr")
+
+
+@pytest.mark.parametrize("new_kind, old_kind", [("observation", "state"), ("state", "observation")])
+@pytest.mark.parametrize("change, attr, ok", [(0.9, 0.9, True), (0.1, 0.9, False), (0.9, 0.1, False), (0.1, 0.1, False)])
+def test_state_observation_symmetric_needs_change_and_same_attribute(new_kind, old_kind, change, attr, ok):
+    d = decide(side(new_kind), side(old_kind, D1), ans("replaces", change=change, attr=attr))
+    assert (d.final, d.guard) == (("replaces", None) if ok else ("unrelated", "ddagger_attr"))
+
+
+@pytest.mark.parametrize("new_kind, old_kind", [("observation", "state"), ("state", "observation")])
+def test_state_observation_origin_is_not_part_of_the_condition_but_the_guard_applies(new_kind, old_kind):
+    d = decide(side(new_kind, origin="measurement"), side(old_kind, D1, origin="user_stated"), ans("replaces"))
+    assert (d.final, d.guard) == ("conflict", "origin_differs")      # the cell allows conflict
+
+
+@pytest.mark.parametrize("new_kind, old_kind", [("observation", "state"), ("state", "observation")])
+def test_state_observation_conflict_allowed(new_kind, old_kind):
+    assert decide(side(new_kind), side(old_kind, D1), ans("conflict")).final == "conflict"
 
 
 def test_ddagger_planned_then_done():

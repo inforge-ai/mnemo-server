@@ -33,5 +33,8 @@
       0
     ]
   },
-  "xfail": null
+  "xfail": {
+    "phase": "phase 2 G3",
+    "fix": "same threshold (0.85) is tuned against Tom's shadow verdicts at G3; with q2 the model gives same 0.41-0.57 (Tom, 2026-11-24)"
+  }
 }

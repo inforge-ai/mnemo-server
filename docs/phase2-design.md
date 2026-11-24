@@ -13,6 +13,14 @@
 
 Answers to §12 are recorded there.
 
+**Changes after G1 (Tom, 2026-11-24):**
+- **Kind threshold 0.60.** Chosen after the kind bake-off re-score and the fixture runs.
+- **Questions `q2`.** The `same` criterion now reads: "Both state the same fact about the same thing. A state or rule restated later with the same value counts as the same. Two observations are the same only if they describe the same single event."
+- **New guard on `same`.** `same` between two observations needs both at `day` precision, basis `event`, on the same day. Otherwise the pair is downgraded (guard `same_observation`).
+- **state ↔ observation is symmetric.** Both cells allow `replaces` only when the change question (‡) AND the same_attribute part of † pass (condition `ddagger_attr`; origin is not part of it, but the global origin guard still applies). Both cells also allow `refines` and `conflict`.
+- **Shadow settings.** The `same` threshold stays 0.85 for shadow. k = 5 for every store, the budget stays 3 s, and unfinished pairs go to the worker.
+- **Kind backfill 8.3** runs before shadow.
+
 All production figures below are read-only counts taken on 2026-11-24. The note contains no atom or source text.
 
 ## 0. Inputs and what they imply
@@ -245,13 +253,13 @@ KINDS = ("state", "plan", "observation", "rule")
 MATRIX = {
   ("state","state"):             {"replaces": "dagger", "refines": None, "conflict": None},
   ("state","plan"):              {"replaces": "ddagger", "refines": None},
-  ("state","observation"):       {"refines": None},
+  ("state","observation"):       {"replaces": "ddagger_attr", "refines": None, "conflict": None},
   ("state","rule"):              {"refines": None, "conflict": None},
   ("plan","state"):              {"refines": None},
   ("plan","plan"):               {"replaces": "dagger", "refines": None},
   ("plan","observation"):        {"refines": None},
   ("plan","rule"):               {"refines": None},
-  ("observation","state"):       {"replaces": "ddagger", "refines": None, "conflict": None},
+  ("observation","state"):       {"replaces": "ddagger_attr", "refines": None, "conflict": None},
   ("observation","plan"):        {"replaces": "ddagger", "refines": None},
   ("observation","observation"): {"replaces": "section", "refines": None, "conflict": None},
   ("observation","rule"):        {"refines": None, "conflict": None},
@@ -278,6 +286,8 @@ def decide(new: Side, old: Side, ans: Answers, th: Thresholds) -> Decision:
         return downgrade(ans, th, raw, guard="dagger")
     if cond == "ddagger" and ans.change < th.change:
         return downgrade(ans, th, raw, guard="ddagger")
+    if cond == "ddagger_attr" and not (ans.change >= th.change and ans.same_attribute >= th.attr):
+        return downgrade(ans, th, raw, guard="ddagger_attr")
     if cond == "section" and not (new.precision == old.precision == "day"
                                   and new.date_basis == old.date_basis == "event"
                                   and same_day(new.valid_from, old.valid_from)
