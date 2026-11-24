@@ -236,6 +236,52 @@ The decomposer had no errors: `store_failures` is empty for the window and no st
 - **Where they come from:** the edges come from 4 notes. Clio's latest note (`601337c4-8f8b-4040-826b-c716c2fdf1ea`, 9 atoms) produced 8 `supersedes`, 9 `narrows` and 3 `tension_with`.
 - **Rate:** for clio, 15 `supersedes` from 31 new atoms is high. Recall hides those 15 targets by default, so Tom may want a sample review of the clio `supersedes` edges before Clio moves to rc1.
 
+## Supersedes review and third deploy (2026-11-24)
+
+**Supersedes review (Tom).**
+- The 15 `supersedes` edges since the 21:56 restart: 13 episodic → episodic and 11 with `remembered_on` 1+ days apart. 4 had the new atom dated earlier than the one it retires.
+- Tom ran `scripts/phase1/review_supersedes.sql` himself; its output was not recorded.
+- His finding: the detector hides atoms it should not. Examples are a reading retiring a baseline, and notes about different days treated as a state change.
+- Decision: superseded atoms stay visible in recall (`MNEMO_RECALL_HIDE_SUPERSEDED=false`). No edges were deleted or changed, and lifecycle detection keeps running.
+
+**Quote flags.**
+- The 5 `ungrounded_quote` atoms since the restart were near-verbatim: the source had line breaks where the quote had punctuation, or the quote had 1–2 character edits.
+- Grounding v2 (PR #28) compares word sequences. An exact sequence passes. A quote with at least 90% of its words in order and at most 3 characters different gets the record-only flag `quote_inexact`. Anything else gets `ungrounded_quote` with the band downgrade.
+- Repair (`scripts/phase1/quote_flag_repair.sql`, `-v expected=4`; undo table `repair_quote_flag_2026_11`):
+  - 1 atom matched exactly: flag removed, band restored.
+  - 3 matched inexactly: flag is now `quote_inexact`, band restored.
+  - `f2c0c705` differs by 4 characters and stays `ungrounded_quote`.
+
+**Deploy 3 (2026-11-24 20:09:33 UTC, `9b5776b`):**
+- PRs #27 and #28 were merged first.
+- `.env` gained `MNEMO_RECALL_HIDE_SUPERSEDED=false` (backup `~/backups/env-2026-11-24.bak`).
+- The free-space check passed (63 GiB free, 34 GiB required). `image_tags.sh pre` tagged `2e09f2b`.
+- The build ran with no stores in flight. Health was `0.2.0+9b5776b`, schema `010_sources`.
+- `image_tags.sh post` tagged `mnemo-server:9b5776b`; the rollback image is `mnemo-server:2e09f2b`.
+- In the container: `recall_hide_superseded=False`, tension/narrows 0.80, `claude-haiku-5-5`, grounding checks v2.
+
+**Checks after the deploy** (counts only):
+- **Recall:** all 15 of clio's superseded atoms (targets of edges since the 21:56 restart) come back from a recall on their own text, and 27 such atoms appeared across those results. `recent` (limit 200) returns 8 of them; the other 7 are older than the 200 most recent. This ran inside one rolled-back transaction, so access counts did not change.
+- **New store:** a scratch agent stored a synthetic note: 201 `complete`, 3 atoms, 2.30 s, all with `checks` `v2`, no flags.
+- **Cleanup:** the scratch agent was purged and its operator deleted in a guarded transaction. 14 agents.
+- `image_tags.sh post` printed the rollback tag twice; the message is fixed.
+
+**For Phase 2: active `haiku_v1` atoms containing an unresolved relative time word**
+The words counted: today, tomorrow, yesterday, tonight, "this morning", "next week", "last week".
+
+| agent | active haiku_v1 | with the word | of which no explicit date in text |
+|---|---|---|---|
+| clio | 1,474 | 22 | 22 |
+| illmarinen | 611 | 16 | 5 |
+| tapio | 1,436 | 13 | 9 |
+| toms-claude-desktop | 1,939 | 2 | 2 |
+| others (9 agents) | 3,482 | 0 | 0 |
+| **total** | **8,942** | **53** | **38** |
+
+By word: today 24, tonight 13, tomorrow 10, yesterday 6, next week 1, this morning 1, last week 0. "Explicit date" means an ISO date or a day-and-month form.
+
+**Clio → 0.6.0rc1:** cleared by Tom after this restart; he does it on her host.
+
 ## Open items
 
 - **G3:** client publish questions (below).
