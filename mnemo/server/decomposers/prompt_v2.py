@@ -41,6 +41,7 @@ Fields:
 
 Record the atoms with the record_atoms tool. If the note contains nothing worth remembering, call it with an empty list."""
 
+PROMPT_VERSION = "prompt_v2"
 TOOL_NAME = "record_atoms"
 
 RECORD_ATOMS_SCHEMA = {

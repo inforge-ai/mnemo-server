@@ -14,8 +14,8 @@ import os
 import httpx
 
 from ..config import settings
-from .base import DecomposeRequest, DecomposeResult, DecomposerError, parse_items, version_string
-from .prompt_v2 import RECORD_ATOMS_SCHEMA, TOOL_NAME, build_system_prompt
+from .base import DecomposeRequest, DecomposeResult, DecomposerError, parse_items, prompt_module, version_string
+from .prompt_v2 import TOOL_NAME
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 CALL_TIMEOUT_SECONDS = 60.0
@@ -39,16 +39,17 @@ class OpenRouterDecomposer:
             raise DecomposerError("OPENROUTER_API_KEY is not set")
 
     async def decompose(self, req: DecomposeRequest) -> DecomposeResult:
+        prompt = prompt_module()
         body = {
             "model": self.model,
             "max_tokens": 8192,
             "messages": [
-                {"role": "system", "content": build_system_prompt(req)},
+                {"role": "system", "content": prompt.build_system_prompt(req)},
                 {"role": "user", "content": req.text},
             ],
             "tools": [{"type": "function", "function": {
                 "name": TOOL_NAME, "description": "Record the memory atoms extracted from the note.",
-                "parameters": RECORD_ATOMS_SCHEMA}}],
+                "parameters": prompt.RECORD_ATOMS_SCHEMA}}],
             "tool_choice": {"type": "function", "function": {"name": TOOL_NAME}},
         }
         headers = {"Authorization": f"Bearer {self._key}"}

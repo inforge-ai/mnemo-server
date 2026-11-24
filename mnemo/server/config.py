@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # "regex" only when chosen explicitly; "fake" = scripted test decomposer.
     # "openrouter" is for the bake-off against mnemo_eval / test DBs only.
     decomposer_provider: Literal["anthropic", "openrouter", "regex", "fake"] = "anthropic"
+    decomposer_prompt: Literal["v2", "v3"] = "v3"   # v3: event_date + date_precision, no confidence (Phase 2)
     decomposer_model: str = "claude-haiku-4-5-20251001"
     decomposer_deadline_seconds: float = 90.0  # whole decomposition, attempts included
     allow_non_anthropic_decomposer: bool = False
