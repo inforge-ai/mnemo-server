@@ -53,6 +53,10 @@ The 5 xfails are `validity_window` (out of scope).
 - `year_precision`, `same_reading_two_days`, `decision_outage`, `undo_replaces`;
 - every Phase 1 fixture.
 
+**Run 4** (after Tom's matrix change: state ↔ observation symmetric; `duplicate_independent` marked xfail until G3): **132 passed, 5 failed, 10 xfail**.
+- `updated_number` and `rescheduled_plan` now pass 5/5.
+- The only failure is `calculation_vs_measurement` (5/5). The matrix now allows `conflict`, but the model's `conflict` probability is 0.35–0.52, below the 0.60 threshold. That is a G3 tuning question.
+
 ## remember latency with the relation check
 
 Real store path, in-process, test DB.
@@ -76,6 +80,31 @@ Real store path, in-process, test DB.
   - about 1.5–1.9 s on pair requests (about 0.45 s each at concurrency 16).
 - **Why the budget runs out on large stores.** In shadow mode, kinds learned for old atoms are recorded only in `inputs`, never on the atom (design §4). So every store re-asks them, and on this freshly seeded agent every candidate was `unknown`.
 - **Production p95 exceeds the 3 s budget at k = 5.** The proposal (below) is a smaller k for large stores, not a larger budget.
+
+## Backfill 8.3 (kind for all active atoms): dry run, STOP
+
+Read-only, 2026-11-24. Production has no migration 011 yet, so there is no kind column and every active atom counts as `unknown`.
+
+| agent | active atoms |
+|---|---|
+| eaara | 2,346 |
+| toms-claude-desktop | 1,988 |
+| clio | 1,561 |
+| tapio | 1,436 |
+| nels-claude-desktop | 775 |
+| illmarinen | 611 |
+| 7 others | 379 |
+| **total** | **9,096** |
+
+- **Size.** The average atom text is 109 characters, against 113 in the kind bake-off. The per-atom state (CONTEXT, QUOTE, ATOM, EVENT DATE) should therefore cost about the same per request.
+- **Cost estimate.** The bake-off measured $0.0000225 per Jev kind request, so 9,096 requests ≈ **$0.20** (d1.2-ultra fallback ≈ $0.09). About 6 minutes at concurrency 8.
+- **Scripts** (run after the G2 deploy, with the production key):
+  - `scripts/phase2/backfill_kind_plan.sql`: dry run, then `-v expected=N`; creates the undo table `repair_kind_2026_12`.
+  - `backfill_kind_ask.py`: in the container; fills the undo table only.
+  - `backfill_kind_apply.sql`: `-v expected=N`, one transaction.
+  - `backfill_kind_undo.sql`.
+- **Tested** end to end on the test DB with the fake decision model, including undo.
+- **Order.** It runs after the G2 deploy and before `MNEMO_RELATION_MODE=shadow` is set (Tom: 8.3 before shadow).
 
 ## Tapio
 
