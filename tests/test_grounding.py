@@ -64,6 +64,69 @@ def test_run_checks_order_and_band_rule():
 
 def test_verification_record():
     assert g.verification_record([], False) == {
-        "checks": "v1", "flags": [], "quote_found": True, "band_downgraded": False,
+        "checks": "v2", "flags": [], "quote_found": True, "band_downgraded": False,
     }
     assert g.verification_record(["ungrounded_quote"], True)["quote_found"] is False
+
+
+# ── v2: word-sequence grounding (the five patterns seen in production, synthetic text) ──
+
+NOTE = (
+    "Weekly ops notes\n"
+    "**Backups**\n"
+    "- the nightly backup rotation\nkeeps thirty days of snapshots on the archive volume\n"
+    "- Mira checks the restore drill every Friday before the team standup\n"
+    "Next: the billing service retries failed charges three times, then pages the on-call engineer.\n"
+)
+
+
+@pytest.mark.parametrize("quote, expected", [
+    # 1. line break in the source where the quote has punctuation → exact
+    ("the nightly backup rotation: keeps thirty days of snapshots", "exact"),
+    # 2. bullet + line break in the source, sentence punctuation in the quote → exact
+    ("on the archive volume. Mira checks the restore drill every Friday", "exact"),
+    # 3. one letter changed next to a bullet (inflection) → inexact
+    ("keeps thirty days of snapshots on the archive volume. Mira check the restore drill every Friday", "inexact"),
+    # 4. one letter plus one punctuation mark changed → inexact
+    ("the billing service retry failed charges three times; then pages the on-call engineer", "inexact"),
+    # 5. two letters changed in two places (21 words, 19 unchanged) → inexact
+    ("every Friday before the team standup. Next: the billing services retries failed charge three times, "
+     "then pages the on-call engineer", "inexact"),
+    # ...but the same two changes in a 15-word quote are under 90% of the words → ungrounded
+    ("Next: the billing services retries failed charge three times, then pages the on-call engineer", "none"),
+    # markdown in the source is ignored
+    ("Backups the nightly backup rotation", "exact"),
+    # more than 3 characters different → ungrounded
+    ("the billing service retried failed payments three times", "none"),
+    # paraphrase → ungrounded
+    ("the billing system tries charges again three times", "none"),
+    # short quote: one changed word is under 90% of the words → ungrounded
+    ("Mira check the drill", "none"),
+    ("", "none"),
+])
+def test_quote_match_word_sequence(quote, expected):
+    assert g.quote_match(quote, NOTE) == expected
+
+
+def test_quote_inexact_is_record_only():
+    flags = g.run_checks("Mira checks the restore drill.",
+                         "Mira check the restore drill every Friday before the team standup", NOTE)
+    assert flags == ["quote_inexact"]
+    assert not g.lowers_band(flags)
+    rec = g.verification_record(flags, False)
+    assert rec["quote_found"] is True and rec["band_downgraded"] is False
+
+
+def test_ungrounded_quote_still_lowers_band():
+    flags = g.run_checks("Mira runs drills.", "Mira runs the drill on Mondays", NOTE)
+    assert flags == ["ungrounded_quote"]
+    assert g.lowers_band(flags)
+
+
+def test_quote_match_long_source_is_fast():
+    import time
+    src = (NOTE * 60)[:8000]
+    t = time.monotonic()
+    assert g.quote_match("the billing service retry failed charges three times; then pages the on-call engineer", src) == "inexact"
+    assert g.quote_match("an entirely invented sentence that shares the and of words", src) == "none"
+    assert time.monotonic() - t < 1.0
