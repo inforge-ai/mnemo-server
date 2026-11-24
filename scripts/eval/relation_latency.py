@@ -1,16 +1,15 @@
 """remember latency with and without the relation check (v2 Phase 2, before G2).
 
 Runs the real store path in-process (store_service.create_store + run_store)
-against the TEST database, with the real embedder, the live decomposer
+against the TEST database, with the FAKE embedder (memory on this host), the live decomposer
 (Anthropic) and the live decision model (OpenRouter, provider {"zdr": true}).
 Synthetic text only: the notes are built from scripts/eval/data/kind_atoms.jsonl.
 
 Per configuration, a fresh scratch agent is seeded with the same notes (so
 candidates exist), then the measured notes are stored and timed:
-    off          relations off (today's store path)
-    shadow k=5   the relation check, k = 5 candidates per atom
-    shadow k=3   ... k = 3
-    shadow k=2   ... k = 2
+    off                            relations off (today's store path)
+    shadow k=5                     the relation check, k = 5 candidates per atom
+    shadow k=5, k=3 over 20 atoms  k = 3 for stores of more than 20 atoms
 Measured notes: 5 of 11 sentences (production p50 is 11 atoms per store) and
 2 of 29 sentences (production p95). Prints JSON lines and a markdown table.
 
@@ -32,7 +31,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 os.environ.setdefault("MNEMO_ENV_FILE", ".env.test")
-os.environ.setdefault("MNEMO_EMBEDDING_BACKEND", "sentence_transformers")
+os.environ.setdefault("MNEMO_EMBEDDING_BACKEND", "fake")   # Tom, 2026-11-24: fake embedder (memory)
 os.environ.setdefault("MNEMO_DECOMPOSER_PROVIDER", "anthropic")
 os.environ.setdefault("MNEMO_DECOMPOSER_MODEL", "claude-haiku-5-5")
 os.environ.setdefault("MNEMO_DECISION_PROVIDER", "openrouter")
@@ -46,7 +45,7 @@ ITEMS = REPO / "scripts" / "eval" / "data" / "kind_atoms.jsonl"
 SEED_NOTES, SEED_SIZE = 10, 3
 MEDIUM = (5, 11)
 LARGE = (2, 29)
-CONFIGS = [("off", "off", 5), ("shadow k=5", "shadow", 5), ("shadow k=3", "shadow", 3), ("shadow k=2", "shadow", 2)]
+CONFIGS = [("off", "off", 5, None), ("shadow k=5", "shadow", 5, None), ("shadow k=5, k=3 over 20 atoms", "shadow", 5, 3)]
 
 
 def q(xs, p):
@@ -84,9 +83,13 @@ async def main() -> None:
     seeds, measured = notes()
     results = []
     try:
-        for label, mode, k in CONFIGS:
+        only = [int(x) for x in os.environ.get("MNEMO_LAT_CONFIGS", "").split(",") if x]
+        for idx, (label, mode, k, k_large) in enumerate(CONFIGS):
+            if only and idx not in only:
+                continue
             settings.relation_mode = mode
             settings.relation_k = k
+            settings.relation_k_large = k_large
             async with pool.acquire() as conn:
                 tag = uuid.uuid4().hex[:6]
                 op = await conn.fetchval(
@@ -111,7 +114,7 @@ async def main() -> None:
             for size, text in measured:
                 wall, out = await store(text, mode)
                 t = out.get("timings_ms") or {}
-                rel_ms = sum(v for key, v in t.items() if key.startswith("relations_"))
+                rel_ms = sum(v for key, v in t.items() if key.startswith("relations_") and key != "relations_k")
                 async with pool.acquire() as conn:
                     pending = await conn.fetchval(
                         "SELECT count(*) FROM relation_decisions d JOIN sources s ON s.id = d.source_id "
@@ -142,8 +145,10 @@ async def main() -> None:
 
     print("\n| config | stores | atoms p50 / max | remember p50 | p95 | max | relation step p50 | p95 | stores over budget | pending pairs |")
     print("|---|---|---|---|---|---|---|---|---|---|")
-    for label, _, _ in CONFIGS:
+    for label, *_ in CONFIGS:
         rs = [r for r in results if r["config"] == label]
+        if not rs:
+            continue
         walls = [r["wall_s"] for r in rs]
         rels = [r["relations_s"] for r in rs]
         print(f"| {label} | {len(rs)} | {q([r['atoms'] for r in rs], .5):.0f} / {max(r['atoms'] for r in rs)} | "
@@ -152,7 +157,7 @@ async def main() -> None:
               f"{sum(r['pending_pairs'] for r in rs)} / {sum(r['pairs'] for r in rs)} |")
     for size in (MEDIUM[1], LARGE[1]):
         print(f"\nBy note size {size} sentences:")
-        for label, _, _ in CONFIGS:
+        for label, *_ in CONFIGS:
             rs = [r for r in results if r["config"] == label and r["sentences"] == size]
             walls = ", ".join(f"{r['wall_s']:.2f}" for r in rs)
             print(f"  {label}: wall {walls} s; atoms {[r['atoms'] for r in rs]}; "

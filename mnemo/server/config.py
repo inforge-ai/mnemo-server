@@ -124,6 +124,8 @@ class Settings(BaseSettings):
     # Relation decisions (docs/phase2-design.md §3–§5). off | shadow | enforce.
     relation_mode: Literal["off", "shadow", "enforce"] = "off"
     relation_k: int = 5
+    relation_k_large: int | None = None        # smaller k for large stores (proposal; off by default)
+    relation_large_store_atoms: int = 20       # a store with more atoms than this uses relation_k_large
     relation_budget_seconds: float = 3.0
     relation_concurrency: int = 16
     relation_pending_interval_seconds: float = 120.0

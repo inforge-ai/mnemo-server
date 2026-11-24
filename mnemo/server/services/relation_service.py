@@ -271,8 +271,11 @@ async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID 
     plan = RelationPlan(mode=mode, classes=[AtomClass() for _ in atoms], sides=[], pairs=[])
 
     async with pool.acquire() as conn:
-        cands = await fetch_candidates(conn, agent_id, [p.embedding for p in atoms], source_id, settings.relation_k,
-                                       exclude)
+        k = settings.relation_k
+        if settings.relation_k_large is not None and len(atoms) > settings.relation_large_store_atoms:
+            k = min(k, settings.relation_k_large)
+        plan.timings_ms["k"] = k
+        cands = await fetch_candidates(conn, agent_id, [p.embedding for p in atoms], source_id, k, exclude)
     t1 = time.monotonic()
     plan.timings_ms["candidates"] = round((t1 - t0) * 1000)
 
