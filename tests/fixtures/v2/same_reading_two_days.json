@@ -1,0 +1,38 @@
+{
+  "id": "same_reading_two_days",
+  "description": "The same reading value on two different days is two observations, not the same one.",
+  "failure_pattern": "a repeated value on another day is merged as a duplicate",
+  "note": "Phase 2 relation fixture (Tom, 2026-11-24, with q2). Synthetic text.",
+  "steps": [
+    {
+      "text": "Ana's resting heart rate was 52 bpm on the morning of 20 November 2026.",
+      "remembered_on": "2026-11-20T08:00:00Z"
+    },
+    {
+      "text": "Ana's resting heart rate was 52 bpm on the morning of 22 November 2026.",
+      "remembered_on": "2026-11-22T08:00:00Z"
+    }
+  ],
+  "recall": {
+    "query": "Ana's resting heart rate readings"
+  },
+  "assert": {
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "none": "same"
+      },
+      {
+        "new": 1,
+        "old": 0,
+        "none": "replaces"
+      }
+    ],
+    "recall_contains_steps": [
+      0,
+      1
+    ]
+  },
+  "xfail": null
+}

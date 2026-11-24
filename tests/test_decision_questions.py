@@ -34,3 +34,10 @@ def test_pair_state_format():
     s = q.pair_state(old, new)
     assert s.startswith("EXISTING ATOM (kind state; event date none, precision unknown; origin unspecified):\nBaseline is 52.")
     assert "\n\nNEW ATOM (kind state; event date 2026-11-02, precision day; origin measurement):\nBaseline is 54." in s
+
+
+def test_q2_same_wording():
+    assert q.QUESTIONS_VERSION == "q2"
+    assert q.RELATION_CRITERIA["same"] == (
+        "Both state the same fact about the same thing. A state or rule restated later with the same value "
+        "counts as the same. Two observations are the same only if they describe the same single event.")

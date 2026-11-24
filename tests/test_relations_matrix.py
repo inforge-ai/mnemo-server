@@ -214,3 +214,18 @@ def test_replay_reapplies_the_kind_threshold():
     probs = {"relation": a.relation, "change": a.change, "same_attribute": a.same_attribute, "correction": a.correction}
     assert replay(inputs, probs, Thresholds(kind=0.8)).final == "unrelated"
     assert replay(inputs, probs, Thresholds(kind=0.6)).final == "replaces"
+
+
+@pytest.mark.parametrize("new, old, ok", [
+    (side("observation", D2), side("observation", D2), True),                       # same event day
+    (side("observation", D2), side("observation", D1), False),                      # different days
+    (side("observation", D2, basis="stated"), side("observation", D2), False),
+    (side("observation", D2, precision="month"), side("observation", D2), False),
+])
+def test_same_between_observations_needs_one_event_day(new, old, ok):
+    d = decide(new, old, ans("same"))
+    assert (d.final, d.guard) == (("same", None) if ok else ("unrelated", "same_observation"))
+
+
+def test_same_for_states_restated_later_is_allowed():
+    assert decide(side("state", D2), side("state", D1), ans("same")).final == "same"

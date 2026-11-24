@@ -10,7 +10,7 @@ from datetime import datetime
 
 from .base import choice, noul
 
-QUESTIONS_VERSION = "q1"
+QUESTIONS_VERSION = "q2"   # q2 (Tom, 2026-11-24): `same` criterion reworded
 
 KIND_INSTRUCTIONS = ("What kind of statement is the ATOM? Judge the ATOM itself. "
                      "The CONTEXT only helps with names and dates.")
@@ -41,8 +41,9 @@ TIME_UNRESOLVED = noul(
 
 RELATION_INSTRUCTIONS = "How does the NEW ATOM relate to the EXISTING ATOM?"
 RELATION_CRITERIA = {
-    "same": ("Both state the same fact about the same thing for the same time; the new atom adds nothing "
-             "and changes nothing."),
+    "same": ("Both state the same fact about the same thing. A state or rule restated later with the same "
+             "value counts as the same. Two observations are the same only if they describe the same single "
+             "event."),
     "replaces": ("The new atom makes the existing one out of date: a newer value of the same property, a "
                  "changed state, a plan that happened, was cancelled or was moved, or an explicit correction. "
                  "The existing atom was true or believed earlier and is no longer current."),

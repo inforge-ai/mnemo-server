@@ -163,6 +163,10 @@ def decide(new: Side, old: Side, ans: Answers, th: Thresholds | None = None) -> 
                                 and new.basis == "event" and old.basis == "event"
                                 and _same_day(new, old) and ans.correction >= th.correction):
         return _downgrade(ans, th, raw, "section")
+    if raw == "same" and new.kind == "observation" and old.kind == "observation" and not (
+            new.precision == "day" and old.precision == "day"
+            and new.basis == "event" and old.basis == "event" and _same_day(new, old)):
+        return _downgrade(ans, th, raw, "same_observation")   # two observations: same only for one event
     if ans.p(raw) < th.for_relation(raw):
         return _downgrade(ans, th, raw, "threshold")
     if raw == "replaces":

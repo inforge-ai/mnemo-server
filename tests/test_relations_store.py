@@ -135,7 +135,7 @@ async def test_shadow_records_only(client, agent, pool, mode, decisions):
     assert d["mode"] == "shadow" and d["final_relation"] == "replaces" and d["raw_choice"] == "replaces"
     assert set(json.loads(d["probabilities"])) == {"relation", "change", "same_attribute", "correction"}
     inputs = json.loads(d["inputs"])
-    assert inputs["new"]["kind"] == "state" and inputs["old"]["basis"] == "event" and inputs["questions"] == "q1"
+    assert inputs["new"]["kind"] == "state" and inputs["old"]["basis"] == "event" and inputs["questions"] == "q2"
     # nothing applied
     status = await _rows(pool, "SELECT status FROM atoms WHERE id = $1", UUID(old["id"]))
     assert status[0]["status"] == "active"
