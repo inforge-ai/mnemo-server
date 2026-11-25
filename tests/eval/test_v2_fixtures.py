@@ -42,7 +42,9 @@ v2 Phase 2 additions (relations decided on write):
     stored (201), relations are pending, nothing is hidden
   - every case runs with the kind matrix MNEMO_FIXTURE_RELATION_MATRIX
     (default "as_built"; "state_rule_symmetric" is the G3 candidate);
-    "xfail_at_matrix": {matrix: xfail} overrides "xfail" for that matrix
+    "xfail_at_matrix": {variant: xfail} overrides "xfail" for that variant
+  - MNEMO_FIXTURE_KIND_RULE ("argmax" default | "marginal"); the variant key is
+    the matrix name, plus "+marginal" under the marginal kind rule
 
 Cases the current system fails carry "xfail": {"phase": ..., "fix": ...} and
 run as xfail(strict=True), so a fix that makes one pass must also flip it.
@@ -82,6 +84,8 @@ DEFAULT_REPEAT = int(os.environ.get("MNEMO_FIXTURE_REPEAT", "5"))
 STEP_FIELDS = ("remembered_on", "speaker", "addressee", "channel", "origin_class")
 RELATION_MODE = os.environ.get("MNEMO_FIXTURE_RELATION_MODE", "enforce")
 RELATION_MATRIX = os.environ.get("MNEMO_FIXTURE_RELATION_MATRIX", "as_built")
+KIND_RULE = os.environ.get("MNEMO_FIXTURE_KIND_RULE", "argmax")
+VARIANT = RELATION_MATRIX if KIND_RULE == "argmax" else f"{RELATION_MATRIX}+{KIND_RULE}"
 
 
 def _xfail_mark(x: dict):
@@ -102,8 +106,8 @@ def _load_cases():
         repeat = case.get("repeat", DEFAULT_REPEAT)
         for t in thresholds:
             x = case.get("xfail_at_threshold", {}).get(str(float(t)), case.get("xfail"))
-            if RELATION_MATRIX in case.get("xfail_at_matrix", {}):
-                x = case["xfail_at_matrix"][RELATION_MATRIX]
+            if VARIANT in case.get("xfail_at_matrix", {}):
+                x = case["xfail_at_matrix"][VARIANT]
             marks = [_xfail_mark(x)] if x else []
             pid = case["id"] if len(thresholds) == 1 else f"{case['id']}@{t}"
             for k in range(1, repeat + 1):
@@ -149,6 +153,7 @@ async def test_v2_fixture(case, dedup_threshold, client, agent_with_key, pool, m
     monkeypatch.setattr(settings, "relation_mode", case.get("relation_mode", RELATION_MODE))
     monkeypatch.setattr(settings, "relation_budget_seconds", 30.0)
     monkeypatch.setattr(settings, "relation_matrix", RELATION_MATRIX)
+    monkeypatch.setattr(settings, "relation_kind_rule", KIND_RULE)
     if case.get("simulate") == "decision_outage":
         from mnemo.server.decisions.fake import FakeDecisions
         from mnemo.server.services import relation_service
@@ -227,7 +232,7 @@ async def _check_relations(case, pool, aid, agent_key, client, steps, failures):
         p = json.loads(r["probabilities"] or "{}")
         rel = {k: round(v, 2) for k, v in (p.get("relation") or {}).items()}
         return (f"{i.get('new', {}).get('kind')}({i.get('new_kind_p')})->{i.get('old', {}).get('kind')}"
-                f"[top {i.get('old_kind_top')}]"
+                f"[top {i.get('old_kind_top')} probs {i.get('old_kind_probs')}]"
                 f"({i.get('old_kind_p')}) raw={r['raw_choice']} rel={rel} chg={round(p.get('change', 0), 2)} "
                 f"attr={round(p.get('same_attribute', 0), 2)} corr={round(p.get('correction', 0), 2)} "
                 f"prec={i.get('new', {}).get('precision')}/{i.get('old', {}).get('precision')}")

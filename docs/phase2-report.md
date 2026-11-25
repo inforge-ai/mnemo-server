@@ -197,6 +197,21 @@ Kind after 8.3 (active atoms): state 2,393; plan 550; observation 2,587; rule 2,
   - So for this pattern the kind threshold matters as much as the matrix; the G3 replay grid includes the kind threshold.
 - **Tom's verdicts** on the 15 Phase 1 pairs feed the G3 report.
 
+### The marginal variant (Tom, 2026-11-25)
+
+- **Storage:** `atoms.kind_probs` (migration 012) holds the full distribution over the four kinds. `kind` / `kind_p` stay the argmax, for display. `relation_decisions.inputs` carries both sides' distributions (`new_kind_probs`, `old_kind_probs`, and `kind_probs` inside `new` / `old`).
+- **`decide_marginal()`:**
+  - P(allowed) = Σ over (k_new, k_old) of p_new(k_new) · p_old(k_old) · 1[raw allowed in the cell and its conditions (†, ‡, ‡+attr, §, the same-observation guard) pass].
+  - It acts if P(allowed) ≥ the kind threshold; otherwise it downgrades as now, with guard `marginal`.
+  - The relation threshold and the global guards on `replaces` still apply. On `origin_differs`, it gives `conflict` if P(conflict allowed) ≥ the kind threshold, else `review`.
+  - There is no unknown kind. A side with no stored distribution uses one-hot on a known kind; an unknown kind with no distribution uses the unknown cell.
+- **Selection:** `Thresholds.kind_rule` (`argmax` | `marginal`) and the setting `relation_kind_rule`. Production stays `argmax`.
+- **Tests:**
+  - With one-hot distributions, marginal equals argmax in every cell, for every relation and every condition outcome, under both matrices.
+  - Hand-computed P(allowed), threshold boundaries, global guards, replay with distributions taken from `atoms`, and the store path.
+- **G3 replay grid** (`scripts/phase2/g3_replay.py`): as_built, symmetric, and symmetric + marginal, each at kind thresholds 0.5 / 0.6 / 0.7. Rows from before 012 take their distributions from `atoms.kind_probs` (backfill 8.3b).
+- **Fixture `schedule_change_rule_state`, symmetric + marginal:** 10/10 pass. The old atom comes out rule 0.52–0.55, state 0.23–0.24, plan 0.20–0.24. Under the symmetric matrix, `replaces` is allowed against all three, so P(allowed) ≈ 0.85.
+
 ## Tapio
 
 0 stores since 2026-11-23 (all statuses), per Tom's instruction counted for the G2 package. The watch for its first 0.6.0rc1 store was stopped by the host's memory-pressure reaper on 2026-11-24. Tom said not to restart it.

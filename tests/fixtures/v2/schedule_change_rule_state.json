@@ -2,7 +2,7 @@
   "id": "schedule_change_rule_state",
   "description": "A nightly job's time is moved from 03:00 to 04:00 UTC: recall returns 04:00, and the old time is replaced.",
   "failure_pattern": "a changed schedule is not replaced when the old atom is classed rule and the new one state",
-  "note": "Phase 2 G3 fixture (Tom, 2026-11-25): the shadow smoke-test pattern (old classed rule p 0.68, new state p 0.96; model said replaces, the as-built matrix turned it into unrelated). Synthetic text. Run under both matrices at G3: MNEMO_FIXTURE_RELATION_MATRIX=as_built | state_rule_symmetric. Live 2026-11-25: as_built 5/5 xfail (matrix); state_rule_symmetric 7/7 fail on the kind threshold, not the matrix.",
+  "note": "Phase 2 G3 fixture (Tom, 2026-11-25): the shadow smoke-test pattern (old classed rule p 0.68, new state p 0.96; model said replaces, the as-built matrix turned it into unrelated). Synthetic text. Run under both matrices at G3: MNEMO_FIXTURE_RELATION_MATRIX=as_built | state_rule_symmetric. Live 2026-11-25: as_built 5/5 xfail (matrix); state_rule_symmetric 7/7 fail on the kind threshold, not the matrix. state_rule_symmetric+marginal: 10/10 pass (old atom rule 0.52-0.55 / state 0.23-0.24 / plan 0.20-0.24; P(allowed) ≈ 0.85).",
   "steps": [
     {
       "text": "The Petrel backup job runs at 03:00 UTC every night.",

@@ -141,6 +141,8 @@ class Settings(BaseSettings):
     # Kind matrix (relations.MATRICES). state_rule_symmetric is a G3 candidate (Tom, 2026-11-25);
     # production stays as_built until G3.
     relation_matrix: Literal["as_built", "state_rule_symmetric"] = "as_built"
+    # argmax (as built) | marginal: sum over both kind distributions (G3 candidate, Tom 2026-11-25).
+    relation_kind_rule: Literal["argmax", "marginal"] = "argmax"
     grounding_model_cutoff: float = 0.09      # Jev grounding p below this → flag model_ungrounded
     # Logging
     log_level: str = "INFO"

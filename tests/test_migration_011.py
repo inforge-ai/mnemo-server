@@ -114,3 +114,12 @@ async def test_relation_decisions_and_conflicts(pool, agent):
             await conn.execute("INSERT INTO conflicts (agent_id, atom_a, atom_b) VALUES ($1, $2, $3)", agent["id"], b, a)
         await conn.execute("UPDATE conflicts SET resolved_at = now() WHERE atom_a = $1", a)
         await conn.execute("INSERT INTO conflicts (agent_id, atom_a, atom_b) VALUES ($1, $2, $3)", agent["id"], b, a)
+
+
+async def test_012_kind_probs(pool, agent):
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT 1 FROM schema_migrations WHERE version = '012_kind_probs'") == 1
+        aid = await _atom(conn, agent["id"])
+        assert await conn.fetchval("SELECT kind_probs FROM atoms WHERE id = $1", aid) is None
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute("UPDATE atoms SET kind_probs = '[0.5]'::jsonb WHERE id = $1", aid)
