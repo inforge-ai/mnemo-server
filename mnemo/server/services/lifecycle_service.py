@@ -340,6 +340,7 @@ async def detect_lifecycle_relationships(
                             target_id=cand["id"],
                             edge_type=edge_type,
                             weight=float(result["confidence"]),
+                            decided_by="legacy_lifecycle",
                             metadata={
                                 "reasoning": result["reasoning"],
                                 "detected_at": datetime.now(timezone.utc).isoformat(),

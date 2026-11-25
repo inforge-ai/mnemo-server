@@ -41,6 +41,19 @@ MATRIX: dict[tuple[str, str], dict[str, str | None]] = {
 }
 UNKNOWN_CELL: dict[str, str | None] = {"refines": None}
 
+# G3 candidate (Tom, 2026-11-25): state <-> rule symmetric, like state <-> observation:
+# replaces both ways when change AND same_attribute pass; refines and conflict both ways.
+# Used for replay and fixture runs only, until Tom picks a matrix at G3.
+MATRIX_STATE_RULE_SYMMETRIC: dict[tuple[str, str], dict[str, str | None]] = {
+    **MATRIX,
+    ("state", "rule"): {"replaces": DDAGGER_ATTR, "refines": None, "conflict": None},
+    ("rule", "state"): {"replaces": DDAGGER_ATTR, "refines": None, "conflict": None},
+}
+MATRICES: dict[str, dict[tuple[str, str], dict[str, str | None]]] = {
+    "as_built": MATRIX,
+    "state_rule_symmetric": MATRIX_STATE_RULE_SYMMETRIC,
+}
+
 
 @dataclass
 class Side:
@@ -89,6 +102,8 @@ class Thresholds:
     same_attribute: float = 0.50
     correction: float = 0.50
     kind: float = 0.60   # Tom, 2026-11-24
+    matrix: str = "as_built"   # a key of MATRICES
+
 
     def for_relation(self, rel: str) -> float:
         return getattr(self, rel)
@@ -102,10 +117,10 @@ class Decision:
     notes: list[str] = field(default_factory=list)
 
 
-def cell(new_kind: str, old_kind: str) -> dict[str, str | None]:
+def cell(new_kind: str, old_kind: str, matrix: str = "as_built") -> dict[str, str | None]:
     if new_kind not in KINDS or old_kind not in KINDS:
         return dict(UNKNOWN_CELL)
-    allowed = dict(MATRIX[(new_kind, old_kind)])
+    allowed = dict(MATRICES[matrix][(new_kind, old_kind)])
     if new_kind == old_kind:
         allowed["same"] = None
     return allowed
@@ -154,7 +169,7 @@ def decide(new: Side, old: Side, ans: Answers, th: Thresholds | None = None) -> 
     raw = ans.raw
     if raw == "unrelated":
         return Decision("unrelated", None, raw)
-    allowed = cell(new.kind, old.kind)
+    allowed = cell(new.kind, old.kind, th.matrix)
     if raw not in allowed:
         return _downgrade(ans, th, raw, "matrix")
     cond = allowed[raw]

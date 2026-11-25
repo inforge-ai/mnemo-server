@@ -285,10 +285,11 @@ async def test_writes_supersedes_at_or_above_threshold(pool, agent_with_address)
 
         assert n == 1
         edge = await conn.fetchrow(
-            "SELECT edge_type, weight, metadata FROM edges WHERE source_id=$1 AND target_id=$2",
+            "SELECT edge_type, weight, metadata, decided_by FROM edges WHERE source_id=$1 AND target_id=$2",
             new_id, old_id,
         )
         assert edge["edge_type"] == "supersedes"
+        assert edge["decided_by"] == "legacy_lifecycle"
         assert edge["weight"] == pytest.approx(0.85, abs=1e-6)
         meta = edge["metadata"]
         if isinstance(meta, str):
@@ -319,10 +320,11 @@ async def test_writes_tension_with_at_or_above_threshold(pool, agent_with_addres
 
         assert n == 1
         edge = await conn.fetchrow(
-            "SELECT edge_type FROM edges WHERE source_id=$1 AND target_id=$2",
+            "SELECT edge_type, decided_by FROM edges WHERE source_id=$1 AND target_id=$2",
             new_id, old_id,
         )
         assert edge["edge_type"] == "tension_with"
+        assert edge["decided_by"] == "legacy_lifecycle"
 
 
 @pytest.mark.asyncio

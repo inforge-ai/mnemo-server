@@ -1205,11 +1205,12 @@ async def create_edge(
     edge_type: str,
     weight: float,
     metadata: dict | None = None,
+    decided_by: str | None = None,
 ) -> dict | None:
     row = await conn.fetchrow(
         """
-        INSERT INTO edges (source_id, target_id, edge_type, weight, metadata)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO edges (source_id, target_id, edge_type, weight, metadata, decided_by)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
         RETURNING id, source_id, target_id, edge_type, weight
         """,
@@ -1218,6 +1219,7 @@ async def create_edge(
         edge_type,
         weight,
         json.dumps(metadata) if metadata is not None else None,
+        decided_by,
     )
     return dict(row) if row else None
 

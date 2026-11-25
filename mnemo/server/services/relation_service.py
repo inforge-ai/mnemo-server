@@ -57,6 +57,7 @@ def thresholds() -> Thresholds:
         conflict=settings.relation_threshold_conflict, refines=settings.relation_threshold_refines,
         change=settings.relation_threshold_change, same_attribute=settings.relation_threshold_same_attribute,
         correction=settings.relation_threshold_correction, kind=settings.kind_threshold,
+        matrix=settings.relation_matrix,
     )
 
 

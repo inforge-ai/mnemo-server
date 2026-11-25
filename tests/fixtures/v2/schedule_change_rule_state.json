@@ -1,0 +1,44 @@
+{
+  "id": "schedule_change_rule_state",
+  "description": "A nightly job's time is moved from 03:00 to 04:00 UTC: recall returns 04:00, and the old time is replaced.",
+  "failure_pattern": "a changed schedule is not replaced when the old atom is classed rule and the new one state",
+  "note": "Phase 2 G3 fixture (Tom, 2026-11-25): the shadow smoke-test pattern (old classed rule p 0.68, new state p 0.96; model said replaces, the as-built matrix turned it into unrelated). Synthetic text. Run under both matrices at G3: MNEMO_FIXTURE_RELATION_MATRIX=as_built | state_rule_symmetric. Live 2026-11-25: as_built 5/5 xfail (matrix); state_rule_symmetric 7/7 fail on the kind threshold, not the matrix.",
+  "steps": [
+    {
+      "text": "The Petrel backup job runs at 03:00 UTC every night.",
+      "remembered_on": "2026-11-20T09:00:00Z",
+      "origin_class": "document"
+    },
+    {
+      "text": "The Petrel backup job now runs at 04:00 UTC every night; it was moved from 03:00.",
+      "remembered_on": "2026-11-24T09:00:00Z",
+      "origin_class": "document"
+    }
+  ],
+  "recall": {
+    "query": "When does the Petrel backup job run?"
+  },
+  "assert": {
+    "recall_top_match": "04:00",
+    "relations": [
+      {
+        "new": 1,
+        "old": 0,
+        "any": "replaces"
+      }
+    ]
+  },
+  "xfail": null,
+  "xfail_at_matrix": {
+    "as_built": {
+      "phase": "phase 2 G3",
+      "fix": "as built, (state, rule) and (rule, state) do not allow replaces; Tom compares the state<->rule symmetric matrix at G3 (2026-11-25)",
+      "strict": false
+    },
+    "state_rule_symmetric": {
+      "phase": "phase 2 G3",
+      "strict": false,
+      "fix": "model says replaces (p ~1.0, change 0.97-0.98, same_attribute 0.96) but the old atom's kind is rule at p 0.51-0.57 < kind threshold 0.60, so it is unknown and the unknown cell allows only refines (2026-11-25, 7/7 runs); G3 replays at other kind thresholds"
+    }
+  }
+}
