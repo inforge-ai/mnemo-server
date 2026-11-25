@@ -158,7 +158,7 @@ async def _insert_atom(
     verification: dict | None = None,
     rel: dict | None = None,
 ) -> asyncpg.Record:
-    """`rel` (Phase 2): kind, kind_p, valid_from (None = the store time),
+    """`rel` (Phase 2): kind, kind_p, kind_probs, valid_from (None = the store time),
     date_precision, date_basis. Without it the migration defaults apply."""
     half_life = HALF_LIVES.get(atom.atom_type, 30.0)
     rel = rel or {}
@@ -170,11 +170,11 @@ async def _insert_atom(
             source_type, source_ref,
             domain_tags, decay_half_life_days, decay_type, decomposer_version,
             remembered_on, source_id, source_quote, verification,
-            kind, kind_p, valid_from, date_precision, date_basis
+            kind, kind_p, valid_from, date_precision, date_basis, kind_probs
         ) VALUES ($1,$2,$3,$4,$5::vector,$6,$7,$8,$9,$10,$11,'exponential',$12,$13,$14,$15,$16,
                   COALESCE($17, 'unknown'), $18,
                   CASE WHEN $21::text IS NULL THEN NULL ELSE COALESCE($19, now()) END,
-                  COALESCE($20, 'unknown'), $21)
+                  COALESCE($20, 'unknown'), $21, $22::jsonb)
         RETURNING
             id, agent_id, atom_type, text_content, structured,
             confidence_alpha, confidence_beta,
@@ -203,6 +203,7 @@ async def _insert_atom(
         source_quote,
         json.dumps(verification) if verification is not None else None,
         rel.get("kind"), rel.get("kind_p"), rel.get("valid_from"), rel.get("date_precision"), rel.get("date_basis"),
+        json.dumps(rel["kind_probs"]) if rel.get("kind_probs") else None,
     )
     return row
 
@@ -1205,11 +1206,12 @@ async def create_edge(
     edge_type: str,
     weight: float,
     metadata: dict | None = None,
+    decided_by: str | None = None,
 ) -> dict | None:
     row = await conn.fetchrow(
         """
-        INSERT INTO edges (source_id, target_id, edge_type, weight, metadata)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO edges (source_id, target_id, edge_type, weight, metadata, decided_by)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
         RETURNING id, source_id, target_id, edge_type, weight
         """,
@@ -1218,6 +1220,7 @@ async def create_edge(
         edge_type,
         weight,
         json.dumps(metadata) if metadata is not None else None,
+        decided_by,
     )
     return dict(row) if row else None
 

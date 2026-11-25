@@ -324,3 +324,66 @@ async def test_same_from_the_same_source_adds_no_evidence(client, agent, pool):
         assert await conn.fetchval("SELECT confidence_alpha FROM atoms WHERE id = $1", old) == alpha0
         meta = json.loads(await conn.fetchval("SELECT metadata FROM edges WHERE id = $1", edge_id))
         assert meta["evidence_added"] is False
+
+
+# ── kind distributions (migration 012; Tom, 2026-11-25) ─────────────────────
+
+async def test_new_atom_stores_kind_probs_and_inputs_carry_both(client, agent, pool, mode, decisions):
+    mode("shadow")
+    old = (await _remember(client, agent, [_atom(OLD, D1, "day")]))["atoms"][0]
+    new = (await _remember(client, agent, [_atom(NEW, D2, "day")]))["atoms"][0]
+    for aid in (old["id"], new["id"]):
+        row = (await _rows(pool, "SELECT kind, kind_p, kind_probs FROM atoms WHERE id = $1", UUID(aid)))[0]
+        probs = json.loads(row["kind_probs"])
+        assert set(probs) == {"state", "plan", "observation", "rule"}
+        assert max(probs, key=probs.get) == row["kind"] == "state"
+        assert probs["state"] == pytest.approx(row["kind_p"])
+    inputs = json.loads((await _rows(pool, "SELECT inputs FROM relation_decisions WHERE new_atom_id = $1",
+                                     UUID(new["id"])))[0]["inputs"])
+    assert inputs["new_kind_probs"]["state"] == pytest.approx(0.95)
+    assert inputs["old_kind_probs"]["state"] == pytest.approx(0.95)
+    assert inputs["new"]["kind_probs"] == inputs["new_kind_probs"]
+    assert inputs["old"]["kind_probs"] == inputs["old_kind_probs"]
+
+
+async def test_below_threshold_kind_keeps_distribution(client, agent, pool, mode, decisions):
+    mode("shadow")
+    a = (await _remember(client, agent, [_atom("Untagged statement about Mira", D1, "day")]))["atoms"][0]
+    row = (await _rows(pool, "SELECT kind, kind_p, kind_probs FROM atoms WHERE id = $1", UUID(a["id"])))[0]
+    probs = json.loads(row["kind_probs"])
+    assert row["kind"] == "unknown" and row["kind_p"] == pytest.approx(0.5)
+    assert probs["state"] == pytest.approx(0.5) and probs["rule"] == pytest.approx(0.5 / 3, abs=1e-4)
+
+
+async def test_shadow_lazy_distribution_in_inputs_not_written(client, agent, pool, mode, decisions):
+    mode("off")
+    old = (await _remember(client, agent, [_atom(OLD, D1, "day")]))["atoms"][0]
+    mode("shadow")
+    await _remember(client, agent, [_atom(NEW, D2, "day")])
+    inputs = json.loads((await _rows(pool, "SELECT inputs FROM relation_decisions WHERE old_atom_id = $1",
+                                     UUID(old["id"])))[0]["inputs"])
+    assert inputs["old_kind_probs"]["state"] == pytest.approx(0.95)
+    assert (await _rows(pool, "SELECT kind_probs FROM atoms WHERE id = $1", UUID(old["id"])))[0]["kind_probs"] is None
+
+
+async def test_enforce_persists_lazy_distribution(client, agent, pool, mode, decisions):
+    mode("off")
+    old = (await _remember(client, agent, [_atom(OLD, D1, "day")]))["atoms"][0]
+    mode("enforce")
+    await _remember(client, agent, [_atom(NEW, D2, "day")])
+    probs = json.loads((await _rows(pool, "SELECT kind_probs FROM atoms WHERE id = $1", UUID(old["id"])))[0]["kind_probs"])
+    assert probs["state"] == pytest.approx(0.95)
+
+
+@pytest.mark.parametrize("rule, expected", [("argmax", ("unrelated", "matrix")), ("marginal", ("replaces", None))])
+async def test_marginal_rule_on_the_store_path(client, agent, pool, mode, decisions, monkeypatch, rule, expected):
+    """Old atom: state 0.5 (unknown under argmax). Argmax: the unknown cell has no
+    replaces → unrelated. Marginal: P(allowed) ≈ 0.80 ≥ 0.60 → replaces."""
+    monkeypatch.setattr(settings, "relation_kind_rule", rule)
+    mode("shadow")
+    old = (await _remember(client, agent, [_atom("Mira resting heart rate baseline is 52", D1, "day")]))["atoms"][0]
+    new = (await _remember(client, agent, [_atom("Mira resting heart rate baseline is 54 [k:state] [r:replaces] [a] [c]",
+                                                 D2, "day")]))["atoms"][0]
+    d = (await _rows(pool, "SELECT final_relation, guard_fired FROM relation_decisions "
+                           "WHERE new_atom_id = $1 AND old_atom_id = $2", UUID(new["id"]), UUID(old["id"])))[0]
+    assert (d["final_relation"], d["guard_fired"]) == expected

@@ -55,6 +55,16 @@ SELECT coalesce(agent, 'TOTAL') AS agent, count(*) AS atoms, count(*) FILTER (WH
        count(*) FILTER (WHERE new_date_precision = 'month') AS month,
        count(*) FILTER (WHERE new_date_precision = 'year') AS year
 FROM plan GROUP BY ROLLUP(agent) ORDER BY (agent IS NULL), count(*) DESC;
+-- Undated atoms (G1 change 2): valid_from = created_at, precision day, basis stated — never unknown.
+SELECT coalesce(p.agent, 'TOTAL') AS agent, count(*) AS undated,
+       count(*) FILTER (WHERE p.new_valid_from = a.created_at AND p.new_date_precision = 'day'
+                        AND p.new_date_basis = 'stated') AS valid_from_created_day_stated,
+       count(*) FILTER (WHERE NOT (p.new_valid_from = a.created_at AND p.new_date_precision = 'day'
+                                   AND p.new_date_basis = 'stated')) AS other,
+       count(*) FILTER (WHERE p.new_date_precision = 'unknown') AS precision_unknown
+FROM plan p JOIN atoms a ON a.id = p.atom_id
+WHERE a.remembered_on IS NULL
+GROUP BY ROLLUP(p.agent) ORDER BY (p.agent IS NULL), count(*) DESC;
 SELECT to_regclass('repair_remembered_on_2026_11') IS NOT NULL AS has_phase1_repair \gset
 \if :has_phase1_repair
 SELECT 'phase-1 repaired atoms now on 1 January' AS q, count(*) AS atoms,

@@ -93,8 +93,43 @@ Then Tom runs `psql "$DB" -X -f scripts/phase2/review_phase1_pairs.sql` himself.
 - Tom: `scripts/phase2/review_shadow.sql -v out=<path outside the repo>`.
 - Me: the counts-only shadow report, then **STOP** at G3.
 
+## 8. Deploy 2 (Tom, 2026-11-25): legacy tagging, migration 012, 8.3b
+
+Shadow stays on; one restart. Not between 23:45 and 00:10 UTC; no store in flight.
+
+```bash
+UV_FROZEN=1 uv run mnemo migrate --dry-run --database-url "$DB"   # expect: Pending: 012_kind_probs
+UV_FROZEN=1 uv run mnemo migrate --database-url "$DB"
+scripts/deploy/image_tags.sh pre
+BUILD_COMMIT=$(git rev-parse --short HEAD) docker compose build mnemo-server
+docker compose up -d mnemo-server
+curl -s http://127.0.0.1:8000/v1/health                           # schema 012_kind_probs
+scripts/deploy/image_tags.sh post
+```
+
+From this restart on: new lifecycle edges carry `decided_by = 'legacy_lifecycle'`; new atoms and lazily classified candidates store `kind_probs`, and `relation_decisions.inputs` carries both sides' distributions. Production stays `relation_matrix=as_built`, `relation_kind_rule=argmax`.
+
+**Backfill 8.3b** asks the kind question again for active atoms with no `kind_probs`. It writes `kind_probs`, and `kind` / `kind_p` as its argmax.
+
+```bash
+psql "$DB" -X -f scripts/phase2/backfill_kind_probs_plan.sql                  # dry run: count, cost
+psql "$DB" -X -v expected=N -f scripts/phase2/backfill_kind_probs_plan.sql    # if cost < $0.50 (Tom)
+docker exec -i mnemo-server-mnemo-server-1 sh -c 'cd /app && .venv/bin/python -' < scripts/phase2/backfill_kind_probs_ask.py
+psql "$DB" -X -v expected=N -f scripts/phase2/backfill_kind_probs_apply.sql
+# undo: backfill_kind_probs_undo.sql
+```
+
+## 9. G3 replay
+
+```bash
+docker exec -i mnemo-server-mnemo-server-1 sh -c 'cd /app && .venv/bin/python - --since 2026-11-25T12:03:00Z' \
+    < scripts/phase2/g3_replay.py
+```
+
+The replay covers three variants (as_built, symmetric, symmetric + marginal), each at kind thresholds 0.5 / 0.6 / 0.7. It prints counts only.
+
 ## Rollback
 
-- **Code:** `scripts/deploy/image_tags.sh rollback 9b5776b`. Migration 011 stays; the old code works with it.
+- **Code:** `scripts/deploy/image_tags.sh rollback <previous tag>` (before deploy 2: `9f72c42`; before G2: `9b5776b`). Migrations 011 and 012 stay; the old code works with both.
 - **Data:** each backfill's undo script.
 - **Relations:** set `MNEMO_RELATION_MODE=off` and recreate the container.

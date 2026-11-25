@@ -10,7 +10,8 @@ Counts and ids only; every fixture and benchmark text is synthetic.
 | G1 design note | 2026-11-24 | Approved, with six changes (design note, top). Answers to the open questions are recorded in design §12. |
 | Kind bake-off | 2026-11-24 | `typesafe/jev-1.14`, fallback `liquid/d1.2-ultra`. Kind threshold 0.60 (Tom, after the re-score and the fixture runs). See `docs/phase2-kind-bakeoff.md`. |
 | q2 wording | 2026-11-24 | Tom reworded the `same` criterion and added the observation guard on `same`, plus the `same_reading_two_days` fixture. |
-| G2 deploy | — | Not yet. |
+| G2 deploy | 2026-11-24 23:14 UTC | Deployed `9f72c42`, relations off. Backfills 8.1 / 8.2 / 8.3 applied 2026-11-25 on Tom's pre-set conditions; shadow on 2026-11-25 12:03 UTC. |
+| G3 | not before 2026-12-02 12:03 UTC | Shadow at least 7 days (Tom). Plan below. |
 
 ## Work items so far
 
@@ -163,6 +164,53 @@ Read-only, 2026-11-24. Production has no migration 011 yet, so there is no kind 
 7. Re-decide Tom's 15 Phase 1 pairs (`redecide_pairs.py --since 2026-11-23T21:56:57Z --until 2026-11-24T19:18:00Z`; 15 pairs in that window). Tom then runs `scripts/phase2/review_phase1_pairs.sql`.
 
 **What is live from the deploy onward.** Decomposer prompt v3 and the `origin_class` confidence priors are live for every write from the deploy onward, whatever the relation mode. While the mode is `off`, new atoms keep kind `unknown` and get no model grounding answer.
+
+## G2 execution (2026-11-25)
+
+Tom approved running the backfills without a stop between steps, provided each one met a preset condition. All the conditions were met.
+
+| step | condition | result |
+|---|---|---|
+| 8.1 dates | undated → `created_at` / day / stated, 0 mismatches, 0 unknown; totals within 2% of 13,148 / 10,646 | 13,148 / 10,646; 10,646 correct, 0 other, 0 unknown. Applied 13,148 (undo `repair_dates_2026_12`). |
+| 8.2 time unresolved | candidates within 5% of 152; cost < $0.05 | 152; $0.0032; 0 errors; 63 unresolved, 89 resolved. Applied (undo `repair_time_2026_12`). |
+| 8.3 kind | atoms within 2% of 9,096; cost < $0.50 | 9,117 (+21 new Clio atoms); $0.2048; 0 errors. Applied (undo `repair_kind_2026_12`). 14.1% left unknown. |
+| shadow | writes `relation_decisions`, no edges, no status changes | Scratch agent: 1 decision (mode shadow, 258 ms), no v2 edges, no status change, no conflicts. Purged. |
+| 15 Phase 1 pairs | — | 15 decided, $0.0005: 9 unrelated, 6 refines, 0 replaces. Both confirmed-wrong pairs → unrelated. Tom's verdicts pending. |
+
+Kind after 8.3 (active atoms): state 2,393; plan 550; observation 2,587; rule 2,303; unknown 1,284 (14.1%). Unknown by agent: 7.7%–21.0%; Clio 9.5%.
+
+**Smoke-test pattern.** The scratch agent stored a schedule, then the same schedule moved from 03:00 to 04:00. The model said `replaces`. The old atom was classed `rule` (p 0.68), and as built the (state, rule) cell has no `replaces`, so the decision came out `unrelated` (guard `matrix`). This became the fixture `schedule_change_rule_state`.
+
+**Untagged legacy edges.** The legacy detector wrote new edges without `decided_by`. Since the deploy: 9 supersedes, 16 narrows, 4 tension_with. Fixed on `v2/phase2-followups`; the fix ships with the next deploy (Tom: no redeploy now).
+
+## G3 plan (Tom, 2026-11-25)
+
+- **Shadow length:** at least 7 days, so not before 2026-12-02 12:03 UTC.
+- **Legacy edges:** the G3 report counts lifecycle-type edges (`supersedes`, `tension_with`, `narrows`) with `decided_by` NULL as legacy, alongside those tagged `legacy_lifecycle`.
+- **Two matrices:** every stored shadow decision is replayed (`relations.replay`, no new model calls) under both matrices, and both are reported:
+  - `as_built`;
+  - `state_rule_symmetric`: `replaces` both ways when change AND same_attribute pass; `refines` and `conflict` both ways.
+  `relation_matrix` / `MNEMO_FIXTURE_RELATION_MATRIX` select the matrix. Production stays `as_built` until G3.
+- **Fixture `schedule_change_rule_state`** (synthetic, live, 2026-11-25):
+  - **as_built:** 5/5 xfail, on the matrix.
+  - **state_rule_symmetric:** 7/7 fail. The model says `replaces` (p ≈ 1.0, change 0.97–0.98, same_attribute 0.96), but the old atom is `rule` at p 0.51–0.57, below the 0.60 kind threshold. That makes it `unknown`, and the unknown cell allows only `refines`.
+  - So for this pattern the kind threshold matters as much as the matrix; the G3 replay grid includes the kind threshold.
+- **Tom's verdicts** on the 15 Phase 1 pairs feed the G3 report.
+
+### The marginal variant (Tom, 2026-11-25)
+
+- **Storage:** `atoms.kind_probs` (migration 012) holds the full distribution over the four kinds. `kind` / `kind_p` stay the argmax, for display. `relation_decisions.inputs` carries both sides' distributions (`new_kind_probs`, `old_kind_probs`, and `kind_probs` inside `new` / `old`).
+- **`decide_marginal()`:**
+  - P(allowed) = Σ over (k_new, k_old) of p_new(k_new) · p_old(k_old) · 1[raw allowed in the cell and its conditions (†, ‡, ‡+attr, §, the same-observation guard) pass].
+  - It acts if P(allowed) ≥ the kind threshold; otherwise it downgrades as now, with guard `marginal`.
+  - The relation threshold and the global guards on `replaces` still apply. On `origin_differs`, it gives `conflict` if P(conflict allowed) ≥ the kind threshold, else `review`.
+  - There is no unknown kind. A side with no stored distribution uses one-hot on a known kind; an unknown kind with no distribution uses the unknown cell.
+- **Selection:** `Thresholds.kind_rule` (`argmax` | `marginal`) and the setting `relation_kind_rule`. Production stays `argmax`.
+- **Tests:**
+  - With one-hot distributions, marginal equals argmax in every cell, for every relation and every condition outcome, under both matrices.
+  - Hand-computed P(allowed), threshold boundaries, global guards, replay with distributions taken from `atoms`, and the store path.
+- **G3 replay grid** (`scripts/phase2/g3_replay.py`): as_built, symmetric, and symmetric + marginal, each at kind thresholds 0.5 / 0.6 / 0.7. Rows from before 012 take their distributions from `atoms.kind_probs` (backfill 8.3b).
+- **Fixture `schedule_change_rule_state`, symmetric + marginal:** 10/10 pass. The old atom comes out rule 0.52–0.55, state 0.23–0.24, plan 0.20–0.24. Under the symmetric matrix, `replaces` is allowed against all three, so P(allowed) ≈ 0.85.
 
 ## Tapio
 

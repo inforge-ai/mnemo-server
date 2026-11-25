@@ -57,6 +57,8 @@ def thresholds() -> Thresholds:
         conflict=settings.relation_threshold_conflict, refines=settings.relation_threshold_refines,
         change=settings.relation_threshold_change, same_attribute=settings.relation_threshold_same_attribute,
         correction=settings.relation_threshold_correction, kind=settings.kind_threshold,
+        matrix=settings.relation_matrix,
+        kind_rule=settings.relation_kind_rule,
     )
 
 
@@ -136,6 +138,7 @@ class Candidate:
     remembered_on: datetime | None = None
     created_at: datetime | None = None
     lazy: AtomClass | None = None      # kind learned this store for an `unknown` candidate
+    kind_probs: dict | None = None     # atoms.kind_probs (migration 012)
 
     @property
     def effective_kind(self) -> str:
@@ -147,9 +150,16 @@ class Candidate:
             return self.lazy.time_unresolved
         return self.time_unresolved
 
+    @property
+    def effective_kind_probs(self) -> dict | None:
+        if self.lazy is not None and self.lazy.kind_probs:
+            return self.lazy.kind_probs
+        return self.kind_probs
+
     def side(self) -> Side:
         return Side(kind=self.effective_kind, valid_from=self.valid_from, precision=self.precision,
-                    basis=self.basis, origin_class=self.origin_class, time_unresolved=self.effective_time_unresolved)
+                    basis=self.basis, origin_class=self.origin_class, time_unresolved=self.effective_time_unresolved,
+                    kind_probs=self.effective_kind_probs)
 
 
 @dataclass
@@ -176,7 +186,7 @@ class RelationPlan:
 # ── candidates ──────────────────────────────────────────────────────────────
 
 _CAND_SQL = """
-SELECT a.id, a.text_content, a.kind, a.kind_p, a.valid_from, a.date_precision, a.date_basis,
+SELECT a.id, a.text_content, a.kind, a.kind_p, a.kind_probs, a.valid_from, a.date_precision, a.date_basis,
        a.remembered_on, a.created_at, a.verification, a.source_id, a.source_quote,
        a.confidence_alpha, a.confidence_beta, s.store_id, s.origin_class, s.speaker,
        1 - (a.embedding <=> $1::vector) AS cosine
@@ -199,6 +209,18 @@ def _verification(v) -> dict:
     return v or {}
 
 
+def kind_probs_from(v) -> dict | None:
+    v = _verification(v) if v is not None else None
+    return {k: float(x) for k, x in v.items()} if v else None
+
+
+def normalise_kind_probs(probs: dict | None) -> dict | None:
+    """The four kinds only, rounded, for atoms.kind_probs and inputs."""
+    if not probs:
+        return None
+    return {k: round(float(probs.get(k, 0.0)), 4) for k in KINDS}
+
+
 def candidate_from_row(r) -> Candidate:
     if r["date_basis"]:
         vf, prec, basis = r["valid_from"] or r["created_at"], r["date_precision"], r["date_basis"]
@@ -212,6 +234,7 @@ def candidate_from_row(r) -> Candidate:
         source_id=r["source_id"], store_id=r["store_id"],
         alpha=r["confidence_alpha"], beta=r["confidence_beta"], cosine=float(r["cosine"]),
         quote=r["source_quote"], speaker=r["speaker"], remembered_on=r["remembered_on"], created_at=r["created_at"],
+        kind_probs=kind_probs_from(r["kind_probs"]),
     )
 
 
@@ -231,7 +254,7 @@ def _class_from(res: DecisionResult, asked_time: bool, th: Thresholds) -> AtomCl
     probs = res.probabilities("kind")
     if probs:
         top = max(probs, key=probs.get)
-        c.kind_probs, c.kind_p = probs, float(probs[top])
+        c.kind_probs, c.kind_p = normalise_kind_probs(probs), float(probs[top])
         c.kind_top = top if top in KINDS else None
         c.kind = top if top in KINDS and c.kind_p >= th.kind else "unknown"
     c.grounded_p = res.p_true("grounded")
@@ -351,7 +374,8 @@ async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID 
                   "old_kind_p": c.lazy.kind_p if c.lazy else c.kind_p,
                   "old_kind_lazy": c.lazy is not None and c.kind == "unknown",
                   "old_time_asked": bool(c.lazy and c.lazy.asked_time),
-                  "old_kind_stored": c.kind}
+                  "old_kind_stored": c.kind,
+                  "new_kind_probs": plan.classes[i].kind_probs, "old_kind_probs": c.effective_kind_probs}
         ans = _answers(res) if res.ok else None
         if ans is None:
             return PairResult(i, c, res, None, inputs)
@@ -369,7 +393,7 @@ async def prepare_relations(pool: asyncpg.Pool, agent_id: UUID, source_id: UUID 
 def _new_side(cand, cls: AtomClass, req, origin_class: str) -> Side:
     vf, prec, basis = write_dates(cls.kind, cand.event_date, cand.date_precision, req.remembered_on)
     return Side(kind=cls.kind, valid_from=vf or datetime.now(timezone.utc), precision=prec, basis=basis,
-                origin_class=origin_class, time_unresolved=cls.time_unresolved)
+                origin_class=origin_class, time_unresolved=cls.time_unresolved, kind_probs=cls.kind_probs)
 
 
 def atom_fields(plan: RelationPlan | None, i: int, cand, req) -> dict:
@@ -388,7 +412,7 @@ def atom_fields(plan: RelationPlan | None, i: int, cand, req) -> dict:
             extra["decision_error"] = cls.error
     if cand.event_date is not None and cls.kind == "plan":
         extra["planned_date"] = cand.event_date.strftime("%Y-%m-%d")
-    return {"kind": cls.kind, "kind_p": cls.kind_p, "valid_from": vf, "date_precision": prec,
+    return {"kind": cls.kind, "kind_p": cls.kind_p, "kind_probs": cls.kind_probs, "valid_from": vf, "date_precision": prec,
             "date_basis": basis, "verification_extra": extra}
 
 
@@ -514,6 +538,9 @@ async def persist_relations(conn: asyncpg.Connection, agent_id: UUID, plan: Rela
             if pr.cand.lazy.kind != "unknown":
                 await conn.execute("UPDATE atoms SET kind = $2, kind_p = $3 WHERE id = $1 AND kind = 'unknown'",
                                    pr.cand.id, pr.cand.lazy.kind, pr.cand.lazy.kind_p)
+            if pr.cand.lazy.kind_probs and pr.cand.kind_probs is None:
+                await conn.execute("UPDATE atoms SET kind_probs = $2::jsonb WHERE id = $1 AND kind_probs IS NULL",
+                                   pr.cand.id, json.dumps(pr.cand.lazy.kind_probs))
             if pr.cand.lazy.asked_time:
                 await conn.execute(
                     "UPDATE atoms SET verification = COALESCE(verification, '{}'::jsonb) || jsonb_build_object("
@@ -537,7 +564,7 @@ async def persist_relations(conn: asyncpg.Connection, agent_id: UUID, plan: Rela
 # ── pending worker ──────────────────────────────────────────────────────────
 
 _ONE_SQL = """
-SELECT a.id, a.text_content, a.kind, a.kind_p, a.valid_from, a.date_precision, a.date_basis,
+SELECT a.id, a.text_content, a.kind, a.kind_p, a.kind_probs, a.valid_from, a.date_precision, a.date_basis,
        a.remembered_on, a.created_at, a.verification, a.source_id, a.source_quote,
        a.confidence_alpha, a.confidence_beta, s.store_id, s.origin_class, s.speaker, 0.0 AS cosine
 FROM atoms a
@@ -547,7 +574,7 @@ WHERE a.id = $1 AND a.agent_id = $2 AND a.is_active AND a.status = 'active'
 
 _PENDING_SQL = """
 SELECT d.id, d.agent_id, d.new_atom_id, d.old_atom_id, d.source_id, d.mode, d.attempts, d.inputs,
-       n.text_content AS new_text, n.kind AS new_kind, n.valid_from AS new_valid_from,
+       n.text_content AS new_text, n.kind AS new_kind, n.kind_probs AS new_kind_probs, n.valid_from AS new_valid_from,
        n.date_precision AS new_precision, n.date_basis AS new_basis, n.verification AS new_verification,
        n.confidence_alpha AS new_alpha, n.confidence_beta AS new_beta, n.created_at AS new_created_at,
        ns.origin_class AS new_origin, ns.store_id AS new_store_id
@@ -586,7 +613,8 @@ async def process_pending(pool: asyncpg.Pool, model: DecisionModel | None = None
         ver = _verification(r["new_verification"])
         new_side = Side(kind=r["new_kind"], valid_from=r["new_valid_from"] or r["new_created_at"],
                         precision=r["new_precision"], basis=r["new_basis"] or "stated",
-                        origin_class=r["new_origin"] or "unspecified", time_unresolved=bool(ver.get("time_unresolved")))
+                        origin_class=r["new_origin"] or "unspecified", time_unresolved=bool(ver.get("time_unresolved")),
+                        kind_probs=kind_probs_from(r["new_kind_probs"]))
         if cand.kind == "unknown":
             st = atom_state(cand.text, cand.quote, cand.speaker, None, cand.remembered_on, cand.created_at,
                             cand.valid_from if cand.basis == "event" else None, cand.precision)
@@ -608,7 +636,8 @@ async def process_pending(pool: asyncpg.Pool, model: DecisionModel | None = None
                          "correction": ans.correction}
                 inputs = _verification(r["inputs"])
                 inputs.update({"new": new_side.to_json(), "old": old_side.to_json(), "questions": QUESTIONS_VERSION,
-                               "old_kind_lazy": cand.lazy is not None, "retried": True})
+                               "old_kind_lazy": cand.lazy is not None, "retried": True,
+                               "new_kind_probs": new_side.kind_probs, "old_kind_probs": cand.effective_kind_probs})
                 pr = PairResult(0, cand, res, dec, inputs, probs)
                 final, guard, edge_id = dec.final, dec.guard, None
                 if r["mode"] == "enforce":
